@@ -1,0 +1,46 @@
+---
+description: SwiftUI patterns used across GojoGo views
+globs: GojoGo/**/*.swift
+alwaysApply: false
+---
+
+# SwiftUI Conventions
+
+## View structure
+
+- One primary `struct …: View` per screen file; small private helpers below or in `SharedUI.swift`.
+- Read app state with `@EnvironmentObject var app: AppState` — do not create a second `AppState`.
+- Local ephemeral UI only: `@State` (e.g. appear animations). Persist flow/nav in `AppState`.
+
+```swift
+struct SomeView: View {
+    @EnvironmentObject var app: AppState
+    @State private var appear = false
+
+    var body: some View {
+        ZStack {
+            GGColor.black.ignoresSafeArea()
+            // content
+        }
+        .onAppear { withAnimation(.easeOut(duration: 0.8)) { appear = true } }
+    }
+}
+```
+
+## Interaction & animation
+
+- Buttons: wrap labels with `.buttonStyle(PressableStyle())` for press scale/opacity.
+- Tab / phase changes: `withAnimation(.easeOut(duration: 0.2))` or `.easeInOut(duration: 0.35)`.
+- Immersive watch Shorts: tab bar uses `ghosted: app.isImmersive` — don't show a second chrome.
+
+## Shared pieces
+
+- Post action row → `PostActions`
+- Watch Feed/Shorts/TV control → `WatchSegments(selection: $app.watchSubFeed)`
+- Onboarding question chrome → `MadeleineBubble` + `ProgressDots` in `Auth/`
+
+## Models
+
+- Domain types are simple structs (`Identifiable` with `let id = UUID()`).
+- Don't rename `GG*` tokens or strip source-compat aliases in `Theme.swift` without need.
+- Prefer SF Symbols for icons (`house`, `play.rectangle`, `bag`, `magnifyingglass`, `sparkles`).

@@ -1,0 +1,20 @@
+# Xcode
+DerivedData/
+.build/
+build/
+build-*/
+*.xcuserstate
+xcuserdata/
+
+# Swift Package Manager / local caches
+SourcePackages/
+**/SourcePackages/
+*.xcworkspace/xcuserdata/
+
+# Secrets (never commit real tokens)
+GojoGo/MapboxAccessToken
+Secrets.xcconfig
+**/Secrets.xcconfig
+
+# OS
+.DS_Store

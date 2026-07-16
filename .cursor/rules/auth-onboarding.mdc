@@ -1,0 +1,34 @@
+---
+description: Auth and Madeleine-led onboarding flow conventions
+globs: GojoGo/Auth/**/*.swift
+alwaysApply: false
+---
+
+# Auth & Onboarding
+
+## Phase machine
+
+Owned by `AppState.phase` / `onboardingStep` (1…3). Do not replace with `NavigationStack` for the auth funnel unless redesigning the whole flow.
+
+| Phase | View |
+|---|---|
+| `.welcome` | `WelcomeView` |
+| `.email` | `EmailSignUpView` |
+| `.onboarding` | `OnboardingFlow` → Year / Name / Interests |
+| `.app` | `MainAppView` |
+
+```swift
+// Advance
+withAnimation(.easeInOut(duration: 0.35)) { app.phase = .onboarding }
+app.advanceOnboarding()   // steps 1→2→3 then finishOnboarding()
+
+// Back from step 1 → welcome; else decrement onboardingStep
+```
+
+## Visual rules for this folder
+
+- Full-bleed `GGColor.black` (or `GGBackground`), not gradient aurora (`AuroraBlobs` is a no-op).
+- Headline brand uses `Wordmark`; taglines use `.explanatory` (New York).
+- Questions posed by Madeleine: `MadeleineBubble` + `MiniOrb`; progress via `ProgressDots`.
+- Primary continue actions: `AccentButton` or blue capsule patterns already in Welcome/Email.
+- Cap bubble width (~320) so copy wraps; never let onboarding text overflow horizontally.

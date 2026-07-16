@@ -1,0 +1,45 @@
+---
+description: GojoGo app architecture, folders, and navigation
+alwaysApply: true
+---
+
+# GojoGo — Project Overview
+
+SwiftUI iOS superapp (`com.gojogo.app`, iOS 17+, Swift 5). Dark-only (`preferredColorScheme(.dark)`). Bundle lives in `GojoGo/`.
+
+## Folder map
+
+| Folder | Role |
+|---|---|
+| `Auth/` | Welcome → email → onboarding steps |
+| `DesignSystem/` | `GGColor`, fonts, glass modifiers, shared components |
+| `Models/` | `AppState`, domain types, `SampleData` |
+| `Navigation/` | `RootView`, `MainAppView`, `GGTabBar` |
+| `Screens/` | Tab surfaces + shared screen UI |
+| `Travel/` | Mapbox config for GojoTravel |
+
+## State & flow
+
+- Single source of truth: `@MainActor` `AppState` (`ObservableObject`), injected via `@EnvironmentObject`.
+- Auth gated by `app.phase`: `.welcome` → `.email` → `.onboarding` → `.app`.
+- Main tabs via `app.activeTab`: `.home`, `.watch`, `.madeleine`, `.travel`, `.economy`, `.search`.
+- Sheets/covers: `showProfile`, `showWatching`. Watch sub-feed: `watchSubFeed` (Feed / Shorts / TV).
+- GojoTravel: `travelPhase` (home → searching → choosingRide → matching → enRoute → inTrip → completed).
+
+```swift
+// ✅ Drive UI from AppState
+withAnimation(.easeInOut(duration: 0.35)) { app.phase = .email }
+
+// ❌ Don't invent parallel navigation stacks or new global stores
+```
+
+## Naming
+
+- Prefix shared design tokens/components with `GG` (`GGColor`, `GGTabBar`, `GGUser`, `GGBackground`).
+- Views are `*View` structs in the folder that owns the flow.
+- Prefer extending existing files over new one-off helpers unless the concern is clearly new.
+---
+
+## Content
+
+UI is mostly prototype/sample-driven (`SampleData`). Keep models in `Models.swift`; mock content in `SampleData.swift`. No backend layer yet — don't add networking unless asked.

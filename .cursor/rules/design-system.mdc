@@ -1,0 +1,36 @@
+---
+description: GojoGo visual language — colors, type, glass, components
+globs: GojoGo/DesignSystem/**/*.swift,GojoGo/Screens/**/*.swift,GojoGo/Auth/**/*.swift,GojoGo/Navigation/**/*.swift
+alwaysApply: false
+---
+
+# Design System
+
+Monochrome palette: **black · white · greys**. No color accents. Surfaces are solid fills or Liquid Glass.
+
+## Colors — use `GGColor` only
+
+```swift
+// ✅
+.background(GGColor.bg)
+.foregroundStyle(GGColor.textPrimary)
+.background(Capsule().fill(GGColor.white)) // CTAs; text uses GGColor.onAccent (black)
+
+// ❌ Colored accents (blue / red / green themes)
+```
+
+- Surfaces: `bg`, `surface`, `surface2`, `darkGrey`, `hairline`
+- Text: `textPrimary`, `textSecondary`, `textTertiary`
+- Accent tokens (`accent`, `blue`, `success`) resolve to white; `onAccent` is black
+
+## Typography
+
+- UI: SF Pro via `.font(.gg(size, weight))` or `.system(...)`
+- Explanatory copy: New York via `.explanatory` / `.ny`
+- Chips/meta: `.ggMono`
+
+## Glass & media
+
+- Cards/pills: `.glass(...)` / `.glassCapsule(...)` / `.liquidGlass(...)`
+- Brand: `Wordmark` (`gojo` + muted trailing `go`)
+- Madeleine: white disc + black sparkles
