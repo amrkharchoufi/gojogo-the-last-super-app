@@ -248,11 +248,11 @@ struct EconomyView: View {
                             .foregroundStyle(active ? GGColor.onAccent : GGColor.textPrimary)
                             .frame(width: 52, height: 52)
                             .background(
-                                Circle().fill(active ? GGColor.white : Color.white.opacity(0.08))
+                                Circle().fill(active ? GGColor.white : GGColor.ink(0.08))
                             )
                             .overlay(
                                 Circle().strokeBorder(
-                                    active ? Color.clear : Color.white.opacity(0.1),
+                                    active ? Color.clear : GGColor.ink(0.1),
                                     lineWidth: 0.5
                                 )
                             )
@@ -584,7 +584,7 @@ struct ProductDetailView: View {
                 } label: {
                     Image(systemName: product.saved ? "bookmark.fill" : "bookmark")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(GGColor.textPrimary)
                         .frame(width: 52, height: 52)
                         .glassCapsule(interactive: false)
                 }
@@ -678,7 +678,7 @@ struct SellerChatView: View {
                                 .padding(.horizontal, 14).padding(.vertical, 10)
                                 .background(
                                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .fill(msg.fromUser ? Color.white : Color.white.opacity(0.12))
+                                        .fill(msg.fromUser ? Color.white : GGColor.ink(0.12))
                                 )
                             if !msg.fromUser { Spacer(minLength: 40) }
                         }

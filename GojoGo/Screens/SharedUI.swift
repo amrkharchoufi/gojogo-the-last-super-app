@@ -76,7 +76,7 @@ struct PostActions: View {
                             .font(.system(size: 14, weight: .semibold))
                     }
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(GGColor.textPrimary)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -96,7 +96,7 @@ struct PostActions: View {
             } label: {
                 Image(systemName: live.bookmarked ? "bookmark.fill" : "bookmark")
                     .font(.system(size: 24, weight: .regular))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(GGColor.textPrimary)
                     .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
@@ -105,7 +105,7 @@ struct PostActions: View {
         .frame(minHeight: 44)
     }
 
-    private func actionButton(icon: String, count: Int?, tint: Color = .white,
+    private func actionButton(icon: String, count: Int?, tint: Color = GGColor.textPrimary,
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
@@ -135,10 +135,10 @@ struct WatchSegments: View {
                 } label: {
                     Text(seg.rawValue)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(active ? Color.black : Color.white.opacity(0.55))
+                        .foregroundStyle(active ? GGColor.onAccent : GGColor.ink(0.55))
                         .frame(minWidth: 58, minHeight: 34)
                         .padding(.horizontal, 10)
-                        .background(Capsule().fill(active ? Color.white : Color.clear))
+                        .background(Capsule().fill(active ? GGColor.white : Color.clear))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)

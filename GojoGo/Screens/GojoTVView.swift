@@ -76,9 +76,9 @@ struct GojoTVView: View {
                     } label: {
                         Text(item)
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(filter == item ? Color.black : Color.white.opacity(0.7))
+                            .foregroundStyle(filter == item ? GGColor.onAccent : GGColor.textSecondary)
                             .padding(.horizontal, 14).padding(.vertical, 8)
-                            .background(Capsule().fill(filter == item ? Color.white : Color.white.opacity(0.1)))
+                            .background(Capsule().fill(filter == item ? GGColor.white : GGColor.ink(0.08)))
                     }
                     .buttonStyle(.plain)
                 }
@@ -167,7 +167,7 @@ struct GojoTVView: View {
         .frame(width: 112, height: 160)
         .clipped()
         .overlay(RoundedRectangle(cornerRadius: 16)
-            .strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
+            .strokeBorder(GGColor.hairline, lineWidth: 1))
     }
 
     private func landscapeCard(_ show: TVShow) -> some View {
@@ -190,13 +190,13 @@ struct GojoTVView: View {
         }
         .frame(width: 170, height: 100)
         .overlay(RoundedRectangle(cornerRadius: 16)
-            .strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
+            .strokeBorder(GGColor.hairline, lineWidth: 1))
     }
 
     private func progressBar(_ value: Double) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.2))
+                Capsule().fill(Color.white.opacity(0.28))
                 Capsule().fill(Color.white)
                     .frame(width: max(4, geo.size.width * value))
             }
@@ -227,9 +227,9 @@ struct GojoTVView: View {
                             Text(show.progress > 0 ? "Resume" : "Play")
                                 .font(.system(size: 13, weight: .semibold))
                         }
-                        .foregroundStyle(Color(hex: "0a0d13"))
+                        .foregroundStyle(Color.black)
                         .padding(.horizontal, 18).padding(.vertical, 9)
-                        .background(Capsule().fill(Color.white.opacity(0.92)))
+                        .background(Capsule().fill(Color.white.opacity(0.95)))
                     }
                     .buttonStyle(PressableStyle())
 
@@ -242,8 +242,8 @@ struct GojoTVView: View {
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16).padding(.vertical, 9)
-                        .background(Capsule().fill(Color.white.opacity(0.12)))
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
+                        .background(Capsule().fill(Color.white.opacity(0.16)))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
                     }
                     .buttonStyle(PressableStyle())
 
@@ -252,7 +252,7 @@ struct GojoTVView: View {
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(width: 38, height: 38)
-                            .background(Circle().fill(Color.white.opacity(0.12)))
+                            .background(Circle().fill(Color.white.opacity(0.16)))
                     }
                     .buttonStyle(PressableStyle())
                 }
@@ -265,7 +265,7 @@ struct GojoTVView: View {
         }
         .frame(height: 300)
         .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(GGColor.hairline, lineWidth: 1))
         .contentShape(RoundedRectangle(cornerRadius: 26))
         .onTapGesture { app.openTVShow(show.id) }
     }
@@ -319,17 +319,17 @@ struct TVShowDetailView: View {
                                 Text(show.progress > 0 ? "Resume" : "Play")
                                     .font(.system(size: 15, weight: .semibold))
                             }
-                            .foregroundStyle(Color.black)
+                            .foregroundStyle(GGColor.onAccent)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
-                            .background(Capsule().fill(Color.white))
+                            .background(Capsule().fill(GGColor.white))
                         }
                         .buttonStyle(PressableStyle())
 
                         Button { app.toggleTVWatchlist(show.id) } label: {
                             Image(systemName: show.onWatchlist ? "checkmark" : "plus")
                                 .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(GGColor.textPrimary)
                                 .frame(width: 52, height: 52)
                                 .glassCapsule(interactive: false)
                         }
@@ -353,11 +353,11 @@ struct TVShowDetailView: View {
                                     HStack(spacing: 12) {
                                         ZStack {
                                             RoundedRectangle(cornerRadius: 10)
-                                                .fill(Color.white.opacity(0.08))
+                                                .fill(GGColor.ink(0.08))
                                                 .frame(width: 64, height: 40)
                                             Image(systemName: ep.watched ? "checkmark" : "play.fill")
                                                 .font(.system(size: 12, weight: .semibold))
-                                                .foregroundStyle(.white.opacity(0.85))
+                                                .foregroundStyle(GGColor.textPrimary)
                                         }
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text("\(ep.number). \(ep.title)")

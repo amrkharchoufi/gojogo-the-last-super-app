@@ -236,7 +236,7 @@ struct SearchView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(p.following ? GGColor.textSecondary : .black)
                     .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(Capsule().fill(p.following ? Color.white.opacity(0.1) : Color.white))
+                    .background(Capsule().fill(p.following ? GGColor.ink(0.1) : Color.white))
             }
             .buttonStyle(PressableStyle())
         }
@@ -408,7 +408,7 @@ struct SearchView: View {
                                 UserAvatar(size: 56, letter: String(p.name.prefix(1)).uppercased(),
                                            imageURL: p.avatarURL)
                                     .overlay(Circle().strokeBorder(
-                                        p.following ? GGColor.blue : Color.white.opacity(0.1),
+                                        p.following ? GGColor.blue : GGColor.ink(0.1),
                                         lineWidth: p.following ? 2 : 1))
                             }
                             .buttonStyle(.plain)
@@ -448,7 +448,7 @@ struct SearchView: View {
                         }
                         .frame(height: 96)
                         .overlay(RoundedRectangle(cornerRadius: 18)
-                            .strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
+                            .strokeBorder(GGColor.ink(0.09), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                 }

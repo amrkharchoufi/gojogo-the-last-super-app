@@ -6,7 +6,7 @@ struct MyWorldView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            IMColor.bg.ignoresSafeArea()
 
             if app.showWorldContact, app.selectedWorldContact != nil || app.selectedWorldConversation != nil {
                 WorldContactView()
@@ -31,7 +31,7 @@ struct MyWorldView: View {
                 .environmentObject(app)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(Color(white: 0.09))
+                .presentationBackground(IMColor.sheetBG)
         }
     }
 }
@@ -63,7 +63,7 @@ private struct WorldMessagesList: View {
             } label: {
                 Text(app.worldIsEditing ? "Done" : "Edit")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
                     .background(Capsule().fill(IMColor.chrome))
@@ -78,7 +78,7 @@ private struct WorldMessagesList: View {
             } label: {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                     .frame(width: 34, height: 34)
                     .background(Circle().fill(IMColor.chrome))
             }
@@ -92,7 +92,7 @@ private struct WorldMessagesList: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                     .frame(width: 34, height: 34)
                     .background(Circle().fill(IMColor.chrome))
             }
@@ -110,17 +110,17 @@ private struct WorldMessagesList: View {
                 app.worldFilterUnreadOnly = false
                 app.showWorldFilters = false
             }
-            Divider().background(Color.white.opacity(0.1))
+            Divider().background(IMColor.label.opacity(0.1))
             filterRow("Unread Only", "circle.fill", checked: app.worldFilterUnreadOnly) {
                 app.worldFilterUnreadOnly = true
                 app.showWorldFilters = false
             }
-            Divider().background(Color.white.opacity(0.1))
+            Divider().background(IMColor.label.opacity(0.1))
             filterRow("Add by Phone", "phone.badge.plus") {
                 app.showWorldFilters = false
                 app.showWorldNewMessage = true
             }
-            Divider().background(Color.white.opacity(0.1))
+            Divider().background(IMColor.label.opacity(0.1))
             filterRow("Add by Username", "at") {
                 app.showWorldFilters = false
                 app.showWorldNewMessage = true
@@ -133,7 +133,7 @@ private struct WorldMessagesList: View {
                 .fill(IMColor.chrome.opacity(0.97))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+                        .strokeBorder(IMColor.label.opacity(0.08), lineWidth: 0.5)
                 )
         )
         .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
@@ -149,7 +149,7 @@ private struct WorldMessagesList: View {
                     .frame(width: 22)
                 Text(title)
                     .font(.system(size: 16))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                 Spacer()
                 if checked == true {
                     Image(systemName: "checkmark")
@@ -168,7 +168,7 @@ private struct WorldMessagesList: View {
         HStack {
             Text("My World")
                 .font(.system(size: 34, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(IMColor.label)
             Spacer()
         }
         .padding(.horizontal, 16)
@@ -183,7 +183,7 @@ private struct WorldMessagesList: View {
                 .foregroundStyle(IMColor.secondary)
             TextField("Search", text: $app.worldSearch)
                 .font(.system(size: 17))
-                .foregroundStyle(.white)
+                .foregroundStyle(IMColor.label)
                 .tint(IMColor.blue)
                 .autocorrectionDisabled()
             if !app.worldSearch.isEmpty {
@@ -285,7 +285,7 @@ private struct WorldMessagesList: View {
                             } else if convo.unread > 0 {
                                 Text("\(convo.unread)")
                                     .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(Color.white)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
                                     .background(Capsule().fill(IMColor.blue))
@@ -294,7 +294,7 @@ private struct WorldMessagesList: View {
                         }
                         Text(convo.title)
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(IMColor.label)
                             .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity)
@@ -317,7 +317,7 @@ private struct WorldMessagesList: View {
                 .overlay(
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 26))
-                        .foregroundStyle(Color.white.opacity(0.75))
+                        .foregroundStyle(IMColor.label.opacity(0.75))
                 )
         } else {
             UserAvatar(
@@ -393,7 +393,7 @@ private struct WorldMessagesList: View {
                             } label: {
                                 Text(circle.name)
                                     .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(Color.white.opacity(0.75))
+                                    .foregroundStyle(IMColor.label.opacity(0.75))
                                     .lineLimit(1)
                             }
                             .buttonStyle(.plain)
@@ -490,7 +490,7 @@ private struct WorldMessagesList: View {
                         .overlay(
                             Image(systemName: "person.2.fill")
                                 .font(.system(size: 18))
-                                .foregroundStyle(Color.white.opacity(0.75))
+                                .foregroundStyle(IMColor.label.opacity(0.75))
                         )
                 } else {
                     UserAvatar(
@@ -506,7 +506,7 @@ private struct WorldMessagesList: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(convo.title)
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(IMColor.label)
                         .lineLimit(1)
                     Spacer(minLength: 6)
                     Text(convo.timeAgo)
@@ -521,7 +521,7 @@ private struct WorldMessagesList: View {
                     if let badge = convo.filterBadge {
                         Text(badge)
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.white)
                             .frame(width: 16, height: 16)
                             .background(
                                 RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -580,14 +580,14 @@ private struct NewWorldMessageSheet: View {
                     ForEach(results) { contact in
                         contactRow(contact)
                         Divider()
-                            .background(Color.white.opacity(0.07))
+                            .background(IMColor.label.opacity(0.07))
                             .padding(.leading, 66)
                     }
                 }
                 .padding(.top, 6)
             }
         }
-        .background(Color(white: 0.09).ignoresSafeArea())
+        .background(IMColor.sheetBG.ignoresSafeArea())
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { focused = true }
         }
@@ -597,7 +597,7 @@ private struct NewWorldMessageSheet: View {
         ZStack {
             Text("New Message")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(IMColor.label)
             HStack {
                 Spacer()
                 Button("Cancel") { app.showWorldNewMessage = false }
@@ -617,7 +617,7 @@ private struct NewWorldMessageSheet: View {
                 .foregroundStyle(IMColor.secondary)
             TextField("Name, @username, or phone", text: $query)
                 .font(.system(size: 16))
-                .foregroundStyle(.white)
+                .foregroundStyle(IMColor.label)
                 .tint(IMColor.blue)
                 .focused($focused)
                 .autocorrectionDisabled()
@@ -629,7 +629,7 @@ private struct NewWorldMessageSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.white.opacity(0.04))
+        .background(IMColor.label.opacity(0.04))
         .overlay(alignment: .bottom) {
             Rectangle().fill(IMColor.separator.opacity(0.6)).frame(height: 0.33)
         }
@@ -648,7 +648,7 @@ private struct NewWorldMessageSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Start a chat with \"\(query.trimmingCharacters(in: .whitespaces))\"")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(IMColor.label)
                         .lineLimit(1)
                     Text("Adds them to My World")
                         .font(.system(size: 13))
@@ -678,7 +678,7 @@ private struct NewWorldMessageSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(contact.name)
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(IMColor.label)
                         .lineLimit(1)
                     Text(contact.phone.isEmpty ? "@\(contact.username)" : contact.phone)
                         .font(.system(size: 13))

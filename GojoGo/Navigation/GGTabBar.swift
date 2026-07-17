@@ -3,12 +3,13 @@ import PhotosUI
 import UIKit
 
 private enum Msg {
-    static let blue = Color.white
+    /// Ink — white in dark mode, black in light mode.
+    static let blue = GGColor.white
     /// iMessage / Photos active tint for the My World mode switcher.
     static let systemBlue = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255)
-    static let sendFill = Color.white.opacity(0.18)
-    static let label = Color.white.opacity(0.95)
-    static let placeholder = Color.white.opacity(0.38)
+    static let sendFill = GGColor.ink(0.18)
+    static let label = GGColor.ink(0.95)
+    static let placeholder = GGColor.ink(0.38)
     static let spring = Animation.spring(response: 0.40, dampingFraction: 0.88)
     static let modeSpring = Animation.spring(response: 0.42, dampingFraction: 0.86)
     static let tabHit: CGFloat = 44
@@ -106,7 +107,7 @@ struct GGTabBar: View {
                 .padding(.vertical, 7)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.13))
+                        .fill(GGColor.ink(0.13))
                 )
                 .contentShape(Capsule(style: .continuous))
             }
@@ -117,10 +118,10 @@ struct GGTabBar: View {
         .padding(.vertical, 4)
         .background(
             Capsule(style: .continuous)
-                .fill(Color(white: 0.12).opacity(0.96))
+                .fill(GGColor.pill)
                 .overlay(
                     Capsule(style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.07), lineWidth: 0.5)
+                        .strokeBorder(GGColor.pillBorder, lineWidth: 0.5)
                 )
         )
         .contentShape(Capsule())
@@ -171,10 +172,10 @@ struct GGTabBar: View {
         .padding(4)
         .background(
             Capsule(style: .continuous)
-                .fill(Color(white: 0.12).opacity(0.96))
+                .fill(GGColor.pill)
                 .overlay(
                     Capsule(style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.07), lineWidth: 0.5)
+                        .strokeBorder(GGColor.pillBorder, lineWidth: 0.5)
                 )
         )
         .contentShape(Capsule())
@@ -193,13 +194,13 @@ struct GGTabBar: View {
                     .font(.system(size: 10, weight: .medium))
                     .lineLimit(1)
             }
-            .foregroundStyle(active ? Msg.systemBlue : Color.white)
+            .foregroundStyle(active ? Msg.systemBlue : GGColor.textPrimary)
             .frame(minWidth: 68)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(
                 Capsule(style: .continuous)
-                    .fill(active ? Color.white.opacity(0.13) : .clear)
+                    .fill(active ? GGColor.ink(0.13) : .clear)
             )
             .contentShape(Capsule(style: .continuous))
         }
@@ -234,7 +235,7 @@ struct GGTabBar: View {
         } label: {
             Image(systemName: "message.fill")
                 .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.55))
+                .foregroundStyle(GGColor.ink(0.55))
                 .frame(width: 38, height: Msg.tabHit)
                 .overlay(alignment: .topTrailing) {
                     if app.worldUnreadCount > 0 {
@@ -286,7 +287,7 @@ struct GGTabBar: View {
                 .frame(width: 40, height: Msg.tabHit)
                 .background(
                     Capsule()
-                        .fill(active ? Color.white.opacity(0.28) : .clear)
+                        .fill(active ? GGColor.ink(0.28) : .clear)
                         .padding(.vertical, 7)
                         .padding(.horizontal, 2)
                 )
@@ -377,10 +378,10 @@ struct ComposeChrome: View {
             } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(app.canSendCompose ? Color.black : Color.white.opacity(0.35))
+                    .foregroundStyle(app.canSendCompose ? GGColor.onAccent : GGColor.ink(0.35))
                     .frame(width: 36, height: 36)
                     .background(
-                        Circle().fill(app.canSendCompose ? Color.white : Msg.sendFill.opacity(0.55))
+                        Circle().fill(app.canSendCompose ? GGColor.white : Msg.sendFill.opacity(0.55))
                     )
                     .contentShape(Circle())
             }
@@ -423,7 +424,7 @@ struct AttachGlassMenu: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
                 menuRow(row)
                 if i < rows.count - 1 {
-                    Divider().background(Color.white.opacity(0.08))
+                    Divider().background(GGColor.ink(0.08))
                         .padding(.leading, 52)
                 }
             }
@@ -632,7 +633,7 @@ extension EnvironmentValues {
 private struct IconStroke: ViewModifier {
     @Environment(\.ggTabActive) var active
     func body(content: Content) -> some View {
-        content.foregroundStyle(active ? Msg.blue : Color.white.opacity(0.55))
+        content.foregroundStyle(active ? Msg.blue : GGColor.ink(0.55))
     }
 }
 private extension View { func iconStroke() -> some View { modifier(IconStroke()) } }

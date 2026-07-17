@@ -7,6 +7,9 @@ final class AppState: ObservableObject {
     @Published var onboardingStep: Int = 1
     @Published var email: String = ""
 
+    // Appearance
+    @Published var appTheme: AppTheme = .dark
+
     // Main navigation
     @Published var navMode: AppNavMode = .collections
     @Published var activeTab: AppTab = .home
@@ -235,6 +238,9 @@ final class AppState: ObservableObject {
         if let raw = cached.navModeRaw, let mode = AppNavMode(rawValue: raw) {
             navMode = mode
         }
+        if let raw = cached.appThemeRaw, let theme = AppTheme(rawValue: raw) {
+            appTheme = theme
+        }
         subscribedChannels = Set(cached.subscribedChannels ?? [])
         dislikedVideoIDs = Set(cached.dislikedVideoIDs ?? [])
         downloadedVideoIDs = Set(cached.downloadedVideoIDs ?? [])
@@ -392,6 +398,16 @@ final class AppState: ObservableObject {
 
     func openPostViewer(_ id: UUID) { viewingPostID = id }
     func closePostViewer() { viewingPostID = nil }
+
+    // MARK: Appearance
+
+    func toggleTheme() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.easeInOut(duration: 0.3)) {
+            appTheme = appTheme == .dark ? .light : .dark
+        }
+        schedulePersist()
+    }
 
     // MARK: Nav mode (My World ↔ Collections)
 

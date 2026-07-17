@@ -124,15 +124,14 @@ struct ProfileView: View {
                     } header: {
                         iconTabs
                             .padding(.top, 14)
-                            .background(Color.black)
+                            .background(GGColor.bg)
                     }
                 }
                 .padding(.bottom, 28)
             }
-            .background(Color.black.ignoresSafeArea())
+            .background(GGColor.bg.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
         }
-        .preferredColorScheme(.dark)
         .onAppear {
             if app.profileUser == nil {
                 app.profileUser = .own(from: app.user, posts: app.myPosts.count)
@@ -174,7 +173,7 @@ struct ProfileView: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(GGColor.textPrimary)
                         .frame(width: 36, height: 36)
                 }
             } else {
@@ -184,7 +183,7 @@ struct ProfileView: View {
                 } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(GGColor.textPrimary)
                         .frame(width: 36, height: 36)
                 }
             }
@@ -194,15 +193,15 @@ struct ProfileView: View {
             HStack(spacing: 4) {
                 Text(profile.handle)
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(GGColor.textPrimary)
                 if isOwn {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(GGColor.ink(0.85))
                 } else {
                     Image(systemName: "checkmark.seal.fill")
                         .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(GGColor.ink(0.9))
                 }
             }
 
@@ -222,6 +221,12 @@ struct ProfileView: View {
                     }
                     ShareLink(item: URL(string: "https://gojogo.app/@\(profile.handle)")!) {
                         Label("Share profile", systemImage: "square.and.arrow.up")
+                    }
+                    Button {
+                        app.toggleTheme()
+                    } label: {
+                        Label(app.appTheme == .dark ? "Light mode" : "Dark mode",
+                              systemImage: app.appTheme == .dark ? "sun.max" : "moon")
                     }
                     Divider()
                     Button(role: .destructive) {
@@ -249,7 +254,7 @@ struct ProfileView: View {
             } label: {
                 Image(systemName: isOwn ? "line.3.horizontal" : "ellipsis")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(GGColor.textPrimary)
                     .frame(width: 36, height: 36)
                     .contentShape(Rectangle())
             }
@@ -295,10 +300,10 @@ struct ProfileView: View {
         VStack(spacing: 2) {
             Text(value)
                 .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(GGColor.textPrimary)
             Text(label)
                 .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(GGColor.textSecondary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -309,22 +314,22 @@ struct ProfileView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(profile.name)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(GGColor.textPrimary)
             Text(profile.category)
                 .font(.system(size: 13))
                 .foregroundStyle(GGColor.textSecondary)
             Text(profile.bio)
                 .font(.system(size: 14))
-                .foregroundStyle(.white)
+                .foregroundStyle(GGColor.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if !isOwn {
                 HStack(spacing: 6) {
-                    Circle().fill(Color.white.opacity(0.35)).frame(width: 18, height: 18)
+                    Circle().fill(GGColor.ink(0.35)).frame(width: 18, height: 18)
                     (Text("Followed by ")
                      + Text("friends on gojogo").fontWeight(.semibold))
                         .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(GGColor.ink(0.9))
                 }
                 .padding(.top, 4)
             }
@@ -344,11 +349,11 @@ struct ProfileView: View {
                     ShareLink(item: "https://gojogo.app/@\(profile.handle)") {
                         Text("Share profile")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(GGColor.textPrimary)
                             .frame(maxWidth: .infinity)
                             .frame(height: 34)
                             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.white.opacity(0.12)))
+                                .fill(GGColor.ink(0.12)))
                     }
                     profileButton("Activity") {
                         app.closeProfile()
@@ -366,12 +371,12 @@ struct ProfileView: View {
                     } label: {
                         Text(profile.following ? "Following" : "Follow")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(profile.following ? .white : .black)
+                            .foregroundStyle(profile.following ? GGColor.textPrimary : GGColor.onAccent)
                             .frame(maxWidth: .infinity)
                             .frame(height: 34)
                             .background(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(profile.following ? Color.white.opacity(0.14) : Color.white)
+                                    .fill(profile.following ? GGColor.ink(0.14) : GGColor.white)
                             )
                     }
                     .buttonStyle(PressableStyle())
@@ -394,11 +399,11 @@ struct ProfileView: View {
                         Image(systemName: app.notifyHandles.contains(profile.handle.lowercased())
                               ? "bell.fill" : "bell")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(GGColor.textPrimary)
                             .frame(width: 40, height: 34)
                             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .fill(app.notifyHandles.contains(profile.handle.lowercased())
-                                      ? Color.white.opacity(0.24) : Color.white.opacity(0.12)))
+                                      ? GGColor.ink(0.24) : GGColor.ink(0.12)))
                     }
                     .buttonStyle(PressableStyle())
                 }
@@ -410,11 +415,11 @@ struct ProfileView: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(GGColor.textPrimary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 34)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.12)))
+                    .fill(GGColor.ink(0.12)))
         }
         .buttonStyle(PressableStyle())
     }
@@ -433,11 +438,11 @@ struct ProfileView: View {
                         VStack(spacing: 10) {
                             Image(systemName: icon)
                                 .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(i == tab ? .white : .white.opacity(0.35))
+                                .foregroundStyle(i == tab ? GGColor.textPrimary : GGColor.textTertiary)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 44)
                             Rectangle()
-                                .fill(i == tab ? Color.white : Color.clear)
+                                .fill(i == tab ? GGColor.textPrimary : Color.clear)
                                 .frame(height: 1.5)
                         }
                         .frame(maxWidth: .infinity)
@@ -446,7 +451,7 @@ struct ProfileView: View {
                     .buttonStyle(.plain)
                 }
             }
-            Rectangle().fill(Color.white.opacity(0.12)).frame(height: 0.5)
+            Rectangle().fill(GGColor.ink(0.12)).frame(height: 0.5)
         }
     }
 
@@ -484,10 +489,10 @@ struct ProfileView: View {
             MediaImage(url: url, data: data, cornerRadius: 0)
         case .text(let text):
             ZStack(alignment: .topLeading) {
-                Color.white.opacity(0.08)
+                GGColor.ink(0.08)
                 Text(text)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(GGColor.textPrimary)
                     .lineLimit(5)
                     .padding(8)
             }

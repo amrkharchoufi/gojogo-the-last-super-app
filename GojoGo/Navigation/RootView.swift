@@ -22,6 +22,8 @@ struct MainAppView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.easeInOut(duration: 0.28), value: app.navMode)
+            // Crossfade between sections instead of a hard cut.
+            .animation(.easeInOut(duration: 0.22), value: app.activeTab)
 
             // Soft scrim when composing — Apple blur feel
             if app.isComposing {
@@ -63,7 +65,7 @@ struct MainAppView: View {
             ProfileView()
                 .environmentObject(app)
                 .presentationDragIndicator(.visible)
-                .presentationBackground(Color.black)
+                .presentationBackground(GGColor.sheetBG)
         }
         .sheet(isPresented: $app.showStoriesBrowser) {
             StoriesBrowserView()

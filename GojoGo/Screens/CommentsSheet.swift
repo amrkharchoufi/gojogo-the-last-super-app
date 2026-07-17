@@ -24,7 +24,7 @@ struct CommentsSheet: View {
                         .padding(20)
                     }
 
-                    Divider().overlay(Color.white.opacity(0.08))
+                    Divider().overlay(GGColor.ink(0.08))
 
                     HStack(spacing: 10) {
                         UserAvatar(size: 32, letter: String(app.user.name.prefix(1)),
@@ -39,7 +39,7 @@ struct CommentsSheet: View {
                         } label: {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.system(size: 28))
-                                .foregroundStyle(canSend ? Color.white : Color.white.opacity(0.25))
+                                .foregroundStyle(canSend ? GGColor.white : GGColor.ink(0.25))
                         }
                         .disabled(!canSend)
                     }
@@ -56,7 +56,6 @@ struct CommentsSheet: View {
                         .foregroundStyle(Color.white)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

@@ -76,7 +76,6 @@ struct ComposePostView: View {
                     .disabled(!canPost)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .onChange(of: pickerItem) { _, item in
             Task {

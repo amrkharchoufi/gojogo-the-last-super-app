@@ -8,7 +8,7 @@ struct MadeleineHomeView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            GGColor.black.ignoresSafeArea()
+            GGColor.bg.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 if app.chatMessages.isEmpty {
@@ -185,7 +185,7 @@ struct FileChipView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.06)))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 14).fill(GGColor.ink(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(GGColor.ink(0.12), lineWidth: 1))
     }
 }

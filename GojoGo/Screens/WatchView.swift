@@ -6,7 +6,7 @@ struct LongFormFeedView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
+            GGColor.bg.ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 18) {
@@ -26,7 +26,7 @@ struct LongFormFeedView: View {
             .padding(.top, 8)
             .background(
                 LinearGradient(
-                    colors: [Color.black.opacity(0.92), Color.black.opacity(0)],
+                    colors: [GGColor.bg.opacity(0.96), GGColor.bg.opacity(0)],
                     startPoint: .top, endPoint: .bottom
                 )
                 .frame(height: 88)
@@ -89,7 +89,7 @@ struct VideoCard: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: thumbHeight)
                         .clipped()
-                        .background(Color.white.opacity(0.06))
+                        .background(GGColor.ink(0.06))
 
                     Text(live.duration)
                         .font(.system(size: 12, weight: .semibold))
@@ -122,14 +122,14 @@ struct VideoCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(live.title)
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(GGColor.textPrimary)
                             .multilineTextAlignment(.leading)
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
 
                         Text(live.meta)
                             .font(.system(size: 13))
-                            .foregroundStyle(Color.white.opacity(0.55))
+                            .foregroundStyle(GGColor.ink(0.55))
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                     }
@@ -143,7 +143,7 @@ struct VideoCard: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.white.opacity(0.55))
+                        .foregroundStyle(GGColor.ink(0.55))
                         .frame(width: 28, height: 28)
                         .padding(.top, 2)
                         .contentShape(Rectangle())

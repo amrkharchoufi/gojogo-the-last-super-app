@@ -26,8 +26,9 @@ struct GojoGoApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(appState)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(appState.appTheme.colorScheme)
                 .tint(GGColor.accent)
+                .animation(.easeInOut(duration: 0.3), value: appState.appTheme)
         }
     }
 }

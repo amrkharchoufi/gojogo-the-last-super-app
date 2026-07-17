@@ -10,6 +10,15 @@ enum AppNavMode: String, Hashable {
 
 enum AppTab: Hashable { case home, watch, madeleine, travel, delivery, economy, search }
 
+/// App-wide appearance. Media-immersive surfaces (stories, shorts, players)
+/// stay dark in both themes by design.
+enum AppTheme: String, Hashable {
+    case dark
+    case light
+
+    var colorScheme: ColorScheme { self == .light ? .light : .dark }
+}
+
 /// Destinations inside My World (iMessage-style private network).
 enum MyWorldTab: Hashable {
     case messages
@@ -707,14 +716,20 @@ struct WorldConversation: Identifiable {
     }
 }
 
-/// Shared iMessage palette for My World.
+/// Shared iMessage palette for My World — adapts with the app theme.
 enum IMColor {
-    static let blue = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255)
-    static let bubbleGray = Color(red: 38 / 255, green: 38 / 255, blue: 41 / 255)
-    static let secondary = Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255)
-    static let chrome = Color(red: 44 / 255, green: 44 / 255, blue: 46 / 255)
-    static let separator = Color(red: 56 / 255, green: 56 / 255, blue: 58 / 255)
-    static let inputFill = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
+    static let blue = Color(dark: "0A84FF", light: "007AFF")
+    static let bubbleGray = Color(dark: "262629", light: "E9E9EB")
+    static let secondary = Color(dark: "8E8E93", light: "8A8A8E")
+    static let chrome = Color(dark: "2C2C2E", light: "EAEAEE")
+    static let separator = Color(dark: "38383A", light: "C6C6C8")
+    static let inputFill = Color(dark: "1C1C1E", light: "FFFFFF")
+    /// Page background (iMessage: pure black / pure white).
+    static let bg = Color(dark: "000000", light: "FFFFFF")
+    /// Primary label on the page / in incoming bubbles.
+    static let label = Color(dark: "FFFFFF", light: "0A0A0A")
+    /// Sheet backdrop for My World sheets.
+    static let sheetBG = Color(dark: "171719", light: "F2F2F7")
 }
 
 // MARK: - GojoDelivery (food delivery · Uber Eats-style)

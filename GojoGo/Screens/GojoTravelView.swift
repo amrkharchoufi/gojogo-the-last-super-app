@@ -139,7 +139,7 @@ struct GojoTravelView: View {
 
             ForEach(Array(app.travelRecent.prefix(2).enumerated()), id: \.element.id) { i, place in
                 if i == 0 {
-                    Divider().background(Color.white.opacity(0.10))
+                    Divider().background(GGColor.ink(0.10))
                 }
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -149,7 +149,7 @@ struct GojoTravelView: View {
                 }
                 .buttonStyle(PressableStyle())
                 if i < min(1, app.travelRecent.count - 1) {
-                    Divider().background(Color.white.opacity(0.10))
+                    Divider().background(GGColor.ink(0.10))
                 }
             }
         }
@@ -185,7 +185,7 @@ struct GojoTravelView: View {
                 locationLine(dot: .white, title: "Pickup",
                              value: app.travelPickup.name)
                 Rectangle()
-                    .fill(Color.white.opacity(0.12))
+                    .fill(GGColor.ink(0.12))
                     .frame(width: 1, height: 10)
                     .padding(.leading, 5)
                 HStack(spacing: 10) {
@@ -214,7 +214,7 @@ struct GojoTravelView: View {
                         }
                         .buttonStyle(PressableStyle())
                         if i < app.filteredTravelPlaces.count - 1 {
-                            Divider().background(Color.white.opacity(0.08))
+                            Divider().background(GGColor.ink(0.08))
                         }
                     }
                 }
@@ -304,7 +304,7 @@ struct GojoTravelView: View {
         VStack(spacing: 18) {
             ZStack {
                 Circle()
-                    .stroke(Color.white.opacity(0.12), lineWidth: 2)
+                    .stroke(GGColor.ink(0.12), lineWidth: 2)
                     .frame(width: 72, height: 72)
                     .scaleEffect(pulse ? 1.35 : 1)
                     .opacity(pulse ? 0 : 0.8)
@@ -495,7 +495,7 @@ struct GojoTravelView: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(GGColor.textPrimary)
                 .frame(width: 36, height: 36)
-                .background(Circle().fill(Color.white.opacity(0.08)))
+                .background(Circle().fill(GGColor.ink(0.08)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(place.name)
                     .font(.system(size: 14, weight: .semibold))
@@ -541,7 +541,7 @@ struct GojoTravelView: View {
                 .foregroundStyle(selected ? GGColor.onAccent : GGColor.textPrimary)
                 .frame(width: 44, height: 44)
                 .background(
-                    Circle().fill(selected ? GGColor.white : Color.white.opacity(0.08))
+                    Circle().fill(selected ? GGColor.white : GGColor.ink(0.08))
                 )
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -569,11 +569,11 @@ struct GojoTravelView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(selected ? Color.white.opacity(0.12) : Color.clear)
+                .fill(selected ? GGColor.ink(0.12) : Color.clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(selected ? Color.white.opacity(0.35) : Color.clear, lineWidth: 1)
+                .strokeBorder(selected ? GGColor.ink(0.35) : Color.clear, lineWidth: 1)
         )
     }
 

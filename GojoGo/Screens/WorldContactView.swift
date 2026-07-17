@@ -43,7 +43,7 @@ struct WorldContactView: View {
                 .padding(.bottom, 40)
             }
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(IMColor.bg.ignoresSafeArea())
     }
 
     private var navBar: some View {
@@ -62,7 +62,7 @@ struct WorldContactView: View {
             Button { } label: {
                 Text("Edit")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
                     .background(Capsule().fill(IMColor.chrome))
@@ -83,7 +83,7 @@ struct WorldContactView: View {
             )
             Text(displayName)
                 .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(IMColor.label)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
             if let user = contact?.username {
@@ -108,7 +108,7 @@ struct WorldContactView: View {
         Button { } label: {
             Image(systemName: icon)
                 .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(IMColor.label)
                 .frame(width: 56, height: 56)
                 .background(Circle().fill(IMColor.chrome))
         }
@@ -125,7 +125,7 @@ struct WorldContactView: View {
                     } label: {
                         Text(t.rawValue)
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(tab == t ? .white : IMColor.secondary)
+                            .foregroundStyle(tab == t ? IMColor.label : IMColor.secondary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .background(
@@ -204,7 +204,6 @@ struct WorldContactView: View {
                 }
             }
             .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
-            .colorScheme(.dark)
             .frame(height: 200)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .disabled(true)
@@ -213,7 +212,7 @@ struct WorldContactView: View {
                 Text("🚗")
                 Text("\(contact?.distanceLabel ?? "23 km") · \(contact?.etaLabel ?? "36 min")")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.white)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -223,7 +222,7 @@ struct WorldContactView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(contact?.city ?? "Nearby")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                 Text("Live")
                     .font(.system(size: 13))
                     .foregroundStyle(IMColor.secondary)
@@ -243,12 +242,12 @@ struct WorldContactView: View {
                     .textCase(.uppercase)
                 Text(phone)
                     .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
             }
             Spacer()
             Image(systemName: "phone.fill")
                 .font(.system(size: 18))
-                .foregroundStyle(.white)
+                .foregroundStyle(IMColor.label)
         }
         .padding(16)
         .background(
@@ -262,17 +261,17 @@ struct WorldContactView: View {
         HStack {
             Text("Conversation Line")
                 .font(.system(size: 16))
-                .foregroundStyle(.white)
+                .foregroundStyle(IMColor.label)
             Spacer()
             HStack(spacing: 6) {
                 Text("P")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                     .frame(width: 18, height: 18)
                     .background(RoundedRectangle(cornerRadius: 4).fill(IMColor.blue))
                 Text("Personal")
                     .font(.system(size: 16))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(IMColor.secondary)

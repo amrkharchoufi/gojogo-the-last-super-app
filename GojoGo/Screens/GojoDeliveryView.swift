@@ -33,7 +33,7 @@ struct GojoDeliveryView: View {
                 .environmentObject(app)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(Color(white: 0.07))
+                .presentationBackground(GGColor.sheetBG)
         }
     }
 }
@@ -174,7 +174,7 @@ private struct DeliveryBrowseView: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
                         .background(
-                            Capsule().fill(active ? GGColor.white : Color.white.opacity(0.08))
+                            Capsule().fill(active ? GGColor.white : GGColor.ink(0.08))
                         )
                         .contentShape(Capsule())
                     }
@@ -463,7 +463,7 @@ private struct DeliveryRestaurantView: View {
                             .foregroundStyle(GGColor.textSecondary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
-                            .background(Capsule().fill(Color.white.opacity(0.07)))
+                            .background(Capsule().fill(GGColor.ink(0.07)))
                     }
                 }
             }
@@ -484,7 +484,7 @@ private struct DeliveryRestaurantView: View {
                         ForEach(Array(section.items.enumerated()), id: \.element.id) { i, item in
                             menuRow(item)
                             if i < section.items.count - 1 {
-                                Divider().background(Color.white.opacity(0.07))
+                                Divider().background(GGColor.ink(0.07))
                                     .padding(.leading, 16)
                             }
                         }
@@ -550,8 +550,8 @@ private struct DeliveryRestaurantView: View {
                             .frame(minWidth: 22)
                         stepperButton("plus") { app.addDeliveryItem(item, from: restaurant) }
                     }
-                    .background(Capsule().fill(Color(white: 0.16)))
-                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
+                    .background(Capsule().fill(GGColor.surface2))
+                    .overlay(Capsule().strokeBorder(GGColor.ink(0.12), lineWidth: 0.5))
                     .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
                     .offset(x: 6, y: 6)
                 }
@@ -590,7 +590,7 @@ private struct DeliveryCartBar: View {
                     .font(.ggMono(13, .semibold))
                     .foregroundStyle(GGColor.textPrimary)
                     .frame(width: 26, height: 26)
-                    .background(Circle().fill(Color.white.opacity(0.14)))
+                    .background(Circle().fill(GGColor.ink(0.14)))
                 Text("View cart")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(GGColor.onAccent)
@@ -634,7 +634,7 @@ private struct DeliveryCheckoutSheet: View {
             }
             placeOrderButton
         }
-        .background(Color(white: 0.07).ignoresSafeArea())
+        .background(GGColor.sheetBG.ignoresSafeArea())
     }
 
     private var header: some View {
@@ -678,11 +678,11 @@ private struct DeliveryCheckoutSheet: View {
                             if let r = restaurant { app.addDeliveryItem(line.item, from: r) }
                         }
                     }
-                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                    .background(Capsule().fill(GGColor.ink(0.08)))
                 }
                 .padding(.vertical, 10)
                 if i < app.deliveryCart.count - 1 {
-                    Divider().background(Color.white.opacity(0.07))
+                    Divider().background(GGColor.ink(0.07))
                 }
             }
         }
@@ -695,7 +695,7 @@ private struct DeliveryCheckoutSheet: View {
             feeRow("Subtotal", app.deliveryCartSubtotal)
             feeRow("Delivery fee", app.deliveryFeeAmount, freeWhenZero: true)
             feeRow("Service fee", app.deliveryServiceFee)
-            Divider().background(Color.white.opacity(0.1))
+            Divider().background(GGColor.ink(0.1))
             HStack {
                 Text("Total")
                     .font(.system(size: 15, weight: .bold))
@@ -728,7 +728,7 @@ private struct DeliveryCheckoutSheet: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(GGColor.textPrimary)
                 .frame(width: 34, height: 34)
-                .background(Circle().fill(Color.white.opacity(0.08)))
+                .background(Circle().fill(GGColor.ink(0.08)))
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.system(size: 11))
@@ -966,7 +966,7 @@ private struct DeliveryTrackingView: View {
         return HStack(spacing: 6) {
             ForEach(steps, id: \.rawValue) { step in
                 Capsule()
-                    .fill(step <= current ? GGColor.white : Color.white.opacity(0.14))
+                    .fill(step <= current ? GGColor.white : GGColor.ink(0.14))
                     .frame(height: 4)
             }
         }
@@ -980,7 +980,7 @@ private struct DeliveryTrackingView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(GGColor.textPrimary)
                 .frame(width: 36, height: 36)
-                .background(Circle().fill(Color.white.opacity(0.1)))
+                .background(Circle().fill(GGColor.ink(0.1)))
         }
         .buttonStyle(PressableStyle())
     }

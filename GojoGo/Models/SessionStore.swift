@@ -227,6 +227,7 @@ struct CachedSession: Codable {
     var notifyHandles: [String]?
     var dmThreads: [String: [CachedChatMessage]]?
     var navModeRaw: String?
+    var appThemeRaw: String?
 }
 
 struct CachedUser: Codable {
@@ -426,6 +427,7 @@ extension CachedSession {
         notifyHandles = Array(app.notifyHandles)
         dmThreads = app.dmThreads.mapValues { $0.map(CachedChatMessage.init) }
         navModeRaw = app.navMode.rawValue
+        appThemeRaw = app.appTheme.rawValue
     }
 }
 

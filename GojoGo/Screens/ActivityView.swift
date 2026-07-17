@@ -52,10 +52,9 @@ struct ActivityView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { app.closeActivity() }
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(GGColor.textPrimary)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
@@ -107,7 +106,7 @@ struct ActivityView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
-            .background(item.read ? Color.clear : Color.white.opacity(0.035))
+            .background(item.read ? Color.clear : GGColor.ink(0.035))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -156,11 +155,11 @@ struct DirectMessageView: View {
                                 if msg.fromUser { Spacer(minLength: 40) }
                                 Text(msg.text)
                                     .font(.system(size: 14))
-                                    .foregroundStyle(msg.fromUser ? Color.black : Color.white)
+                                    .foregroundStyle(msg.fromUser ? GGColor.onAccent : GGColor.textPrimary)
                                     .padding(.horizontal, 14).padding(.vertical, 10)
                                     .background(
                                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                            .fill(msg.fromUser ? Color.white : Color.white.opacity(0.12))
+                                            .fill(msg.fromUser ? GGColor.white : GGColor.ink(0.12))
                                     )
                                 if !msg.fromUser { Spacer(minLength: 40) }
                             }
@@ -189,9 +188,9 @@ struct DirectMessageView: View {
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.black)
+                        .foregroundStyle(GGColor.onAccent)
                         .frame(width: 40, height: 40)
-                        .background(Circle().fill(Color.white))
+                        .background(Circle().fill(GGColor.white))
                 }
                 .buttonStyle(PressableStyle())
                 .disabled(app.dmDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -266,11 +265,10 @@ struct EditProfileSheet: View {
                         app.showEditProfile = false
                     }
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(GGColor.textPrimary)
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -320,17 +318,16 @@ struct PostViewerSheet: View {
                         .padding(.vertical, 60)
                 }
             }
-            .background(Color.black.ignoresSafeArea())
+            .background(GGColor.bg.ignoresSafeArea())
             .navigationTitle(app.viewingPost?.author ?? "Post")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { app.closePostViewer() }
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(GGColor.textPrimary)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)

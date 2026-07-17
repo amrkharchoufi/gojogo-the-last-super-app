@@ -9,7 +9,7 @@ struct HomeView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
+            GGColor.bg.ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 0) {
@@ -20,7 +20,7 @@ struct HomeView: View {
                     ForEach(app.posts) { post in
                         InstagramPostCard(post: post)
                         Rectangle()
-                            .fill(Color.white.opacity(0.08))
+                            .fill(GGColor.ink(0.08))
                             .frame(height: 0.5)
                     }
 
@@ -35,13 +35,15 @@ struct HomeView: View {
             HStack(spacing: 16) {
                 Wordmark(size: 22)
                 Spacer()
+                ThemeToggleButton(size: 20)
+
                 Button {
                     app.openActivity()
                 } label: {
                     ZStack(alignment: .topTrailing) {
                         Image(systemName: "heart")
                             .font(.system(size: 22, weight: .regular))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(GGColor.textPrimary)
                         if app.unreadActivityCount > 0 {
                             Text("\(min(app.unreadActivityCount, 9))")
                                 .font(.system(size: 10, weight: .bold))
@@ -64,7 +66,7 @@ struct HomeView: View {
                         letter: String(app.user.name.prefix(1)),
                         imageURL: app.user.avatarURL
                     )
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+                    .overlay(Circle().strokeBorder(GGColor.ink(0.35), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Profile")
@@ -74,7 +76,7 @@ struct HomeView: View {
             .padding(.bottom, 8)
             .background(
                 LinearGradient(
-                    colors: [Color.black.opacity(0.92), Color.black.opacity(0.55), .clear],
+                    colors: [GGColor.bg.opacity(0.96), GGColor.bg.opacity(0.72), GGColor.bg.opacity(0)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -116,13 +118,13 @@ struct HomeView: View {
                 ZStack {
                     Circle()
                         .strokeBorder(
-                            Color.white.opacity(0.28),
+                            GGColor.ink(0.28),
                             style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
                         )
                         .frame(width: 74, height: 74)
                     Text("+")
                         .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(GGColor.ink(0.85))
                 }
                 Text("More")
                     .font(.system(size: 11))
@@ -259,7 +261,7 @@ struct InstagramPostCard: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(live.author)
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(GGColor.textPrimary)
                         if !live.meta.isEmpty {
                             Text(live.meta)
                                 .font(.system(size: 13))
@@ -283,7 +285,7 @@ struct InstagramPostCard: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(
-                            Capsule().fill(live.following ? Color.white.opacity(0.08) : Color.white.opacity(0.16))
+                            Capsule().fill(live.following ? GGColor.ink(0.08) : GGColor.ink(0.16))
                         )
                 }
                 .buttonStyle(.plain)
@@ -294,7 +296,7 @@ struct InstagramPostCard: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(GGColor.textPrimary)
                     .frame(width: 36, height: 36)
                     .contentShape(Rectangle())
             }
@@ -454,13 +456,13 @@ struct InstagramPostCard: View {
         if let text = live.text, !text.isEmpty {
             (Text(live.author).fontWeight(.semibold) + Text(" ") + Text(text))
                 .font(.system(size: 15))
-                .foregroundStyle(.white)
+                .foregroundStyle(GGColor.textPrimary)
                 .lineSpacing(3)
                 .lineLimit(3)
         } else if live.likeCount > 0 {
             Text("\(formatCount(live.likeCount)) likes")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(GGColor.textPrimary)
         }
     }
 

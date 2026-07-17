@@ -70,7 +70,7 @@ struct WorldChatView: View {
             )
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: app.showWorldAppsMenu)
-        .background(Color.black.ignoresSafeArea())
+        .background(IMColor.bg.ignoresSafeArea())
         .photosPicker(
             isPresented: $showPhotoPicker,
             selection: $photoItems,
@@ -183,7 +183,7 @@ struct WorldChatView: View {
                     HStack(spacing: 2) {
                         Text(live.title)
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(IMColor.label)
                             .lineLimit(1)
                         Image(systemName: "chevron.right")
                             .font(.system(size: 8, weight: .bold))
@@ -210,7 +210,7 @@ struct WorldChatView: View {
         .padding(.bottom, 6)
         .background(
             LinearGradient(
-                colors: [Color.black, Color.black.opacity(0.92), Color.black.opacity(0)],
+                colors: [IMColor.bg, IMColor.bg.opacity(0.92), IMColor.bg.opacity(0)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -387,7 +387,7 @@ struct WorldChatView: View {
     private func textBubble(_ msg: WorldMessage, tailed: Bool) -> some View {
         Text(msg.text)
             .font(.system(size: 17))
-            .foregroundStyle(.white)
+            .foregroundStyle(msg.fromUser ? Color.white : IMColor.label)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(
@@ -412,7 +412,7 @@ struct WorldChatView: View {
                 if msg.kind == .video, let d = msg.durationLabel {
                     Text(d)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(IMColor.label)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(Capsule().fill(Color.black.opacity(0.55)))
@@ -421,7 +421,7 @@ struct WorldChatView: View {
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+                    .strokeBorder(IMColor.label.opacity(0.08), lineWidth: 0.5)
             )
     }
 
@@ -433,13 +433,13 @@ struct WorldChatView: View {
         HStack(spacing: 10) {
             Image(systemName: "play.fill")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(msg.fromUser ? Color.white : IMColor.label)
             Image(systemName: "waveform")
                 .font(.system(size: 22))
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle((msg.fromUser ? Color.white : IMColor.label).opacity(0.9))
             Text(msg.durationLabel ?? "0:03")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle((msg.fromUser ? Color.white : IMColor.label).opacity(0.9))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -468,7 +468,6 @@ struct WorldChatView: View {
                 }
             }
             .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
-            .colorScheme(.dark)
             .frame(width: 230, height: 130)
             .disabled(true)
 
@@ -478,7 +477,7 @@ struct WorldChatView: View {
                     .foregroundStyle(IMColor.blue)
                 Text(msg.text)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -488,7 +487,7 @@ struct WorldChatView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+                .strokeBorder(IMColor.label.opacity(0.08), lineWidth: 0.5)
         )
     }
 
@@ -498,11 +497,11 @@ struct WorldChatView: View {
                 .font(.system(size: 22))
                 .foregroundStyle(IMColor.blue)
                 .frame(width: 36, height: 36)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.08)))
+                .background(RoundedRectangle(cornerRadius: 8).fill(IMColor.label.opacity(0.08)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(msg.fileName ?? "Attachment")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(msg.fromUser ? Color.white : IMColor.label)
                     .lineLimit(1)
                 Text(msg.fileMeta ?? "Document")
                     .font(.system(size: 13))
@@ -532,9 +531,9 @@ struct WorldChatView: View {
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 21, weight: .regular))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IMColor.label)
                     .frame(width: 42, height: 42)
-                    .background(Circle().fill(Color(white: 0.14)))
+                    .background(Circle().fill(IMColor.chrome))
                     .rotationEffect(.degrees(app.showWorldAppsMenu ? 45 : 0))
             }
             .buttonStyle(.plain)
@@ -545,14 +544,14 @@ struct WorldChatView: View {
                     attachmentTray
 
                     Rectangle()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(IMColor.label.opacity(0.08))
                         .frame(height: 0.66)
                 }
 
                 HStack(alignment: .bottom, spacing: 6) {
                     TextField("iMessage", text: $app.worldDraft, axis: .vertical)
                         .font(.system(size: 17))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(IMColor.label)
                         .lineLimit(1...5)
                         .focused($focused)
                         .tint(IMColor.blue)
@@ -566,7 +565,7 @@ struct WorldChatView: View {
                         } label: {
                             Image(systemName: "arrow.up")
                                 .font(.system(size: 17, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Color.white)
                                 .frame(width: 50, height: 34)
                                 .background(Capsule().fill(IMColor.blue))
                         }
@@ -582,7 +581,7 @@ struct WorldChatView: View {
                         } label: {
                             Image(systemName: "waveform")
                                 .font(.system(size: 19, weight: .medium))
-                                .foregroundStyle(Color.white.opacity(0.65))
+                                .foregroundStyle(IMColor.label.opacity(0.6))
                                 .frame(width: 34, height: 34)
                         }
                         .buttonStyle(.plain)
@@ -601,7 +600,7 @@ struct WorldChatView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: app.worldPendingAttachments.isEmpty ? 21 : 26,
                                          style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.09), lineWidth: 0.66)
+                            .strokeBorder(IMColor.label.opacity(0.09), lineWidth: 0.66)
                     )
             )
             .animation(.easeOut(duration: 0.15), value: canSend)
@@ -611,7 +610,7 @@ struct WorldChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background(Color.black)
+        .background(IMColor.bg)
         .safeAreaPadding(.bottom, 0)
     }
 
@@ -635,7 +634,7 @@ struct WorldChatView: View {
                                 if att.isVideo, let d = att.durationLabel {
                                     Text(d)
                                         .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(.white)
+                                        .foregroundStyle(Color.white)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
                                         .background(Capsule().fill(Color.black.opacity(0.55)))
@@ -644,7 +643,7 @@ struct WorldChatView: View {
                             }
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5)
+                                    .strokeBorder(IMColor.label.opacity(0.1), lineWidth: 0.5)
                             )
 
                         Button {
@@ -709,7 +708,7 @@ private struct ChatCarouselBubble: View {
                             if let d = item.durationLabel {
                                 Text(d)
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(Color.white)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 3)
                                     .background(Capsule().fill(Color.black.opacity(0.55)))
@@ -727,7 +726,7 @@ private struct ChatCarouselBubble: View {
             if items.count > 1 {
                 Text("\(page + 1)/\(items.count)")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.white)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(Color.black.opacity(0.55)))
@@ -751,7 +750,7 @@ private struct ChatCarouselBubble: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+                .strokeBorder(IMColor.label.opacity(0.08), lineWidth: 0.5)
         )
     }
 }
@@ -976,12 +975,12 @@ struct WorldAppsDrawer: View {
                     HStack(spacing: 14) {
                         Image(systemName: row.icon)
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.white)
                             .frame(width: 32, height: 32)
                             .background(Circle().fill(row.color))
                         Text(row.title)
                             .font(.system(size: 17))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(IMColor.label)
                         Spacer(minLength: 8)
                     }
                     .padding(.horizontal, 14)
@@ -990,7 +989,7 @@ struct WorldAppsDrawer: View {
                 }
                 .buttonStyle(.plain)
                 if i < rows.count - 1 {
-                    Divider().background(Color.white.opacity(0.08)).padding(.leading, 60)
+                    Divider().background(IMColor.label.opacity(0.08)).padding(.leading, 60)
                 }
             }
         }
@@ -999,14 +998,13 @@ struct WorldAppsDrawer: View {
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .dark)
                 .overlay(
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(Color(white: 0.16).opacity(0.92))
+                        .fill(IMColor.chrome.opacity(0.95))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5)
+                        .strokeBorder(IMColor.label.opacity(0.1), lineWidth: 0.5)
                 )
         )
         .shadow(color: .black.opacity(0.4), radius: 24, y: 10)

@@ -139,6 +139,27 @@ struct PressableStyle: ButtonStyle {
     }
 }
 
+// MARK: - Theme toggle
+
+struct ThemeToggleButton: View {
+    @EnvironmentObject var app: AppState
+    var size: CGFloat = 20
+
+    var body: some View {
+        Button {
+            app.toggleTheme()
+        } label: {
+            Image(systemName: app.appTheme == .dark ? "sun.max" : "moon.fill")
+                .font(.system(size: size, weight: .regular))
+                .foregroundStyle(GGColor.textPrimary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(app.appTheme == .dark ? "Switch to light mode" : "Switch to dark mode")
+    }
+}
+
 // MARK: - Mono chip / pill
 
 struct MonoChip: View {
