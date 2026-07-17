@@ -1,0 +1,377 @@
+{
+  ".claude/settings.local.json": {
+    "mtime": 1784204443.6499295,
+    "ast_hash": "0406ab62c1ea7e7d39e626f8b0733352",
+    "semantic_hash": "0406ab62c1ea7e7d39e626f8b0733352"
+  },
+  "GojoGo/Assets.xcassets/AccentColor.colorset/Contents.json": {
+    "mtime": 1783899588.595282,
+    "ast_hash": "7853e187ab3fc28509f21d3f458aba3c",
+    "semantic_hash": "7853e187ab3fc28509f21d3f458aba3c"
+  },
+  "GojoGo/Assets.xcassets/AppIcon.appiconset/Contents.json": {
+    "mtime": 1784039173.3571723,
+    "ast_hash": "67425efba4ad62a4368a0fc76becea74",
+    "semantic_hash": "67425efba4ad62a4368a0fc76becea74"
+  },
+  "GojoGo/Assets.xcassets/Contents.json": {
+    "mtime": 1783899585.146708,
+    "ast_hash": "9deb2ada1cc834bbebf8bbad9c8978a1",
+    "semantic_hash": "9deb2ada1cc834bbebf8bbad9c8978a1"
+  },
+  "GojoGo/Assets.xcassets/GojoGoLogo.imageset/Contents.json": {
+    "mtime": 1784037937.212447,
+    "ast_hash": "0929a514adfb69d98281c90616112c12",
+    "semantic_hash": "0929a514adfb69d98281c90616112c12"
+  },
+  "GojoGo/Assets.xcassets/SampleBMWM4.imageset/Contents.json": {
+    "mtime": 1784246489.4293542,
+    "ast_hash": "f39831b068ce50adf4fb3cc230672e6c",
+    "semantic_hash": "f39831b068ce50adf4fb3cc230672e6c"
+  },
+  "GojoGo/Assets.xcassets/SampleBatman.imageset/Contents.json": {
+    "mtime": 1784246489.3399374,
+    "ast_hash": "900f718944f8806a87f2ebde7a7c6d57",
+    "semantic_hash": "900f718944f8806a87f2ebde7a7c6d57"
+  },
+  "GojoGo/Assets.xcassets/SampleCatsDuo.imageset/Contents.json": {
+    "mtime": 1784246489.5281596,
+    "ast_hash": "fd8c9dadd9ba1cecb39a3308f98117b0",
+    "semantic_hash": "fd8c9dadd9ba1cecb39a3308f98117b0"
+  },
+  "GojoGo/Assets.xcassets/SampleCockpitCat.imageset/Contents.json": {
+    "mtime": 1784246489.511225,
+    "ast_hash": "924c952411272b119d3ca758ff35d615",
+    "semantic_hash": "924c952411272b119d3ca758ff35d615"
+  },
+  "GojoGo/Assets.xcassets/SampleCosmicFace.imageset/Contents.json": {
+    "mtime": 1784246489.4538772,
+    "ast_hash": "c3acf0ea1b9b1ef64cbd37ac86629772",
+    "semantic_hash": "c3acf0ea1b9b1ef64cbd37ac86629772"
+  },
+  "GojoGo/Assets.xcassets/SampleLighthouse.imageset/Contents.json": {
+    "mtime": 1784246489.3649817,
+    "ast_hash": "3877b48b6f5f814c410dbc12a6a87717",
+    "semantic_hash": "3877b48b6f5f814c410dbc12a6a87717"
+  },
+  "GojoGo/Assets.xcassets/SamplePilotCat.imageset/Contents.json": {
+    "mtime": 1784246489.4887424,
+    "ast_hash": "048f9b26ee505d8fbae3c923ca7eca8e",
+    "semantic_hash": "048f9b26ee505d8fbae3c923ca7eca8e"
+  },
+  "GojoGo/Assets.xcassets/SamplePorscheDesert.imageset/Contents.json": {
+    "mtime": 1784246489.3847368,
+    "ast_hash": "a4a64aec3b71aba34f19ec09a6f365fa",
+    "semantic_hash": "a4a64aec3b71aba34f19ec09a6f365fa"
+  },
+  "GojoGo/Assets.xcassets/SamplePorscheDubai.imageset/Contents.json": {
+    "mtime": 1784246489.4097333,
+    "ast_hash": "44c3ed8df539c2982e16542f45f9e812",
+    "semantic_hash": "44c3ed8df539c2982e16542f45f9e812"
+  },
+  "GojoGo/Assets.xcassets/SampleSpidey.imageset/Contents.json": {
+    "mtime": 1784246489.471204,
+    "ast_hash": "bdcffe0675b79b408fd068b150a1e46e",
+    "semantic_hash": "bdcffe0675b79b408fd068b150a1e46e"
+  },
+  "GojoGo/Auth/EmailSignUpView.swift": {
+    "mtime": 1783992180.5188158,
+    "ast_hash": "75da53323ee33d0064ada6fc62c84d9d",
+    "semantic_hash": "75da53323ee33d0064ada6fc62c84d9d"
+  },
+  "GojoGo/Auth/OnboardingFlow.swift": {
+    "mtime": 1783992146.5391848,
+    "ast_hash": "ad2831b2aaae467202458cb560bfc5ca",
+    "semantic_hash": "ad2831b2aaae467202458cb560bfc5ca"
+  },
+  "GojoGo/Auth/OnboardingInterestsView.swift": {
+    "mtime": 1783992168.7411554,
+    "ast_hash": "d0c4360dbabc0e4d0ec5300d528ba180",
+    "semantic_hash": "d0c4360dbabc0e4d0ec5300d528ba180"
+  },
+  "GojoGo/Auth/OnboardingNameView.swift": {
+    "mtime": 1783992168.5612645,
+    "ast_hash": "1fe569109297d48b43ffabaeb8270ba7",
+    "semantic_hash": "1fe569109297d48b43ffabaeb8270ba7"
+  },
+  "GojoGo/Auth/OnboardingYearView.swift": {
+    "mtime": 1783992161.7255068,
+    "ast_hash": "c07e8bba74c6f01f5358877f26ccd5e6",
+    "semantic_hash": "c07e8bba74c6f01f5358877f26ccd5e6"
+  },
+  "GojoGo/Auth/WelcomeView.swift": {
+    "mtime": 1784199445.0432131,
+    "ast_hash": "c632eb0ed9849b3edc8fb70d5f430a3c",
+    "semantic_hash": "c632eb0ed9849b3edc8fb70d5f430a3c"
+  },
+  "GojoGo/DesignSystem/Components.swift": {
+    "mtime": 1784199445.0431845,
+    "ast_hash": "1b30a53f89d984d84df924fadc143fbe",
+    "semantic_hash": "1b30a53f89d984d84df924fadc143fbe"
+  },
+  "GojoGo/DesignSystem/MadeleineOrb.swift": {
+    "mtime": 1783990384.2528625,
+    "ast_hash": "cf3b22e2883838d6f7aa03e2446ef374",
+    "semantic_hash": "cf3b22e2883838d6f7aa03e2446ef374"
+  },
+  "GojoGo/DesignSystem/MediaImage.swift": {
+    "mtime": 1784246500.7469358,
+    "ast_hash": "7bf61c51816920dd4c9df33d3951e463",
+    "semantic_hash": "7bf61c51816920dd4c9df33d3951e463"
+  },
+  "GojoGo/DesignSystem/RemoteVideoPlayer.swift": {
+    "mtime": 1784247788.162008,
+    "ast_hash": "2e9897bb1f4f6afb8ab219435a2b7098",
+    "semantic_hash": "2e9897bb1f4f6afb8ab219435a2b7098"
+  },
+  "GojoGo/DesignSystem/Theme.swift": {
+    "mtime": 1784201449.6587472,
+    "ast_hash": "28715f84380e46add0f4f4c7d09b2cdc",
+    "semantic_hash": "28715f84380e46add0f4f4c7d09b2cdc"
+  },
+  "GojoGo/GojoGoApp.swift": {
+    "mtime": 1784200906.395244,
+    "ast_hash": "3e1e226468864245fa7192e0f5deb390",
+    "semantic_hash": "3e1e226468864245fa7192e0f5deb390"
+  },
+  "GojoGo/Models/AppState.swift": {
+    "mtime": 1784247809.3548572,
+    "ast_hash": "56cc5853fcbb6b0f041ca961bc1e9e82",
+    "semantic_hash": "56cc5853fcbb6b0f041ca961bc1e9e82"
+  },
+  "GojoGo/Models/Models.swift": {
+    "mtime": 1784245921.5932863,
+    "ast_hash": "04b5616fbad4714f8b1aae7c772c420b",
+    "semantic_hash": "04b5616fbad4714f8b1aae7c772c420b"
+  },
+  "GojoGo/Models/SampleData.swift": {
+    "mtime": 1784246847.3988824,
+    "ast_hash": "dc72eb0bc06bd41f4b23c724c72fd911",
+    "semantic_hash": "dc72eb0bc06bd41f4b23c724c72fd911"
+  },
+  "GojoGo/Models/SessionStore.swift": {
+    "mtime": 1784246783.7662716,
+    "ast_hash": "4ded3d41a94deed5fdcc8d5ba6939679",
+    "semantic_hash": "4ded3d41a94deed5fdcc8d5ba6939679"
+  },
+  "GojoGo/Navigation/GGTabBar.swift": {
+    "mtime": 1784243954.8122795,
+    "ast_hash": "f4ebafd0bed7c8e54aa21a74e12bb9db",
+    "semantic_hash": "f4ebafd0bed7c8e54aa21a74e12bb9db"
+  },
+  "GojoGo/Navigation/RootView.swift": {
+    "mtime": 1784240650.6944382,
+    "ast_hash": "29eb9b5ab07ef35d02f5962f07c2d131",
+    "semantic_hash": "29eb9b5ab07ef35d02f5962f07c2d131"
+  },
+  "GojoGo/Screens/ActivityView.swift": {
+    "mtime": 1784203833.399117,
+    "ast_hash": "0677cd0417add8ad99db355962cc384b",
+    "semantic_hash": "0677cd0417add8ad99db355962cc384b"
+  },
+  "GojoGo/Screens/AudioRecorderSheet.swift": {
+    "mtime": 1784044010.6139913,
+    "ast_hash": "2f78b642f501ec40fab8c30ceedee079",
+    "semantic_hash": "2f78b642f501ec40fab8c30ceedee079"
+  },
+  "GojoGo/Screens/CommentsSheet.swift": {
+    "mtime": 1783990776.6340714,
+    "ast_hash": "3f312d4bba7a020700e8b82794afea5e",
+    "semantic_hash": "3f312d4bba7a020700e8b82794afea5e"
+  },
+  "GojoGo/Screens/ComposePostView.swift": {
+    "mtime": 1784033637.1666675,
+    "ast_hash": "e547041f97318c2da1693ae0948d7227",
+    "semantic_hash": "e547041f97318c2da1693ae0948d7227"
+  },
+  "GojoGo/Screens/EconomyView.swift": {
+    "mtime": 1784204274.894853,
+    "ast_hash": "16256e01b0af55ae281026e920e22307",
+    "semantic_hash": "16256e01b0af55ae281026e920e22307"
+  },
+  "GojoGo/Screens/GojoTVView.swift": {
+    "mtime": 1784204125.921101,
+    "ast_hash": "522480eeeda02400d6e129402fa49860",
+    "semantic_hash": "522480eeeda02400d6e129402fa49860"
+  },
+  "GojoGo/Screens/GojoTravelView.swift": {
+    "mtime": 1784201197.9959378,
+    "ast_hash": "a55229c93f556d98e11e5e6a4d324683",
+    "semantic_hash": "a55229c93f556d98e11e5e6a4d324683"
+  },
+  "GojoGo/Screens/HomeView.swift": {
+    "mtime": 1784247802.8827198,
+    "ast_hash": "f7eb609c268ab2abe55ae0b8a553e8a6",
+    "semantic_hash": "f7eb609c268ab2abe55ae0b8a553e8a6"
+  },
+  "GojoGo/Screens/LongFormVideoPlayer.swift": {
+    "mtime": 1784204624.9069028,
+    "ast_hash": "9184dd584c0ecde774d565c1d0ca62a8",
+    "semantic_hash": "9184dd584c0ecde774d565c1d0ca62a8"
+  },
+  "GojoGo/Screens/MadeleineHomeView.swift": {
+    "mtime": 1784204137.8963666,
+    "ast_hash": "2bca1531d9d950a5cbeba09d126f7803",
+    "semantic_hash": "2bca1531d9d950a5cbeba09d126f7803"
+  },
+  "GojoGo/Screens/MediaEditSheet.swift": {
+    "mtime": 1784044004.3443344,
+    "ast_hash": "d0df153b236f082b3e5a13f2e261e3db",
+    "semantic_hash": "d0df153b236f082b3e5a13f2e261e3db"
+  },
+  "GojoGo/Screens/MyWorldView.swift": {
+    "mtime": 1784245441.6292863,
+    "ast_hash": "370ef890029131c6b0580aad52b352a7",
+    "semantic_hash": "370ef890029131c6b0580aad52b352a7"
+  },
+  "GojoGo/Screens/ProfileView.swift": {
+    "mtime": 1784203954.297875,
+    "ast_hash": "0fddb825bcad04e6a64a7a797a3e6866",
+    "semantic_hash": "0fddb825bcad04e6a64a7a797a3e6866"
+  },
+  "GojoGo/Screens/SearchView.swift": {
+    "mtime": 1784204223.9216657,
+    "ast_hash": "ae0aabe3bb4abfddd6e6f8e3694be27f",
+    "semantic_hash": "ae0aabe3bb4abfddd6e6f8e3694be27f"
+  },
+  "GojoGo/Screens/SharedUI.swift": {
+    "mtime": 1784155620.5185583,
+    "ast_hash": "3df3680690ab62b925c9a7371685c11c",
+    "semantic_hash": "3df3680690ab62b925c9a7371685c11c"
+  },
+  "GojoGo/Screens/ShortsView.swift": {
+    "mtime": 1784204002.543645,
+    "ast_hash": "db4fa6a8522af5052e88ea8745cf09db",
+    "semantic_hash": "db4fa6a8522af5052e88ea8745cf09db"
+  },
+  "GojoGo/Screens/StoriesBrowserView.swift": {
+    "mtime": 1784199445.0890646,
+    "ast_hash": "a2bb0d8054fa1ba393f9c574277a32f0",
+    "semantic_hash": "a2bb0d8054fa1ba393f9c574277a32f0"
+  },
+  "GojoGo/Screens/StoryViewer.swift": {
+    "mtime": 1784155249.1522725,
+    "ast_hash": "03b7f3cd6c8b8fb6f37171ffc554f3c8",
+    "semantic_hash": "03b7f3cd6c8b8fb6f37171ffc554f3c8"
+  },
+  "GojoGo/Screens/TravelMapView.swift": {
+    "mtime": 1784201238.9874203,
+    "ast_hash": "3011e23b43635f0bce498e1cfe79370a",
+    "semantic_hash": "3011e23b43635f0bce498e1cfe79370a"
+  },
+  "GojoGo/Screens/WatchView.swift": {
+    "mtime": 1784204115.9746568,
+    "ast_hash": "d428fff1ba9de8f50767fa425af36f31",
+    "semantic_hash": "d428fff1ba9de8f50767fa425af36f31"
+  },
+  "GojoGo/Screens/WatchingMadeleineView.swift": {
+    "mtime": 1784204042.3051546,
+    "ast_hash": "53aabff83cd6307c0044496d4a80b436",
+    "semantic_hash": "53aabff83cd6307c0044496d4a80b436"
+  },
+  "GojoGo/Screens/WorldChatView.swift": {
+    "mtime": 1784246022.3409739,
+    "ast_hash": "9f9659845e4f423b0451fc29b5ef3451",
+    "semantic_hash": "9f9659845e4f423b0451fc29b5ef3451"
+  },
+  "GojoGo/Screens/WorldContactView.swift": {
+    "mtime": 1784242085.3066852,
+    "ast_hash": "21a0be965ebaddb39244595c6dbbf925",
+    "semantic_hash": "21a0be965ebaddb39244595c6dbbf925"
+  },
+  "GojoGo/Travel/MapboxConfig.swift": {
+    "mtime": 1784202690.5335312,
+    "ast_hash": "29dae0bbfae9843c0866ac376a974c4d",
+    "semantic_hash": "29dae0bbfae9843c0866ac376a974c4d"
+  },
+  "GojoGo/Assets.xcassets/AppIcon.appiconset/AppIcon.png": {
+    "mtime": 1784039172.963671,
+    "ast_hash": "5862642b2a9da0f370e26dd2cd385025",
+    "semantic_hash": "5862642b2a9da0f370e26dd2cd385025"
+  },
+  "GojoGo/Assets.xcassets/GojoGoLogo.imageset/GojoGoLogo.jpg": {
+    "mtime": 1784037937.205085,
+    "ast_hash": "4f85af132301f17e8ce0d52da730c822",
+    "semantic_hash": "4f85af132301f17e8ce0d52da730c822"
+  },
+  "GojoGo/Assets.xcassets/SampleBMWM4.imageset/SampleBMWM4.png": {
+    "mtime": 1784246489.4220047,
+    "ast_hash": "6265de07f925a6bce9f56a7f86f2f150",
+    "semantic_hash": "6265de07f925a6bce9f56a7f86f2f150"
+  },
+  "GojoGo/Assets.xcassets/SampleBatman.imageset/SampleBatman.png": {
+    "mtime": 1784246489.3307798,
+    "ast_hash": "afe35b71e968b8d5d3571da1d20c6d27",
+    "semantic_hash": "afe35b71e968b8d5d3571da1d20c6d27"
+  },
+  "GojoGo/Assets.xcassets/SampleCatsDuo.imageset/SampleCatsDuo.png": {
+    "mtime": 1784246489.5217075,
+    "ast_hash": "1abbbac03ad894cf688220d9a2b21486",
+    "semantic_hash": "1abbbac03ad894cf688220d9a2b21486"
+  },
+  "GojoGo/Assets.xcassets/SampleCockpitCat.imageset/SampleCockpitCat.png": {
+    "mtime": 1784246489.5052078,
+    "ast_hash": "4b7c3a7a7ce078dcb4fb90bb81329cb2",
+    "semantic_hash": "4b7c3a7a7ce078dcb4fb90bb81329cb2"
+  },
+  "GojoGo/Assets.xcassets/SampleCosmicFace.imageset/SampleCosmicFace.png": {
+    "mtime": 1784246489.444503,
+    "ast_hash": "e10eab4a7624b4adc7fe9249b6faffdf",
+    "semantic_hash": "e10eab4a7624b4adc7fe9249b6faffdf"
+  },
+  "GojoGo/Assets.xcassets/SampleLighthouse.imageset/SampleLighthouse.png": {
+    "mtime": 1784246489.3582695,
+    "ast_hash": "86267a9847c57dc3504ce35bde5773a2",
+    "semantic_hash": "86267a9847c57dc3504ce35bde5773a2"
+  },
+  "GojoGo/Assets.xcassets/SamplePilotCat.imageset/SamplePilotCat.png": {
+    "mtime": 1784246489.48212,
+    "ast_hash": "fa54bd84f170096e1f534ee595421620",
+    "semantic_hash": "fa54bd84f170096e1f534ee595421620"
+  },
+  "GojoGo/Assets.xcassets/SamplePorscheDesert.imageset/SamplePorscheDesert.png": {
+    "mtime": 1784246489.377912,
+    "ast_hash": "909ba7dfa2bf9b40e7abcbd58c9760ad",
+    "semantic_hash": "909ba7dfa2bf9b40e7abcbd58c9760ad"
+  },
+  "GojoGo/Assets.xcassets/SamplePorscheDubai.imageset/SamplePorscheDubai.png": {
+    "mtime": 1784246489.4006877,
+    "ast_hash": "d6f34df98b8dcfccefcc901b768cb294",
+    "semantic_hash": "d6f34df98b8dcfccefcc901b768cb294"
+  },
+  "GojoGo/Assets.xcassets/SampleSpidey.imageset/SampleSpidey.png": {
+    "mtime": 1784246489.4655282,
+    "ast_hash": "2e4e5bcfcc01c8a47ef1f23064447180",
+    "semantic_hash": "2e4e5bcfcc01c8a47ef1f23064447180"
+  },
+  "GojoGo/SampleVideos/SampleClip1.mp4": {
+    "mtime": 1784246763.4599798,
+    "ast_hash": "2d0f49f5c90365bf0c28f2bb938d070c",
+    "semantic_hash": "2d0f49f5c90365bf0c28f2bb938d070c"
+  },
+  "GojoGo/SampleVideos/SampleClip2.mp4": {
+    "mtime": 1784246763.4796224,
+    "ast_hash": "7fde3f01940d467d5c7e68477e48270b",
+    "semantic_hash": "7fde3f01940d467d5c7e68477e48270b"
+  },
+  "GojoGo/SampleVideos/SampleClip3.mp4": {
+    "mtime": 1784246763.4865606,
+    "ast_hash": "dd3587224747a8eb4925073983b2ddfd",
+    "semantic_hash": "dd3587224747a8eb4925073983b2ddfd"
+  },
+  "GojoGo/SampleVideos/SampleClip4.mp4": {
+    "mtime": 1784246763.494371,
+    "ast_hash": "9985722c7562110ebc534a76cc6bde1f",
+    "semantic_hash": "9985722c7562110ebc534a76cc6bde1f"
+  },
+  "GojoGo/SampleVideos/SampleClip5.mp4": {
+    "mtime": 1784246763.5280268,
+    "ast_hash": "b941f91b321c3981ef48a510008b807d",
+    "semantic_hash": "b941f91b321c3981ef48a510008b807d"
+  },
+  "GojoGo/SampleVideos/SampleClip6.mp4": {
+    "mtime": 1784246763.5424464,
+    "ast_hash": "1b558390a0fbd7e67ff3949f153b60c9",
+    "semantic_hash": "1b558390a0fbd7e67ff3949f153b60c9"
+  }
+}

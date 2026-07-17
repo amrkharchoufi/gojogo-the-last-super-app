@@ -70,13 +70,14 @@ struct MadeleineHomeView: View {
                 .padding(.top, 6)
 
             VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    suggestion(SampleData.madeleineSuggestions[0])
-                    suggestion(SampleData.madeleineSuggestions[1])
-                }
-                HStack(spacing: 10) {
-                    suggestion(SampleData.madeleineSuggestions[2])
-                    suggestion(SampleData.madeleineSuggestions[3])
+                let items = SampleData.madeleineSuggestions
+                ForEach(Array(stride(from: 0, to: items.count, by: 2)), id: \.self) { i in
+                    HStack(spacing: 10) {
+                        suggestion(items[i])
+                        if i + 1 < items.count {
+                            suggestion(items[i + 1])
+                        }
+                    }
                 }
             }
             .padding(.top, 44)

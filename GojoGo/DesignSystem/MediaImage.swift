@@ -1,44 +1,77 @@
 import SwiftUI
 import UIKit
 
-/// Loads remote, local Data, or falls back to a striped placeholder.
+/// Loads bundled asset names, remote URLs, local Data, or a striped placeholder.
+///
+/// Uses a clear sized container + overlay (not GeometryReader) so the hit target
+/// matches the visible frame. GeometryReader was expanding taps past clipped bounds
+/// and stealing touches from nearby controls (profile tabs, category chips, etc.).
 struct MediaImage: View {
     var url: String? = nil
     var data: Data? = nil
     var cornerRadius: CGFloat = 16
     var contentMode: ContentMode = .fill
 
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+
     var body: some View {
-        GeometryReader { geo in
-            Group {
-                if let data, let ui = UIImage(data: data) {
-                    Image(uiImage: ui)
-                        .resizable()
-                        .aspectRatio(contentMode: contentMode)
-                } else if let url, let u = URL(string: url) {
-                    AsyncImage(url: u) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().aspectRatio(contentMode: contentMode)
-                        case .failure:
-                            MediaPlaceholder(cornerRadius: 0)
-                        case .empty:
-                            ZStack {
-                                GGColor.surface2
-                                ProgressView().tint(GGColor.textTertiary)
-                            }
-                        @unknown default:
-                            MediaPlaceholder(cornerRadius: 0)
-                        }
+        Color.clear
+            .overlay {
+                media
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .clipped()
+            .clipShape(shape)
+            .contentShape(shape)
+    }
+
+    @ViewBuilder
+    private var media: some View {
+        if let data, let ui = UIImage(data: data) {
+            Image(uiImage: ui)
+                .resizable()
+                .aspectRatio(contentMode: contentMode)
+        } else if let url, let ui = Self.bundledImage(named: url) {
+            Image(uiImage: ui)
+                .resizable()
+                .aspectRatio(contentMode: contentMode)
+        } else if let url, let u = URL(string: url), u.scheme != nil {
+            AsyncImage(url: u) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().aspectRatio(contentMode: contentMode)
+                case .failure:
+                    MediaPlaceholder(cornerRadius: 0)
+                case .empty:
+                    ZStack {
+                        GGColor.surface2
+                        ProgressView().tint(GGColor.textTertiary)
                     }
-                } else {
+                @unknown default:
                     MediaPlaceholder(cornerRadius: 0)
                 }
             }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .clipped()
+        } else {
+            MediaPlaceholder(cornerRadius: 0)
         }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    /// Asset catalog name, or `asset:Name` / `asset://Name` from older session strings.
+    static func bundledImage(named raw: String) -> UIImage? {
+        let name: String
+        if raw.hasPrefix("asset://") {
+            name = String(raw.dropFirst("asset://".count))
+        } else if raw.hasPrefix("asset:") {
+            name = String(raw.dropFirst("asset:".count))
+        } else if raw.contains("://") || raw.hasPrefix("http") {
+            return nil
+        } else {
+            name = raw
+        }
+        guard !name.isEmpty else { return nil }
+        return UIImage(named: name)
     }
 }
 
@@ -72,7 +105,11 @@ struct UserAvatar: View {
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFill()
-            } else if let imageURL, let u = URL(string: imageURL) {
+            } else if let imageURL, let ui = MediaImage.bundledImage(named: imageURL) {
+                Image(uiImage: ui)
+                    .resizable()
+                    .scaledToFill()
+            } else if let imageURL, let u = URL(string: imageURL), u.scheme != nil {
                 AsyncImage(url: u) { phase in
                     if case .success(let img) = phase {
                         img.resizable().scaledToFill()

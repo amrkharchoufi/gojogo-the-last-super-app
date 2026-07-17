@@ -80,10 +80,10 @@ struct VideoCard: View {
     }
 
     var body: some View {
-        Button {
-            app.playVideo(live.id)
-        } label: {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                app.playVideo(live.id)
+            } label: {
                 ZStack(alignment: .bottomTrailing) {
                     MediaImage(url: live.thumbURL, data: live.thumbData, cornerRadius: 0)
                         .frame(maxWidth: .infinity)
@@ -99,15 +99,26 @@ struct VideoCard: View {
                         .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.black.opacity(0.82)))
                         .padding(8)
                 }
+            }
+            .buttonStyle(.plain)
+            .contextMenu { menuItems }
 
-                HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Button {
+                    app.openUserProfile(handle: live.channel, avatarURL: live.thumbURL)
+                } label: {
                     UserAvatar(
                         size: 36,
                         letter: String(live.channel.prefix(1)).uppercased(),
                         imageURL: live.thumbURL
                     )
                     .padding(.top, 2)
+                }
+                .buttonStyle(.plain)
 
+                Button {
+                    app.playVideo(live.id)
+                } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(live.title)
                             .font(.system(size: 15, weight: .semibold))
@@ -122,39 +133,57 @@ struct VideoCard: View {
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
 
-                    Spacer(minLength: 4)
-
+                Menu {
+                    menuItems
+                } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(Color.white.opacity(0.55))
                         .frame(width: 28, height: 28)
                         .padding(.top, 2)
+                        .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
-                .padding(.bottom, 6)
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 6)
         }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button {
-                app.toggleVideoLike(live.id)
-            } label: {
-                Label(live.liked ? "Unlike" : "Like",
-                      systemImage: live.liked ? "hand.thumbsup.fill" : "hand.thumbsup")
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        Button {
+            app.playVideo(live.id)
+        } label: {
+            Label("Play", systemImage: "play.fill")
+        }
+        Button {
+            app.toggleVideoLike(live.id)
+        } label: {
+            Label(live.liked ? "Unlike" : "Like",
+                  systemImage: live.liked ? "hand.thumbsup.fill" : "hand.thumbsup")
+        }
+        Button {
+            app.toggleVideoSave(live.id)
+        } label: {
+            Label(live.saved ? "Unsave" : "Save",
+                  systemImage: live.saved ? "bookmark.fill" : "bookmark")
+        }
+        ShareLink(item: app.videoShareURL(for: live.id), subject: Text(live.title)) {
+            Label("Share", systemImage: "square.and.arrow.up")
+        }
+        Divider()
+        Button(role: .destructive) {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                app.reportVideo(live.id)
             }
-            Button {
-                app.toggleVideoSave(live.id)
-            } label: {
-                Label(live.saved ? "Unsave" : "Save",
-                      systemImage: live.saved ? "bookmark.fill" : "bookmark")
-            }
-            Button {
-                app.playVideo(live.id)
-            } label: {
-                Label("Play", systemImage: "play.fill")
-            }
+        } label: {
+            Label("Not interested", systemImage: "eye.slash")
         }
     }
 }

@@ -6,16 +6,22 @@ struct MainAppView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
-                switch app.activeTab {
-                case .home:      HomeView()
-                case .watch:     WatchView()
-                case .madeleine: MadeleineHomeView()
-                case .travel:    GojoTravelView()
-                case .economy:   EconomyView()
-                case .search:    SearchView()
+                if app.navMode == .myWorld {
+                    MyWorldView()
+                } else {
+                    switch app.activeTab {
+                    case .home:      HomeView()
+                    case .watch:     WatchView()
+                    case .madeleine: MadeleineHomeView()
+                    case .travel:    GojoTravelView()
+                    case .delivery:  GojoDeliveryView()
+                    case .economy:   EconomyView()
+                    case .search:    SearchView()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.easeInOut(duration: 0.28), value: app.navMode)
 
             // Soft scrim when composing — Apple blur feel
             if app.isComposing {
@@ -30,10 +36,13 @@ struct MainAppView: View {
                     .zIndex(1)
             }
 
-            GGTabBar(ghosted: app.isImmersive)
-                .padding(.bottom, app.isComposing ? 2 : 0)
-                .safeAreaPadding(.bottom, 0)
-                .zIndex(2)
+            if !app.isWorldImmersive {
+                GGTabBar(ghosted: app.isImmersive)
+                    .padding(.bottom, app.isComposing ? 2 : 0)
+                    .safeAreaPadding(.bottom, 0)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(2)
+            }
 
             // Story overlay — media goes edge-to-edge inside; chrome uses safe area.
             if app.storyOverlayActive, app.viewingStory != nil {
@@ -46,6 +55,7 @@ struct MainAppView: View {
         .animation(.easeOut(duration: 0.18), value: app.storyOverlayActive)
         // Don't ignore keyboard — composer must sit above it when open.
         .animation(.easeOut(duration: 0.25), value: app.isComposing)
+        .animation(.spring(response: 0.40, dampingFraction: 0.88), value: app.isWorldImmersive)
         .sheet(isPresented: Binding(
             get: { app.showProfile },
             set: { if !$0 { app.closeProfile() } }
@@ -112,6 +122,18 @@ struct MainAppView: View {
                     .environmentObject(app)
             }
         }
+        .sheet(isPresented: Binding(
+            get: { app.showActivity },
+            set: { if !$0 { app.closeActivity() } }
+        )) {
+            ActivityView().environmentObject(app)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.viewingPostID != nil && !app.showProfile },
+            set: { if !$0 { app.closePostViewer() } }
+        )) {
+            PostViewerSheet().environmentObject(app)
+        }
         .onChange(of: app.showCompose) { _, open in
             if open {
                 app.showCompose = false
@@ -148,7 +170,7 @@ struct RootView: View {
 
 extension AppState {
     var isImmersive: Bool {
-        activeTab == .watch && watchSubFeed == .shorts
+        navMode == .collections && activeTab == .watch && watchSubFeed == .shorts
     }
 }
 

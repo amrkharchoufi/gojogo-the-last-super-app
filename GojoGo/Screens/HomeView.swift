@@ -28,6 +28,7 @@ struct HomeView: View {
                 }
                 .padding(.top, 52)
             }
+            .coordinateSpace(name: "homeFeed")
             .trackScrollChrome(hidden: $hideChrome)
 
             // Top chrome — Instagram: wordmark left, actions right
@@ -35,15 +36,26 @@ struct HomeView: View {
                 Wordmark(size: 22)
                 Spacer()
                 Button {
-                    // Activity placeholder
+                    app.openActivity()
                 } label: {
-                    Image(systemName: "heart")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "heart")
+                            .font(.system(size: 22, weight: .regular))
+                            .foregroundStyle(.white)
+                        if app.unreadActivityCount > 0 {
+                            Text("\(min(app.unreadActivityCount, 9))")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 16, height: 16)
+                                .background(Circle().fill(Color(hex: "E85D75")))
+                                .offset(x: 7, y: -5)
+                        }
+                    }
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Activity")
 
                 Button { app.openOwnProfile() } label: {
                     UserAvatar(
@@ -173,12 +185,16 @@ struct InstagramPostCard: View {
     @EnvironmentObject var app: AppState
     let post: Post
     @State private var heartTrigger = 0
-    @State private var isMuted = true
     @State private var isHolding = false
+    @State private var carouselPage = 0
+    /// Drives autoplay / stop when scrolling the feed.
+    @State private var isInViewport = true
 
     private var live: Post {
         app.posts.first(where: { $0.id == post.id }) ?? post
     }
+
+    private var slides: [PostMediaItem] { live.carouselSlides }
 
     private var mediaHeight: CGFloat {
         // Instagram portrait feed (~4:5 — taller than square).
@@ -186,6 +202,8 @@ struct InstagramPostCard: View {
         let clamped = min(max(aspect, 1.15), 1.4)
         return UIScreen.main.bounds.width * clamped
     }
+
+    private var shouldPlayVideo: Bool { isInViewport && !isHolding }
 
     var body: some View {
         let card = VStack(alignment: .leading, spacing: 0) {
@@ -209,7 +227,7 @@ struct InstagramPostCard: View {
         .padding(.bottom, 6)
 
         // Context menu long-press fights hold-to-pause on feed videos.
-        if live.isVideo {
+        if live.isVideo && !live.isCarousel {
             card
         } else {
             card
@@ -289,85 +307,146 @@ struct InstagramPostCard: View {
 
     @ViewBuilder
     private var media: some View {
-        if live.imageURL != nil || live.imageData != nil || live.isVideo {
-            ZStack {
-                if let videoURL = live.videoURL, !videoURL.isEmpty {
-                    MediaImage(url: live.imageURL, data: live.imageData, cornerRadius: 0)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: mediaHeight)
-                        .clipped()
+        if !slides.isEmpty {
+            let activeSlide = slides[min(carouselPage, slides.count - 1)]
+            let activeIsVideo = activeSlide.isVideo && !(activeSlide.videoURL?.isEmpty ?? true)
 
-                    ShortVideoPlayer(
-                        urlString: videoURL,
-                        isActive: !isHolding,
-                        isMuted: isMuted
-                    )
-                    .frame(maxWidth: .infinity)
-                    .frame(height: mediaHeight)
-                    .clipped()
-                } else {
-                    MediaImage(url: live.imageURL, data: live.imageData, cornerRadius: 0)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: mediaHeight)
-                        .clipped()
+            ZStack(alignment: .topTrailing) {
+                Group {
+                    if slides.count == 1 {
+                        feedSlide(slides[0], index: 0)
+                    } else {
+                        TabView(selection: $carouselPage) {
+                            ForEach(Array(slides.enumerated()), id: \.element.id) { index, slide in
+                                feedSlide(slide, index: index)
+                                    .tag(index)
+                            }
+                        }
+                        .tabViewStyle(.page(indexDisplayMode: .never))
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .frame(height: mediaHeight)
 
                 HeartBurstOverlay(trigger: heartTrigger)
+                    .allowsHitTesting(false)
 
-                if isHolding {
+                if slides.count > 1 {
+                    Text("\(carouselPage + 1)/\(slides.count)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .padding(12)
+                }
+
+                if slides.count > 1 {
+                    HStack(spacing: 5) {
+                        ForEach(0..<slides.count, id: \.self) { i in
+                            Circle()
+                                .fill(i == carouselPage ? Color.white : Color.white.opacity(0.4))
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 12)
+                    .allowsHitTesting(false)
+                }
+
+                if activeIsVideo && isHolding {
                     Image(systemName: "pause.fill")
                         .font(.system(size: 28, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(16)
                         .background(Circle().fill(Color.black.opacity(0.4)))
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .allowsHitTesting(false)
                 }
 
-                if live.isVideo {
+                if activeIsVideo {
                     Button {
-                        isMuted.toggle()
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        app.toggleFeedVideoMute()
                     } label: {
-                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .font(.system(size: 11, weight: .semibold))
+                        Image(systemName: app.feedVideosMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
-                            .padding(7)
-                            .background(Circle().fill(Color.black.opacity(0.45)))
+                            .frame(width: 44, height: 44)
+                            .background(Circle().fill(Color.black.opacity(0.5)))
+                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
+                    .frame(width: 56, height: 56)
+                    .contentShape(Rectangle())
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .padding(10)
+                    .padding(.trailing, 6)
+                    .padding(.bottom, 6)
                 }
             }
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                _ = app.likePost(live.id)
-                heartTrigger += 1
+            .frame(height: mediaHeight)
+            .clipped()
+            .background {
+                FeedViewportObserver(isVisible: $isInViewport)
             }
-            .onTapGesture {
-                guard live.isVideo else { return }
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                app.openFeedVideoAsShort(postID: live.id)
+            .onDisappear {
+                isInViewport = false
+                isHolding = false
             }
-            .onLongPressGesture(
-                minimumDuration: 0.2,
-                maximumDistance: 12,
-                pressing: { pressing in
-                    guard live.isVideo else { return }
-                    // Touch-down while scrolling must not vibrate — only clear pause on release.
-                    if !pressing {
-                        isHolding = false
-                    }
-                },
-                perform: {
-                    guard live.isVideo else { return }
-                    isHolding = true
-                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                }
-            )
-            .animation(.easeOut(duration: 0.12), value: isHolding)
         }
+    }
+
+    private func feedSlide(_ slide: PostMediaItem, index: Int) -> some View {
+        ZStack {
+            MediaImage(url: slide.imageURL, data: slide.imageData, cornerRadius: 0)
+                .frame(maxWidth: .infinity)
+                .frame(height: mediaHeight)
+                .clipped()
+
+            if slide.isVideo, let videoURL = slide.videoURL, !videoURL.isEmpty {
+                // Only the active page attaches the shared player layer (avoids duplicates).
+                if carouselPage == index {
+                    ShortVideoPlayer(
+                        urlString: videoURL,
+                        isActive: shouldPlayVideo,
+                        isMuted: app.feedVideosMuted
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: mediaHeight)
+                    .clipped()
+                    .allowsHitTesting(false)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: mediaHeight)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            _ = app.likePost(live.id)
+            heartTrigger += 1
+        }
+        .onTapGesture {
+            guard slide.isVideo, !isHolding else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            app.openFeedVideoAsShort(postID: live.id)
+        }
+        .onLongPressGesture(
+            minimumDuration: 0.22,
+            maximumDistance: 40,
+            pressing: { pressing in
+                guard slide.isVideo else { return }
+                // Release finger → resume. Pause only after hold fires in `perform`.
+                if !pressing {
+                    isHolding = false
+                }
+            },
+            perform: {
+                guard slide.isVideo else { return }
+                isHolding = true
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+            }
+        )
     }
 
     @ViewBuilder
@@ -492,6 +571,96 @@ struct InstagramPostCard: View {
         .padding(14)
         .frame(width: 288)
         .background(GGColor.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+/// Reports whether the feed media is meaningfully on-screen (UIKit — reliable while scrolling).
+private struct FeedViewportObserver: UIViewRepresentable {
+    @Binding var isVisible: Bool
+
+    func makeUIView(context: Context) -> FeedViewportUIView {
+        let view = FeedViewportUIView()
+        view.onVisibilityChange = { visible in
+            if isVisible != visible {
+                isVisible = visible
+            }
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: FeedViewportUIView, context: Context) {
+        uiView.onVisibilityChange = { visible in
+            if isVisible != visible {
+                isVisible = visible
+            }
+        }
+        uiView.checkVisibility()
+    }
+}
+
+private final class FeedViewportUIView: UIView {
+    var onVisibilityChange: ((Bool) -> Void)?
+    private var displayLink: CADisplayLink?
+    private var lastVisible: Bool?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            startMonitoring()
+            checkVisibility()
+        } else {
+            stopMonitoring()
+            report(false)
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        checkVisibility()
+    }
+
+    func checkVisibility() {
+        guard let window else {
+            report(false)
+            return
+        }
+        let frame = convert(bounds, to: window)
+        guard bounds.width > 1, bounds.height > 1 else { return }
+
+        let visibleBounds = window.bounds.insetBy(dx: 0, dy: window.bounds.height * 0.06)
+        let overlap = frame.intersection(visibleBounds).height
+        let ratio = overlap / max(frame.height, 1)
+        // Hysteresis so tiny scroll jitter doesn't flicker play/pause.
+        let currently = lastVisible ?? false
+        let visible = currently ? ratio > 0.2 : ratio > 0.35
+        report(visible)
+    }
+
+    private func report(_ visible: Bool) {
+        guard lastVisible != visible else { return }
+        lastVisible = visible
+        onVisibilityChange?(visible)
+    }
+
+    private func startMonitoring() {
+        stopMonitoring()
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 10, maximum: 30, preferred: 15)
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    private func stopMonitoring() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func tick() {
+        checkVisibility()
+    }
+
+    deinit {
+        displayLink?.invalidate()
     }
 }
 

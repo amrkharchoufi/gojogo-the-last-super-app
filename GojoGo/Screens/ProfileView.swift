@@ -6,9 +6,16 @@ private enum ProfileGridKind {
     case video(url: String?, data: Data?, duration: String?)
 }
 
+private enum ProfileGridTarget {
+    case post(UUID)
+    case longForm(UUID)
+    case short(UUID)
+}
+
 private struct ProfileGridItem: Identifiable {
     let id: String
     let kind: ProfileGridKind
+    var target: ProfileGridTarget? = nil
 }
 
 struct ProfileView: View {
@@ -35,36 +42,43 @@ struct ProfileView: View {
             return posts.map { post in
                 if post.imageURL != nil || post.imageData != nil {
                     return ProfileGridItem(id: "post-\(post.id)",
-                                           kind: .image(url: post.imageURL, data: post.imageData))
+                                           kind: .image(url: post.imageURL, data: post.imageData),
+                                           target: .post(post.id))
                 }
                 return ProfileGridItem(id: "post-\(post.id)",
-                                       kind: .text(post.text ?? "Post"))
+                                       kind: .text(post.text ?? "Post"),
+                                       target: .post(post.id))
             }
         case 1:
             if isOwn {
                 let longs = app.myVideos.map {
                     ProfileGridItem(id: "vid-\($0.id)",
-                                    kind: .video(url: $0.thumbURL, data: $0.thumbData, duration: $0.duration))
+                                    kind: .video(url: $0.thumbURL, data: $0.thumbData, duration: $0.duration),
+                                    target: .longForm($0.id))
                 }
                 let shorts = app.myShorts.map {
                     ProfileGridItem(id: "short-\($0.id)",
-                                    kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil))
+                                    kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil),
+                                    target: .short($0.id))
                 }
                 return longs + shorts
             }
             return posts.filter { $0.imageURL != nil || $0.imageData != nil }.map {
                 ProfileGridItem(id: "reel-\($0.id)",
-                                kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil))
+                                kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil),
+                                target: .post($0.id))
             }
         case 2:
             if isOwn {
                 return app.savedPosts.prefix(12).map { post in
                     if post.imageURL != nil || post.imageData != nil {
                         return ProfileGridItem(id: "saved-\(post.id)",
-                                               kind: .image(url: post.imageURL, data: post.imageData))
+                                               kind: .image(url: post.imageURL, data: post.imageData),
+                                               target: .post(post.id))
                     }
                     return ProfileGridItem(id: "saved-\(post.id)",
-                                           kind: .text(post.text ?? "Saved"))
+                                           kind: .text(post.text ?? "Saved"),
+                                           target: .post(post.id))
                 }
             }
             return []
@@ -73,19 +87,45 @@ struct ProfileView: View {
         }
     }
 
+    private func open(_ target: ProfileGridTarget?) {
+        guard let target else { return }
+        switch target {
+        case .post(let id):
+            app.openPostViewer(id)
+        case .longForm(let id):
+            // Video player presents from the main view — leave the profile sheet first.
+            app.closeProfile()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                app.playVideo(id)
+            }
+        case .short(let id):
+            app.closeProfile()
+            app.focusedShortID = id
+            withAnimation(.easeOut(duration: 0.25)) {
+                app.activeTab = .watch
+                app.watchSubFeed = .shorts
+            }
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                     headerRow
                     profileHeader
                     bioBlock
                     actionsRow
                         .padding(.horizontal, 14)
                         .padding(.top, 12)
-                    iconTabs
-                        .padding(.top, 14)
-                    contentGrid
+
+                    Section {
+                        contentGrid
+                    } header: {
+                        iconTabs
+                            .padding(.top, 14)
+                            .background(Color.black)
+                    }
                 }
                 .padding(.bottom, 28)
             }
@@ -98,6 +138,25 @@ struct ProfileView: View {
                 app.profileUser = .own(from: app.user, posts: app.myPosts.count)
             }
             app.user.postCount = app.myPosts.count
+        }
+        // These open from inside this sheet, so they must present from here.
+        .sheet(isPresented: $app.showEditProfile) {
+            EditProfileSheet().environmentObject(app)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.dmPeer != nil },
+            set: { if !$0 { app.closeDirectMessage() } }
+        )) {
+            DirectMessageView()
+                .environmentObject(app)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.viewingPostID != nil },
+            set: { if !$0 { app.closePostViewer() } }
+        )) {
+            PostViewerSheet().environmentObject(app)
         }
     }
 
@@ -149,11 +208,50 @@ struct ProfileView: View {
 
             Spacer(minLength: 0)
 
-            Button {} label: {
+            Menu {
+                if isOwn {
+                    Button {
+                        app.showEditProfile = true
+                    } label: {
+                        Label("Edit profile", systemImage: "pencil")
+                    }
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { tab = 2 }
+                    } label: {
+                        Label("Saved", systemImage: "bookmark")
+                    }
+                    ShareLink(item: URL(string: "https://gojogo.app/@\(profile.handle)")!) {
+                        Label("Share profile", systemImage: "square.and.arrow.up")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        app.signOut()
+                    } label: {
+                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                } else {
+                    ShareLink(item: URL(string: "https://gojogo.app/@\(profile.handle)")!) {
+                        Label("Share profile", systemImage: "square.and.arrow.up")
+                    }
+                    Button {
+                        UIPasteboard.general.string = "https://gojogo.app/@\(profile.handle)"
+                    } label: {
+                        Label("Copy link", systemImage: "link")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        app.closeProfile()
+                        dismiss()
+                    } label: {
+                        Label("Report", systemImage: "flag")
+                    }
+                }
+            } label: {
                 Image(systemName: isOwn ? "line.3.horizontal" : "ellipsis")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
         }
         .padding(.horizontal, 12)
@@ -242,7 +340,7 @@ struct ProfileView: View {
         Group {
             if isOwn {
                 HStack(spacing: 8) {
-                    profileButton("Edit profile") {}
+                    profileButton("Edit profile") { app.showEditProfile = true }
                     ShareLink(item: "https://gojogo.app/@\(profile.handle)") {
                         Text("Share profile")
                             .font(.system(size: 13, weight: .semibold))
@@ -252,7 +350,12 @@ struct ProfileView: View {
                             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .fill(Color.white.opacity(0.12)))
                     }
-                    profileButton("Email") {}
+                    profileButton("Activity") {
+                        app.closeProfile()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            app.openActivity()
+                        }
+                    }
                 }
             } else {
                 HStack(spacing: 8) {
@@ -273,15 +376,29 @@ struct ProfileView: View {
                     }
                     .buttonStyle(PressableStyle())
 
-                    profileButton("Message") {}
+                    profileButton("Message") {
+                        app.openDirectMessage(
+                            handle: profile.handle,
+                            name: profile.name,
+                            avatarURL: profile.avatarURL,
+                            avatarGradient: profile.avatarGradient
+                        )
+                    }
 
-                    Button {} label: {
-                        Image(systemName: "person.badge.plus")
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            app.toggleNotify(handle: profile.handle)
+                        }
+                    } label: {
+                        Image(systemName: app.notifyHandles.contains(profile.handle.lowercased())
+                              ? "bell.fill" : "bell")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(width: 40, height: 34)
                             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.white.opacity(0.12)))
+                                .fill(app.notifyHandles.contains(profile.handle.lowercased())
+                                      ? Color.white.opacity(0.24) : Color.white.opacity(0.12)))
                     }
                     .buttonStyle(PressableStyle())
                 }
@@ -305,13 +422,12 @@ struct ProfileView: View {
     // MARK: Tabs
 
     private var iconTabs: some View {
-        let icons = isOwn
-            ? ["square.grid.3x3", "play.rectangle", "person.crop.square"]
-            : ["square.grid.3x3", "play.rectangle", "person.crop.square"]
+        let icons = ["square.grid.3x3", "play.rectangle", "person.crop.square"]
         return VStack(spacing: 0) {
             HStack(spacing: 0) {
                 ForEach(Array(icons.enumerated()), id: \.offset) { i, icon in
                     Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         withAnimation(.easeOut(duration: 0.2)) { tab = i }
                     } label: {
                         VStack(spacing: 10) {
@@ -319,11 +435,13 @@ struct ProfileView: View {
                                 .font(.system(size: 18, weight: .medium))
                                 .foregroundStyle(i == tab ? .white : .white.opacity(0.35))
                                 .frame(maxWidth: .infinity)
-                                .frame(height: 36)
+                                .frame(height: 44)
                             Rectangle()
                                 .fill(i == tab ? Color.white : Color.clear)
                                 .frame(height: 1.5)
                         }
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -349,6 +467,10 @@ struct ProfileView: View {
                 ) {
                     ForEach(gridItems) { item in
                         gridCell(item)
+                            .aspectRatio(1, contentMode: .fit)
+                            .clipped()
+                            .contentShape(Rectangle())
+                            .onTapGesture { open(item.target) }
                     }
                 }
             }
@@ -360,7 +482,6 @@ struct ProfileView: View {
         switch item.kind {
         case .image(let url, let data):
             MediaImage(url: url, data: data, cornerRadius: 0)
-                .aspectRatio(1, contentMode: .fit)
         case .text(let text):
             ZStack(alignment: .topLeading) {
                 Color.white.opacity(0.08)
@@ -370,7 +491,6 @@ struct ProfileView: View {
                     .lineLimit(5)
                     .padding(8)
             }
-            .aspectRatio(1, contentMode: .fit)
         case .video(let url, let data, let duration):
             ZStack(alignment: .bottomLeading) {
                 MediaImage(url: url, data: data, cornerRadius: 0)
@@ -387,8 +507,6 @@ struct ProfileView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
             }
-            .aspectRatio(1, contentMode: .fit)
-            .clipped()
         }
     }
 }

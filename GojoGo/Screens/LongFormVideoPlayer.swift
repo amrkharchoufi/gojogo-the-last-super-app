@@ -29,6 +29,7 @@ final class LongFormPlayerModel: ObservableObject {
     @Published var controlsVisible = true
     @Published var isMuted = false
     @Published var isFullscreen = false
+    @Published var playbackSpeed: Float = 1
     /// Accumulated double-tap skip flash (seconds, signed: negative = rewind).
     @Published var skipFlashSeconds: Int = 0
     @Published var skipFlashForward: Bool = true
@@ -122,9 +123,15 @@ final class LongFormPlayerModel: ObservableObject {
     }
 
     func play() {
-        player.play()
+        player.playImmediately(atRate: playbackSpeed)
         isPlaying = true
         scheduleHideControls()
+    }
+
+    func setSpeed(_ speed: Float) {
+        playbackSpeed = speed
+        if isPlaying { player.rate = speed }
+        showControls()
     }
 
     func pause() {
@@ -333,6 +340,23 @@ struct FullscreenIgnoreSafeArea: ViewModifier {
     }
 }
 
+/// System AirPlay route picker styled for the dark player chrome.
+struct AirPlayRoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.tintColor = .white
+        view.activeTintColor = .white
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
+
+func speedLabel(_ speed: Float) -> String {
+    speed == 1 ? "Normal" : String(format: "%g×", speed)
+}
+
 struct LongFormInlineChrome: View {
     @ObservedObject var model: LongFormPlayerModel
     var onClose: () -> Void
@@ -362,14 +386,8 @@ struct LongFormInlineChrome: View {
             if model.controlsVisible {
                 VStack(spacing: 0) {
                     HStack {
-                        Button {} label: {
-                            Image(systemName: "airplayvideo")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                        AirPlayRoutePicker()
+                            .frame(width: 36, height: 36)
                         Spacer()
                         Button(action: onClose) {
                             Image(systemName: "xmark")
@@ -424,14 +442,33 @@ struct LongFormInlineChrome: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        Button {} label: {
+                        Menu {
+                            Section("Playback speed") {
+                                ForEach([Float(0.5), 1, 1.25, 1.5, 2], id: \.self) { speed in
+                                    Button {
+                                        model.setSpeed(speed)
+                                    } label: {
+                                        if model.playbackSpeed == speed {
+                                            Label(speedLabel(speed), systemImage: "checkmark")
+                                        } else {
+                                            Text(speedLabel(speed))
+                                        }
+                                    }
+                                }
+                            }
+                            Button {
+                                model.toggleMute()
+                            } label: {
+                                Label(model.isMuted ? "Unmute" : "Mute",
+                                      systemImage: model.isMuted ? "speaker.wave.2" : "speaker.slash")
+                            }
+                        } label: {
                             Image(systemName: "ellipsis")
                                 .font(.system(size: 13, weight: .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 28, height: 28)
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)

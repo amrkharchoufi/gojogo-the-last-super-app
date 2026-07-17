@@ -155,24 +155,41 @@ struct WatchingMadeleineView: View {
                 .padding(.top, 14)
 
                 HStack(spacing: 12) {
-                    UserAvatar(size: 40,
-                               letter: String((video?.channel ?? "?").prefix(1)),
-                               imageURL: video?.thumbURL)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(video?.channel ?? "channel")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                        Text("128K subscribers")
-                            .font(.system(size: 12))
-                            .foregroundStyle(GGColor.textTertiary)
+                    Button {
+                        if let channel = video?.channel {
+                            app.openUserProfile(handle: channel, avatarURL: video?.thumbURL)
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            UserAvatar(size: 40,
+                                       letter: String((video?.channel ?? "?").prefix(1)),
+                                       imageURL: video?.thumbURL)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(video?.channel ?? "channel")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                Text(app.subscriberLabel(for: video?.channel ?? "channel"))
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(GGColor.textTertiary)
+                            }
+                        }
                     }
+                    .buttonStyle(.plain)
                     Spacer()
-                    Button {} label: {
-                        Text("Subscribe")
+                    Button {
+                        if let channel = video?.channel {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                app.toggleSubscribe(channel)
+                            }
+                        }
+                    } label: {
+                        let subscribed = app.isSubscribed(video?.channel ?? "")
+                        Text(subscribed ? "Subscribed" : "Subscribe")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.black)
+                            .foregroundStyle(subscribed ? .white : .black)
                             .padding(.horizontal, 16).padding(.vertical, 8)
-                            .background(Capsule().fill(Color.white))
+                            .background(Capsule().fill(subscribed ? Color.white.opacity(0.14) : Color.white))
                     }
                     .buttonStyle(SoftPressStyle())
                 }
@@ -185,15 +202,27 @@ struct WatchingMadeleineView: View {
                                 icon: (video?.liked == true) ? "hand.thumbsup.fill" : "hand.thumbsup",
                                 title: formatCount(video?.likes ?? 0)
                             ) { app.toggleVideoLike(id) }
-                            actionChip(icon: "hand.thumbsdown", title: "")
+                            actionChip(
+                                icon: app.isVideoDisliked(id) ? "hand.thumbsdown.fill" : "hand.thumbsdown",
+                                title: ""
+                            ) { app.toggleVideoDislike(id) }
                             actionChip(
                                 icon: (video?.saved == true) ? "bookmark.fill" : "bookmark",
                                 title: video?.saved == true ? "Saved" : "Save"
                             ) { app.toggleVideoSave(id) }
+                            ShareLink(item: app.videoShareURL(for: id),
+                                      subject: Text(video?.title ?? "GojoGo video")) {
+                                chipLabel(icon: "arrowshape.turn.up.right", title: "Share")
+                            }
+                            .buttonStyle(SoftPressStyle())
+                            actionChip(
+                                icon: app.isVideoDownloaded(id) ? "checkmark.circle.fill" : "arrow.down.circle",
+                                title: app.isVideoDownloaded(id) ? "Downloaded" : "Download"
+                            ) { app.toggleVideoDownload(id) }
+                            actionChip(icon: "flag", title: "Report") {
+                                app.reportVideo(id)
+                            }
                         }
-                        actionChip(icon: "arrowshape.turn.up.right", title: "Share")
-                        actionChip(icon: "arrow.down.circle", title: "Download")
-                        actionChip(icon: "flag", title: "Report")
                     }
                     .padding(.horizontal, 16)
                 }
@@ -411,17 +440,21 @@ struct WatchingMadeleineView: View {
 
     private func actionChip(icon: String, title: String, action: @escaping () -> Void = {}) -> some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 14, weight: .medium))
-                if !title.isEmpty {
-                    Text(title).font(.system(size: 13, weight: .semibold))
-                }
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(Capsule().fill(Color.white.opacity(0.1)))
+            chipLabel(icon: icon, title: title)
         }
         .buttonStyle(SoftPressStyle())
+    }
+
+    private func chipLabel(icon: String, title: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 14, weight: .medium))
+            if !title.isEmpty {
+                Text(title).font(.system(size: 13, weight: .semibold))
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(Capsule().fill(Color.white.opacity(0.1)))
     }
 
     private func relatedRow(_ item: VideoItem) -> some View {

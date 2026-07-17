@@ -4,18 +4,23 @@ import UIKit
 
 private enum Msg {
     static let blue = Color.white
+    /// iMessage / Photos active tint for the My World mode switcher.
+    static let systemBlue = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255)
     static let sendFill = Color.white.opacity(0.18)
     static let label = Color.white.opacity(0.95)
     static let placeholder = Color.white.opacity(0.38)
     static let spring = Animation.spring(response: 0.40, dampingFraction: 0.88)
+    static let modeSpring = Animation.spring(response: 0.42, dampingFraction: 0.86)
     static let tabHit: CGFloat = 44
     static let plusHit: CGFloat = 52
 }
 
 /// Bottom chrome: glass tabs + plus · morphs into liquid-glass Messages composer.
+/// Also morphs between My World (compact) and Collections (expanded) modes.
 struct GGTabBar: View {
     @EnvironmentObject var app: AppState
     var ghosted: Bool = false
+    @Namespace private var navNS
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,46 +46,232 @@ struct GGTabBar: View {
         .animation(Msg.spring, value: app.showAttachMenu)
         .animation(Msg.spring, value: app.composeAttachments.count)
         .animation(Msg.spring, value: app.canSendCompose)
+        .animation(Msg.modeSpring, value: app.navMode)
     }
 
     // MARK: Navigation
 
     private var navRow: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 0) {
-                tabButton(.home)  { HomeIcon() }
-                tabButton(.watch) { WatchIcon() }
-                madeleineButton
-                tabButton(.travel) { TravelIcon() }
-                tabButton(.economy) { BagIcon() }
-                tabButton(.search)  { SearchIcon() }
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            // Charcoal tinted Liquid Glass — map/content refracts through.
-            .glassCapsule(tint: Color.black.opacity(0.58), interactive: true, dense: true)
-            .contentShape(Capsule())
-            .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
-            .opacity(ghosted ? 0.72 : 1)
-
-            if app.activeTab == .home {
-                Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    app.openComposer()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(Msg.blue)
-                        .frame(width: Msg.plusHit, height: Msg.plusHit)
-                        .contentShape(Circle())
-                        .glassCapsule(tint: Color.black.opacity(0.58), interactive: true, dense: true)
-                }
-                .buttonStyle(TabPressStyle())
-                .accessibilityLabel("New post")
-                .transition(.scale.combined(with: .opacity))
+            if app.navMode == .myWorld {
+                myWorldModeCapsule
+                    .shadow(color: .black.opacity(0.45), radius: 22, y: 10)
+                    .transition(.opacity)
+                Spacer(minLength: 0)
+            } else if app.navBarExpanded {
+                collectionsModeCapsule
+                    .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+                    .opacity(ghosted ? 0.72 : 1)
+                    .transition(.opacity)
+                trailingAction
+            } else {
+                collapsedDock
+                    .shadow(color: .black.opacity(0.45), radius: 22, y: 10)
+                    .opacity(ghosted ? 0.72 : 1)
+                    .transition(.opacity)
+                Spacer(minLength: 0)
+                trailingAction
             }
         }
+        .frame(maxWidth: .infinity,
+               alignment: app.navMode == .collections && app.navBarExpanded ? .center : .leading)
         .animation(Msg.spring, value: app.activeTab)
+        .animation(Msg.modeSpring, value: app.navMode)
+        .animation(Msg.modeSpring, value: app.navBarExpanded)
+    }
+
+    // MARK: Collapsed dock (compact pill — active section only)
+
+    /// Resting state of the Collections nav: My World shortcut + the active section.
+    /// Tapping the section morphs the pill open into the full tab row.
+    private var collapsedDock: some View {
+        HStack(spacing: 8) {
+            myWorldEntryButton
+                .padding(.leading, 6)
+
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                withAnimation(Msg.modeSpring) { app.navBarExpanded = true }
+            } label: {
+                VStack(spacing: 3) {
+                    activeTabGlyph
+                        .frame(height: 20)
+                    Text(activeTabTitle)
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Msg.systemBlue)
+                .frame(minWidth: 68)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.13))
+                )
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(TabPressStyle())
+            .accessibilityLabel("\(activeTabTitle), show all sections")
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(white: 0.12).opacity(0.96))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.07), lineWidth: 0.5)
+                )
+        )
+        .contentShape(Capsule())
+        .matchedGeometryEffect(id: "navCapsule", in: navNS)
+    }
+
+    @ViewBuilder
+    private var activeTabGlyph: some View {
+        switch app.activeTab {
+        case .home:      Image(systemName: "house.fill").font(.system(size: 17, weight: .regular))
+        case .watch:     Image(systemName: "play.rectangle.fill").font(.system(size: 17, weight: .regular))
+        case .madeleine: MiniOrb(size: 19, glow: false)
+        case .travel:    Image(systemName: "car.fill").font(.system(size: 16, weight: .regular))
+        case .delivery:  Image(systemName: "takeoutbag.and.cup.and.straw.fill").font(.system(size: 16, weight: .regular))
+        case .economy:   Image(systemName: "bag.fill").font(.system(size: 16, weight: .regular))
+        case .search:    Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .semibold))
+        }
+    }
+
+    private var activeTabTitle: String {
+        switch app.activeTab {
+        case .home:      return "Home"
+        case .watch:     return "Watch"
+        case .madeleine: return "Madeleine"
+        case .travel:    return "Travel"
+        case .delivery:  return "Delivery"
+        case .economy:   return "Economy"
+        case .search:    return "Search"
+        }
+    }
+
+    /// Photos-app style mode switcher: My World | Collections — compact, left-aligned floating pill.
+    private var myWorldModeCapsule: some View {
+        HStack(spacing: 2) {
+            modeSegment(
+                title: "My World",
+                icon: "message.fill",
+                active: true,
+                action: { /* already here */ }
+            )
+            modeSegment(
+                title: "Collections",
+                icon: "rectangle.stack.fill",
+                active: false,
+                action: { app.enterCollections() }
+            )
+        }
+        .padding(4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(white: 0.12).opacity(0.96))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.07), lineWidth: 0.5)
+                )
+        )
+        .contentShape(Capsule())
+        .matchedGeometryEffect(id: "navCapsule", in: navNS)
+    }
+
+    private func modeSegment(title: String, icon: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .regular))
+                Text(title)
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(active ? Msg.systemBlue : Color.white)
+            .frame(minWidth: 68)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(active ? Color.white.opacity(0.13) : .clear)
+            )
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(TabPressStyle())
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(active ? .isSelected : [])
+    }
+
+    /// Expanded Collections tabs — leading My World collapses back.
+    private var collectionsModeCapsule: some View {
+        HStack(spacing: 0) {
+            myWorldEntryButton
+            tabButton(.home)  { HomeIcon() }
+            tabButton(.watch) { WatchIcon() }
+            madeleineButton
+            tabButton(.travel) { TravelIcon() }
+            tabButton(.delivery) { DeliveryIcon() }
+            tabButton(.economy) { BagIcon() }
+            tabButton(.search)  { SearchIcon() }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .glassCapsule(tint: Color.black.opacity(0.58), interactive: true, dense: true)
+        .contentShape(Capsule())
+        .matchedGeometryEffect(id: "navCapsule", in: navNS)
+    }
+
+    private var myWorldEntryButton: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            app.enterMyWorld()
+        } label: {
+            Image(systemName: "message.fill")
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .frame(width: 38, height: Msg.tabHit)
+                .overlay(alignment: .topTrailing) {
+                    if app.worldUnreadCount > 0 {
+                        Text("\(min(app.worldUnreadCount, 99))")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Msg.systemBlue))
+                            .offset(x: 4, y: 4)
+                    }
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(TabPressStyle())
+        .accessibilityLabel("My World")
+    }
+
+    @ViewBuilder
+    private var trailingAction: some View {
+        if app.navMode == .collections, app.activeTab == .home {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                app.openComposer()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Msg.blue)
+                    .frame(width: Msg.plusHit, height: Msg.plusHit)
+                    .contentShape(Circle())
+                    .glassCapsule(tint: Color.black.opacity(0.58), interactive: true, dense: true)
+            }
+            .buttonStyle(TabPressStyle())
+            .accessibilityLabel("New post")
+            .matchedGeometryEffect(id: "navTrailing", in: navNS)
+            .transition(.scale.combined(with: .opacity))
+        }
     }
 
     private func tabButton<Icon: View>(_ tab: AppTab, @ViewBuilder icon: () -> Icon) -> some View {
@@ -88,10 +279,11 @@ struct GGTabBar: View {
         return Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             withAnimation(.easeOut(duration: 0.2)) { app.activeTab = tab }
+            withAnimation(Msg.modeSpring) { app.navBarExpanded = false }
         } label: {
             icon()
                 .environment(\.ggTabActive, active)
-                .frame(width: Msg.tabHit, height: Msg.tabHit)
+                .frame(width: 40, height: Msg.tabHit)
                 .background(
                     Capsule()
                         .fill(active ? Color.white.opacity(0.28) : .clear)
@@ -107,9 +299,10 @@ struct GGTabBar: View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             withAnimation(.easeOut(duration: 0.2)) { app.activeTab = .madeleine }
+            withAnimation(Msg.modeSpring) { app.navBarExpanded = false }
         } label: {
-            MiniOrb(size: 34, glow: true)
-                .frame(width: Msg.tabHit, height: Msg.tabHit)
+            MiniOrb(size: 30, glow: true)
+                .frame(width: 40, height: Msg.tabHit)
                 .contentShape(Circle())
                 .opacity(app.activeTab == .madeleine ? 1 : 0.9)
         }
@@ -467,5 +660,10 @@ struct SearchIcon: View {
 struct TravelIcon: View {
     var body: some View {
         Image(systemName: "car").font(.system(size: 17, weight: .regular)).iconStroke()
+    }
+}
+struct DeliveryIcon: View {
+    var body: some View {
+        Image(systemName: "takeoutbag.and.cup.and.straw").font(.system(size: 17, weight: .regular)).iconStroke()
     }
 }

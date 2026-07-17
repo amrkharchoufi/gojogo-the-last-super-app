@@ -51,6 +51,7 @@ enum SessionStore {
 /// (`gojovideo:filename`) so sandbox container UUID changes don't break playback.
 enum VideoLibrary {
     static let prefix = "gojovideo:"
+    static let bundlePrefix = "bundlevideo:"
 
     static var directory: URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -89,6 +90,16 @@ enum VideoLibrary {
 
         if stored.hasPrefix("http://") || stored.hasPrefix("https://") {
             return SampleData.repairedVideoURL(stored)
+        }
+
+        if stored.hasPrefix(bundlePrefix) {
+            return bundleURL(named: String(stored.dropFirst(bundlePrefix.count)))?.absoluteString
+        }
+
+        // Bare SampleClipN name from seed data.
+        if stored.hasPrefix("SampleClip"),
+           let url = bundleURL(named: stored) {
+            return url.absoluteString
         }
 
         if stored.hasPrefix(prefix) {
@@ -130,9 +141,35 @@ enum VideoLibrary {
         return SampleData.repairedVideoURL(stored)
     }
 
+    static func bundleURL(named raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let name = (trimmed as NSString).deletingPathExtension
+        let ext = (trimmed as NSString).pathExtension
+        let candidates: [(String?, String?)] = [
+            (name, ext.isEmpty ? "mp4" : ext),
+            (name, ext.isEmpty ? "mov" : ext),
+            (trimmed, nil),
+        ]
+        for (resource, extension_) in candidates {
+            if let url = Bundle.main.url(forResource: resource, withExtension: extension_) {
+                return url
+            }
+            // Nested SampleVideos folder in the synchronized group.
+            if let url = Bundle.main.url(forResource: resource, withExtension: extension_,
+                                         subdirectory: "SampleVideos") {
+                return url
+            }
+        }
+        return nil
+    }
+
     /// Normalize stored session values to durable refs when the file still exists.
     static func normalizeStored(_ stored: String?) -> String? {
         guard let stored, !stored.isEmpty else { return stored }
+        if stored.hasPrefix(bundlePrefix) || stored.hasPrefix("SampleClip") {
+            return stored.hasPrefix(bundlePrefix) ? stored : bundlePrefix + stored
+        }
         if stored.hasPrefix(prefix) || stored.hasPrefix("http") {
             return stored.hasPrefix("http") ? SampleData.repairedVideoURL(stored) : stored
         }
@@ -183,6 +220,13 @@ struct CachedSession: Codable {
     var chatMessages: [CachedChatMessage]
     var activeTabRaw: String
     var watchSubFeedRaw: String
+    // Added post-MVP — optional so older caches still decode.
+    var subscribedChannels: [String]?
+    var dislikedVideoIDs: [UUID]?
+    var downloadedVideoIDs: [UUID]?
+    var notifyHandles: [String]?
+    var dmThreads: [String: [CachedChatMessage]]?
+    var navModeRaw: String?
 }
 
 struct CachedUser: Codable {
@@ -243,6 +287,14 @@ struct CachedPost: Codable {
     var likeCount: Int
     var commentCount: Int
     var isHalfWidth: Bool
+    var mediaItems: [CachedPostMedia]?
+}
+
+struct CachedPostMedia: Codable {
+    var id: UUID
+    var imageURL: String?
+    var imageData: Data?
+    var videoURL: String?
 }
 
 struct CachedVideo: Codable {
@@ -362,11 +414,18 @@ extension CachedSession {
             case .watch: return "watch"
             case .madeleine: return "madeleine"
             case .travel: return "travel"
+            case .delivery: return "delivery"
             case .economy: return "economy"
             case .search: return "search"
             }
         }()
         watchSubFeedRaw = app.watchSubFeed.rawValue
+        subscribedChannels = Array(app.subscribedChannels)
+        dislikedVideoIDs = Array(app.dislikedVideoIDs)
+        downloadedVideoIDs = Array(app.downloadedVideoIDs)
+        notifyHandles = Array(app.notifyHandles)
+        dmThreads = app.dmThreads.mapValues { $0.map(CachedChatMessage.init) }
+        navModeRaw = app.navMode.rawValue
     }
 }
 
@@ -437,13 +496,22 @@ extension CachedPost {
         showFollow = p.showFollow; liked = p.liked; bookmarked = p.bookmarked
         following = p.following; likeCount = p.likeCount; commentCount = p.commentCount
         isHalfWidth = p.isHalfWidth
+        mediaItems = p.mediaItems.map {
+            CachedPostMedia(id: $0.id, imageURL: $0.imageURL,
+                            imageData: $0.imageData, videoURL: $0.videoURL)
+        }
     }
 
     func asDomain() -> Post {
-        Post(id: id, author: author, meta: meta,
+        let slides = (mediaItems ?? []).map {
+            PostMediaItem(id: $0.id, imageURL: $0.imageURL,
+                          imageData: $0.imageData, videoURL: $0.videoURL)
+        }
+        return Post(id: id, author: author, meta: meta,
              avatarGradient: SessionColor.colors(from: avatarGradient),
              avatarURL: avatarURL, imageURL: imageURL, imageData: imageData,
              videoURL: videoURL,
+             mediaItems: slides,
              imageAspect: CGFloat(imageAspect), text: text,
              showFollow: showFollow, liked: liked, bookmarked: bookmarked,
              following: following, likeCount: likeCount, commentCount: commentCount,

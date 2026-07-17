@@ -2,7 +2,20 @@ import SwiftUI
 
 // MARK: - Navigation enums
 
-enum AppTab: Hashable { case home, watch, madeleine, travel, economy, search }
+/// Top-level app section: private social (My World) vs public superapp (Collections).
+enum AppNavMode: String, Hashable {
+    case myWorld
+    case collections
+}
+
+enum AppTab: Hashable { case home, watch, madeleine, travel, delivery, economy, search }
+
+/// Destinations inside My World (iMessage-style private network).
+enum MyWorldTab: Hashable {
+    case messages
+    case circles
+    case profile
+}
 
 // MARK: - GojoTravel
 
@@ -188,6 +201,8 @@ struct Post: Identifiable {
     var imageData: Data?
     /// Local file or remote HTTP URL for in-feed playback.
     var videoURL: String?
+    /// Extra slides for a multi-photo / video carousel post (includes the first slide).
+    var mediaItems: [PostMediaItem]
     var imageAspect: CGFloat   // height / width hint for layout
     var text: String?
     var showFollow: Bool
@@ -200,13 +215,25 @@ struct Post: Identifiable {
 
     var isVideo: Bool {
         if let videoURL, !videoURL.isEmpty { return true }
-        return false
+        return mediaItems.contains(where: \.isVideo)
+    }
+
+    var isCarousel: Bool { mediaItems.count > 1 }
+
+    /// Slides to render — prefers explicit carousel items, else legacy single media.
+    var carouselSlides: [PostMediaItem] {
+        if !mediaItems.isEmpty { return mediaItems }
+        if imageURL != nil || imageData != nil || (videoURL != nil && !(videoURL?.isEmpty ?? true)) {
+            return [PostMediaItem(imageURL: imageURL, imageData: imageData, videoURL: videoURL)]
+        }
+        return []
     }
 
     init(id: UUID = UUID(), author: String, meta: String,
          avatarGradient: [Color], avatarURL: String? = nil,
          imageURL: String? = nil, imageData: Data? = nil,
          videoURL: String? = nil,
+         mediaItems: [PostMediaItem] = [],
          imageAspect: CGFloat = 1.0, text: String? = nil,
          showFollow: Bool = false, liked: Bool = false,
          bookmarked: Bool = false, following: Bool = false,
@@ -216,11 +243,28 @@ struct Post: Identifiable {
         self.avatarGradient = avatarGradient; self.avatarURL = avatarURL
         self.imageURL = imageURL; self.imageData = imageData
         self.videoURL = videoURL
+        self.mediaItems = mediaItems
         self.imageAspect = imageAspect; self.text = text
         self.showFollow = showFollow; self.liked = liked
         self.bookmarked = bookmarked; self.following = following
         self.likeCount = likeCount; self.commentCount = commentCount
         self.isHalfWidth = isHalfWidth
+    }
+}
+
+struct PostMediaItem: Identifiable, Equatable {
+    let id: UUID
+    var imageURL: String?
+    var imageData: Data?
+    var videoURL: String?
+
+    var isVideo: Bool {
+        if let videoURL, !videoURL.isEmpty { return true }
+        return false
+    }
+
+    init(id: UUID = UUID(), imageURL: String? = nil, imageData: Data? = nil, videoURL: String? = nil) {
+        self.id = id; self.imageURL = imageURL; self.imageData = imageData; self.videoURL = videoURL
     }
 }
 
@@ -425,6 +469,53 @@ struct FileChip: Identifiable {
     }
 }
 
+// MARK: - Activity / notifications
+
+enum ActivityKind: String {
+    case like, comment, follow, mention, order, system
+
+    var icon: String {
+        switch self {
+        case .like: return "heart.fill"
+        case .comment: return "bubble.right.fill"
+        case .follow: return "person.fill.badge.plus"
+        case .mention: return "at"
+        case .order: return "bag.fill"
+        case .system: return "sparkles"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .like: return Color(hex: "E85D75")
+        case .comment: return GGColor.blue
+        case .follow: return Color(hex: "7A6CF0")
+        case .mention: return Color(hex: "E8B45D")
+        case .order: return Color(hex: "5DC98A")
+        case .system: return GGColor.accent
+        }
+    }
+}
+
+struct ActivityItem: Identifiable {
+    let id: UUID
+    var kind: ActivityKind
+    var actor: String
+    var text: String
+    var timeAgo: String
+    var read: Bool
+    var avatarURL: String?
+    var previewURL: String?
+
+    init(id: UUID = UUID(), kind: ActivityKind, actor: String, text: String,
+         timeAgo: String, read: Bool = false, avatarURL: String? = nil,
+         previewURL: String? = nil) {
+        self.id = id; self.kind = kind; self.actor = actor; self.text = text
+        self.timeAgo = timeAgo; self.read = read; self.avatarURL = avatarURL
+        self.previewURL = previewURL
+    }
+}
+
 struct Comment: Identifiable, Hashable {
     let id: UUID
     let author: String
@@ -477,5 +568,277 @@ struct ComposeAttachment: Identifiable, Equatable {
         self.durationLabel = durationLabel; self.audioURL = audioURL
         self.videoURL = videoURL
         self.trimStart = trimStart; self.trimEnd = trimEnd
+    }
+}
+
+// MARK: - My World (private social · iMessage-inspired)
+
+enum WorldMessageKind {
+    case text
+    case emoji
+    case file
+    case photo
+    case video
+    case carousel
+    case audio
+    case location
+    case system
+    case timestamp
+}
+
+/// One slide inside a chat media carousel (photo and/or video).
+struct WorldCarouselItem: Identifiable, Equatable {
+    let id: UUID
+    var imageData: Data
+    var isVideo: Bool
+    var durationLabel: String?
+
+    init(id: UUID = UUID(), imageData: Data, isVideo: Bool = false, durationLabel: String? = nil) {
+        self.id = id; self.imageData = imageData
+        self.isVideo = isVideo; self.durationLabel = durationLabel
+    }
+}
+
+/// Media staged in the chat composer before sending (iMessage-style preview tray).
+struct WorldPendingAttachment: Identifiable {
+    let id: UUID
+    var imageData: Data
+    var isVideo: Bool
+    var durationLabel: String?
+
+    init(id: UUID = UUID(), imageData: Data, isVideo: Bool = false, durationLabel: String? = nil) {
+        self.id = id; self.imageData = imageData
+        self.isVideo = isVideo; self.durationLabel = durationLabel
+    }
+}
+
+struct WorldMessage: Identifiable {
+    let id: UUID
+    var kind: WorldMessageKind
+    var text: String
+    var fromUser: Bool
+    var fileName: String?
+    var fileMeta: String?
+    var readLabel: String?
+    var imageData: Data?
+    var durationLabel: String?
+    var senderName: String?
+    var carouselItems: [WorldCarouselItem]
+
+    init(id: UUID = UUID(), kind: WorldMessageKind = .text, text: String,
+         fromUser: Bool = false, fileName: String? = nil, fileMeta: String? = nil,
+         readLabel: String? = nil, imageData: Data? = nil, durationLabel: String? = nil,
+         senderName: String? = nil, carouselItems: [WorldCarouselItem] = []) {
+        self.id = id; self.kind = kind; self.text = text; self.fromUser = fromUser
+        self.fileName = fileName; self.fileMeta = fileMeta; self.readLabel = readLabel
+        self.imageData = imageData; self.durationLabel = durationLabel
+        self.senderName = senderName; self.carouselItems = carouselItems
+    }
+}
+
+struct WorldContact: Identifiable {
+    let id: UUID
+    var name: String
+    var username: String
+    var phone: String
+    var avatarURL: String?
+    var avatarGradient: [Color]
+    var bio: String
+    var city: String
+    var latitude: Double
+    var longitude: Double
+    var distanceLabel: String
+    var etaLabel: String
+
+    init(id: UUID = UUID(), name: String, username: String, phone: String,
+         avatarURL: String? = nil,
+         avatarGradient: [Color] = [Color(hex: "26303F"), Color(hex: "141821")],
+         bio: String = "", city: String = "",
+         latitude: Double = 33.5731, longitude: Double = -7.5898,
+         distanceLabel: String = "23 km", etaLabel: String = "36 min") {
+        self.id = id; self.name = name; self.username = username; self.phone = phone
+        self.avatarURL = avatarURL; self.avatarGradient = avatarGradient
+        self.bio = bio; self.city = city
+        self.latitude = latitude; self.longitude = longitude
+        self.distanceLabel = distanceLabel; self.etaLabel = etaLabel
+    }
+}
+
+struct WorldCircle: Identifiable {
+    let id: UUID
+    var name: String
+    var memberIDs: [UUID]
+    var colorHex: String
+
+    init(id: UUID = UUID(), name: String, memberIDs: [UUID], colorHex: String = "3A3A3C") {
+        self.id = id; self.name = name; self.memberIDs = memberIDs; self.colorHex = colorHex
+    }
+}
+
+struct WorldConversation: Identifiable {
+    let id: UUID
+    var contactID: UUID?
+    var circleID: UUID?
+    var title: String
+    var preview: String
+    var timeAgo: String
+    var unread: Int
+    var isGroup: Bool
+    var pinned: Bool
+    var avatarURL: String?
+    var avatarGradient: [Color]
+    var messages: [WorldMessage]
+    var filterBadge: String?
+    /// Used to float threads to the top when you send or receive a message.
+    var lastActivityAt: Date
+
+    init(id: UUID = UUID(), contactID: UUID? = nil, circleID: UUID? = nil,
+         title: String, preview: String, timeAgo: String, unread: Int = 0,
+         isGroup: Bool = false, pinned: Bool = false, avatarURL: String? = nil,
+         avatarGradient: [Color] = [Color(hex: "26303F"), Color(hex: "141821")],
+         messages: [WorldMessage] = [], filterBadge: String? = nil,
+         lastActivityAt: Date = Date()) {
+        self.id = id; self.contactID = contactID; self.circleID = circleID
+        self.title = title; self.preview = preview; self.timeAgo = timeAgo
+        self.unread = unread; self.isGroup = isGroup; self.pinned = pinned
+        self.avatarURL = avatarURL; self.avatarGradient = avatarGradient
+        self.messages = messages; self.filterBadge = filterBadge
+        self.lastActivityAt = lastActivityAt
+    }
+}
+
+/// Shared iMessage palette for My World.
+enum IMColor {
+    static let blue = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255)
+    static let bubbleGray = Color(red: 38 / 255, green: 38 / 255, blue: 41 / 255)
+    static let secondary = Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255)
+    static let chrome = Color(red: 44 / 255, green: 44 / 255, blue: 46 / 255)
+    static let separator = Color(red: 56 / 255, green: 56 / 255, blue: 58 / 255)
+    static let inputFill = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
+}
+
+// MARK: - GojoDelivery (food delivery · Uber Eats-style)
+
+enum DeliveryOrderStatus: Int, Equatable, Comparable {
+    case confirmed
+    case preparing
+    case courierToRestaurant
+    case delivering
+    case delivered
+
+    static func < (lhs: DeliveryOrderStatus, rhs: DeliveryOrderStatus) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    var label: String {
+        switch self {
+        case .confirmed:           return "Order confirmed"
+        case .preparing:           return "Preparing your food"
+        case .courierToRestaurant: return "Courier picking up"
+        case .delivering:          return "On the way"
+        case .delivered:           return "Delivered"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .confirmed:           return "The restaurant received your order."
+        case .preparing:           return "The kitchen is on it."
+        case .courierToRestaurant: return "Your courier is heading to the restaurant."
+        case .delivering:          return "Your food is on its way to you."
+        case .delivered:           return "Enjoy your meal!"
+        }
+    }
+}
+
+struct DeliveryMenuItem: Identifiable {
+    let id: UUID
+    var name: String
+    var detail: String
+    var price: Double
+    var imageURL: String?
+    var popular: Bool
+
+    init(id: UUID = UUID(), name: String, detail: String, price: Double,
+         imageURL: String? = nil, popular: Bool = false) {
+        self.id = id; self.name = name; self.detail = detail
+        self.price = price; self.imageURL = imageURL; self.popular = popular
+    }
+}
+
+struct DeliveryMenuSection: Identifiable {
+    let id: UUID
+    var name: String
+    var items: [DeliveryMenuItem]
+
+    init(id: UUID = UUID(), name: String, items: [DeliveryMenuItem]) {
+        self.id = id; self.name = name; self.items = items
+    }
+}
+
+struct DeliveryRestaurant: Identifiable {
+    let id: UUID
+    var name: String
+    var cuisine: String
+    var rating: Double
+    var reviews: String
+    var etaMinutes: Int
+    var feeLabel: String
+    var imageURL: String?
+    var tags: [String]
+    var promo: String?
+    var categories: [String]
+    var menu: [DeliveryMenuSection]
+    var latitude: Double
+    var longitude: Double
+
+    init(id: UUID = UUID(), name: String, cuisine: String, rating: Double,
+         reviews: String, etaMinutes: Int, feeLabel: String, imageURL: String? = nil,
+         tags: [String] = [], promo: String? = nil, categories: [String] = [],
+         menu: [DeliveryMenuSection] = [],
+         latitude: Double = 33.5731, longitude: Double = -7.5898) {
+        self.id = id; self.name = name; self.cuisine = cuisine
+        self.rating = rating; self.reviews = reviews; self.etaMinutes = etaMinutes
+        self.feeLabel = feeLabel; self.imageURL = imageURL; self.tags = tags
+        self.promo = promo; self.categories = categories; self.menu = menu
+        self.latitude = latitude; self.longitude = longitude
+    }
+}
+
+struct DeliveryCartLine: Identifiable {
+    var id: UUID { item.id }
+    var item: DeliveryMenuItem
+    var qty: Int
+}
+
+struct DeliveryCourier: Identifiable {
+    let id: UUID
+    var name: String
+    var rating: Double
+    var deliveries: Int
+    var vehicle: String
+    var avatarURL: String?
+
+    init(id: UUID = UUID(), name: String, rating: Double, deliveries: Int,
+         vehicle: String, avatarURL: String? = nil) {
+        self.id = id; self.name = name; self.rating = rating
+        self.deliveries = deliveries; self.vehicle = vehicle; self.avatarURL = avatarURL
+    }
+}
+
+struct DeliveryPastOrder: Identifiable {
+    let id: UUID
+    var restaurantName: String
+    var imageURL: String?
+    var itemsSummary: String
+    var totalLabel: String
+    var dateLabel: String
+    var rating: Int
+
+    init(id: UUID = UUID(), restaurantName: String, imageURL: String? = nil,
+         itemsSummary: String, totalLabel: String, dateLabel: String, rating: Int = 0) {
+        self.id = id; self.restaurantName = restaurantName; self.imageURL = imageURL
+        self.itemsSummary = itemsSummary; self.totalLabel = totalLabel
+        self.dateLabel = dateLabel; self.rating = rating
     }
 }

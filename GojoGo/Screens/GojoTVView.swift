@@ -349,7 +349,7 @@ struct TVShowDetailView: View {
 
                         VStack(spacing: 10) {
                             ForEach(show.episodes) { ep in
-                                Button { app.playTVShow(show) } label: {
+                                Button { app.playEpisode(showID: show.id, episodeID: ep.id) } label: {
                                     HStack(spacing: 12) {
                                         ZStack {
                                             RoundedRectangle(cornerRadius: 10)

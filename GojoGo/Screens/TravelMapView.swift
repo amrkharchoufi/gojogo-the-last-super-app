@@ -144,3 +144,124 @@ enum TravelCamera {
         )
     }
 }
+
+// MARK: - GojoDelivery map (same Mapbox night style as Travel)
+
+struct DeliveryMapView: View {
+    @Binding var viewport: Viewport
+    var restaurant: CLLocationCoordinate2D
+    var home: CLLocationCoordinate2D
+    var courier: CLLocationCoordinate2D?
+    var showRoute: Bool
+
+    var body: some View {
+        Map(viewport: $viewport) {
+            if showRoute {
+                PolylineAnnotation(lineCoordinates: routeCoordinates(from: restaurant, to: home))
+                    .lineColor(StyleColor(UIColor.white))
+                    .lineWidth(4)
+                    .lineOpacity(0.85)
+            }
+
+            MapViewAnnotation(coordinate: restaurant) {
+                DeliveryMapPin(icon: "fork.knife", label: "Restaurant", accent: false)
+            }
+            .allowOverlap(true)
+
+            MapViewAnnotation(coordinate: home) {
+                DeliveryMapPin(icon: "house.fill", label: "You", accent: false)
+            }
+            .allowOverlap(true)
+
+            if let courier {
+                MapViewAnnotation(coordinate: courier) {
+                    DeliveryCourierMarker()
+                }
+                .allowOverlap(true)
+            }
+        }
+        .mapStyle(.standard(lightPreset: .night, show3dObjects: true))
+        .ignoresSafeArea()
+    }
+
+    private func routeCoordinates(from a: CLLocationCoordinate2D,
+                                  to b: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
+        let mid = CLLocationCoordinate2D(
+            latitude: (a.latitude + b.latitude) / 2 + 0.0035,
+            longitude: (a.longitude + b.longitude) / 2 - 0.0025
+        )
+        var points: [CLLocationCoordinate2D] = []
+        let steps = 24
+        for i in 0...steps {
+            let t = Double(i) / Double(steps)
+            let u = 1 - t
+            let lat = u * u * a.latitude + 2 * u * t * mid.latitude + t * t * b.latitude
+            let lon = u * u * a.longitude + 2 * u * t * mid.longitude + t * t * b.longitude
+            points.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
+        }
+        return points
+    }
+}
+
+struct DeliveryMapPin: View {
+    var icon: String
+    var label: String
+    var accent: Bool
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(label)
+                .font(.ggMono(9, .semibold))
+                .foregroundStyle(GGColor.onAccent)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(GGColor.white))
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(accent ? GGColor.onAccent : .white)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(accent ? GGColor.white : Color(white: 0.12)))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+                .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
+        }
+    }
+}
+
+struct DeliveryCourierMarker: View {
+    var body: some View {
+        Image(systemName: "bicycle")
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(GGColor.onAccent)
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(GGColor.white))
+            .shadow(color: .black.opacity(0.45), radius: 8, y: 3)
+    }
+}
+
+enum DeliveryCamera {
+    static let pitch: CGFloat = 52
+    static let bearing: CLLocationDirection = 22
+
+    static func fit(restaurant: CLLocationCoordinate2D,
+                    home: CLLocationCoordinate2D,
+                    followCourier: CLLocationCoordinate2D? = nil) -> Viewport {
+        if let courier = followCourier {
+            return .camera(
+                center: courier,
+                zoom: 15.0,
+                bearing: bearing + 10,
+                pitch: 58
+            )
+        }
+        let mid = CLLocationCoordinate2D(
+            latitude: (restaurant.latitude + home.latitude) / 2,
+            longitude: (restaurant.longitude + home.longitude) / 2
+        )
+        let span = max(
+            abs(restaurant.latitude - home.latitude),
+            abs(restaurant.longitude - home.longitude)
+        )
+        let zoom = max(12.2, min(14.8, 14.9 - span * 40))
+        return .camera(center: mid, zoom: zoom, bearing: bearing, pitch: pitch)
+    }
+}
