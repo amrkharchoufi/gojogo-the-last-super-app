@@ -3,16 +3,19 @@ import SwiftUI
 // MARK: - Wordmark  "gojogo" with tinted trailing "go"
 
 struct Wordmark: View {
+    /// Brand teal used for the muted trailing segment (matches welcome).
+    static let brandTrailing = Color(hex: "00E5C7")
+
     var size: CGFloat = 19
     var trailing: String = "go"
     var accentGradient: Bool = false   // kept for source compat
-    /// Override trailing tint (e.g. brand teal on welcome).
+    /// Override trailing tint; defaults to brand teal.
     var trailingColor: Color? = nil
 
     var body: some View {
         HStack(spacing: 0) {
             Text("gojo").foregroundStyle(GGColor.textPrimary)
-            Text(trailing).foregroundStyle(trailingColor ?? GGColor.white.opacity(0.45))
+            Text(trailing).foregroundStyle(trailingColor ?? Self.brandTrailing)
         }
         .font(.system(size: size, weight: .bold))
         .tracking(-0.4)

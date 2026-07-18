@@ -14,7 +14,7 @@ struct WelcomeView: View {
                 Spacer(minLength: 0)
 
                 // Text recreation of the brand mark: white “gojo” + teal “go”
-                Wordmark(size: 44, trailingColor: Color(hex: "00E5C7"))
+                Wordmark(size: 44)
                     .tracking(-1.8)
                     .opacity(appear ? 1 : 0)
                     .offset(y: appear ? 0 : 8)

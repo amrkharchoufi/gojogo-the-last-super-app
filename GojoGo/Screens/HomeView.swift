@@ -121,15 +121,15 @@ struct HomeView: View {
                             GGColor.ink(0.28),
                             style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
                         )
-                        .frame(width: 74, height: 74)
+                        .frame(width: 90, height: 90)
                     Text("+")
-                        .font(.system(size: 22, weight: .medium))
+                        .font(.system(size: 26, weight: .medium))
                         .foregroundStyle(GGColor.ink(0.85))
                 }
                 Text("More")
                     .font(.system(size: 11))
                     .foregroundStyle(GGColor.textSecondary)
-                    .frame(width: 74)
+                    .frame(width: 90)
                     .lineLimit(1)
             }
         }
@@ -144,7 +144,7 @@ struct HomeView: View {
         let label = VStack(spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
                 UserAvatar(
-                    size: 68,
+                    size: 84,
                     letter: story.letter,
                     ring: ring,
                     imageURL: story.isYou && !hasMedia ? app.user.avatarURL : story.imageURL,
@@ -156,17 +156,17 @@ struct HomeView: View {
                     Image(systemName: "plus.circle.fill")
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.black, .white)
-                        .font(.system(size: 20))
+                        .font(.system(size: 24))
                         .background(Circle().fill(.black).padding(2))
                         .offset(x: 2, y: 2)
                 }
             }
-            .frame(width: 74, height: 74)
+            .frame(width: 90, height: 90)
 
             Text(story.isYou ? "Your story" : story.name)
                 .font(.system(size: 11))
-                .foregroundStyle(story.seen && !story.isYou ? GGColor.textTertiary : .white)
-                .frame(width: 74)
+                .foregroundStyle(story.seen && !story.isYou ? GGColor.textTertiary : GGColor.textPrimary)
+                .frame(width: 90)
                 .lineLimit(1)
         }
 
