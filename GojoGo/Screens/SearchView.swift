@@ -321,7 +321,7 @@ struct SearchView: View {
                     } label: {
                         ZStack(alignment: .bottomLeading) {
                             MediaImage(url: short.imageURL, data: short.imageData, cornerRadius: 14)
-                                .frame(width: 104, height: 156)
+                                .frame(width: 104, height: 185) // 9:16 Reels thumb
                                 .clipped()
                             LinearGradient(colors: [.clear, .black.opacity(0.7)],
                                            startPoint: .center, endPoint: .bottom)
@@ -332,7 +332,7 @@ struct SearchView: View {
                                 .lineLimit(1)
                                 .padding(8)
                         }
-                        .frame(width: 104, height: 156)
+                        .frame(width: 104, height: 185)
                     }
                     .buttonStyle(.plain)
                 }

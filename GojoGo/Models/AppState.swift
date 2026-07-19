@@ -122,6 +122,10 @@ final class AppState: ObservableObject {
     @Published var shorts: [Short] = SampleData.shorts
     /// Home-feed video mute — shared across every post until toggled again.
     @Published var feedVideosMuted: Bool = true
+    /// Shorts / Reels mute — independent from home feed videos.
+    @Published var shortsMuted: Bool = false
+    /// Exclusive feed autoplay — only this post's current slide may play.
+    @Published var activeFeedVideoPostID: UUID? = nil
     @Published var products: [Product] = SampleData.products
     @Published var featuredProduct: Product = SampleData.featuredProduct
     @Published var people: [PersonSuggestion] = SampleData.people
@@ -1434,7 +1438,11 @@ final class AppState: ObservableObject {
 
     func toggleFeedVideoMute() {
         feedVideosMuted.toggle()
-        ShortVideoPlayerCache.setAllMuted(feedVideosMuted)
+        // Home cards pick this up via `isMuted` — do not touch Shorts players.
+    }
+
+    func toggleShortsMute() {
+        shortsMuted.toggle()
     }
 
     func toggleBookmark(_ id: UUID) {
@@ -1508,10 +1516,25 @@ final class AppState: ObservableObject {
         showWatching = true
     }
 
-    /// Opens a feed video post in Shorts (creates a short entry if needed).
-    func openFeedVideoAsShort(postID: UUID) {
-        guard let post = posts.first(where: { $0.id == postID }),
-              let url = post.videoURL, !url.isEmpty else { return }
+    /// Opens a feed video (single or carousel slide) in Shorts.
+    func openFeedVideoAsShort(postID: UUID, videoURL preferredURL: String? = nil) {
+        guard let post = posts.first(where: { $0.id == postID }) else { return }
+
+        let url: String = {
+            if let preferredURL, !preferredURL.isEmpty { return preferredURL }
+            if let v = post.videoURL, !v.isEmpty { return v }
+            if let slideURL = post.carouselSlides.first(where: {
+                $0.isVideo && !($0.videoURL ?? "").isEmpty
+            })?.videoURL, !slideURL.isEmpty {
+                return slideURL
+            }
+            return ""
+        }()
+        guard !url.isEmpty else { return }
+
+        let slide = post.carouselSlides.first(where: { $0.videoURL == url })
+        let posterURL = slide?.imageURL ?? post.imageURL
+        let posterData = slide?.imageData ?? post.imageData
 
         if let existing = shorts.first(where: { $0.videoURL == url }) {
             focusedShortID = existing.id
@@ -1521,8 +1544,8 @@ final class AppState: ObservableObject {
                 subscribers: "from feed · just now",
                 caption: post.text ?? post.author,
                 gradient: post.avatarGradient,
-                imageURL: post.imageURL,
-                imageData: post.imageData,
+                imageURL: posterURL,
+                imageData: posterData,
                 videoURL: url,
                 likeCount: post.likeCount
             )

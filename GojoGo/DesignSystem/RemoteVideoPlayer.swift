@@ -163,9 +163,17 @@ enum ShortVideoPlayerCache {
 
     /// Play / pause only — never seek, never recreate.
     /// `clientID` ensures an off-screen card can't keep a shared clip playing.
+    /// Activating one clip pauses every other cached player (one sound at a time).
     static func setActive(clientID: UUID, urlString: String, active: Bool) {
         guard let entry = entry(for: urlString) else { return }
         if active {
+            for (key, other) in entries where key != urlString {
+                other.wantsPlay = false
+                other.activeClientID = nil
+                if other.player.rate != 0 {
+                    other.player.pause()
+                }
+            }
             entry.activeClientID = clientID
             entry.wantsPlay = true
             if entry.player.rate == 0 {
@@ -178,16 +186,20 @@ enum ShortVideoPlayerCache {
         }
     }
 
-    static func setMuted(clientID: UUID, urlString: String, muted: Bool) {
-        // Apply to this clip; feed mute is global so also sync every cached player.
-        entries[urlString]?.player.isMuted = muted
+    /// Immediate pause/resume for the active Shorts tap — bypasses SwiftUI update lag.
+    static func setPlaybackPaused(urlString: String, paused: Bool) {
+        guard let entry = entry(for: urlString) else { return }
+        if paused {
+            entry.wantsPlay = false
+            entry.player.pause()
+        } else {
+            entry.wantsPlay = true
+            entry.player.play()
+        }
     }
 
-    /// Feed-wide mute — every in-memory clip follows the same preference.
-    static func setAllMuted(_ muted: Bool) {
-        for entry in entries.values {
-            entry.player.isMuted = muted
-        }
+    static func setMuted(clientID: UUID, urlString: String, muted: Bool) {
+        entries[urlString]?.player.isMuted = muted
     }
 
     private static func entry(for urlString: String) -> Entry? {

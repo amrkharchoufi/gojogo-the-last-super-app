@@ -21,9 +21,11 @@ struct MainAppView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.easeInOut(duration: 0.28), value: app.navMode)
-            // Crossfade between sections instead of a hard cut.
-            .animation(.easeInOut(duration: 0.22), value: app.activeTab)
+            // Don't attach implicit animations to the whole tab surface — they
+            // cascade into ScrollView contentOffset and make Home jump on nav taps.
+            .animation(nil, value: app.activeTab)
+            .animation(nil, value: app.navMode)
+            .animation(nil, value: app.navBarExpanded)
 
             // Soft scrim when composing — Apple blur feel
             if app.isComposing {
@@ -39,6 +41,13 @@ struct MainAppView: View {
             }
 
             if !app.isWorldImmersive {
+                // Full-width shield so bottom taps never hit the feed ScrollView.
+                Color.clear
+                    .frame(height: 96)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(true)
+
                 GGTabBar(ghosted: app.isImmersive)
                     .padding(.bottom, app.isComposing ? 2 : 0)
                     .safeAreaPadding(.bottom, 0)

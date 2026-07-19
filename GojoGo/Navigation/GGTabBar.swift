@@ -92,7 +92,10 @@ struct GGTabBar: View {
 
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                withAnimation(Msg.modeSpring) { app.navBarExpanded = true }
+                ScrollChromeControl.suppressTabBarJitter()
+                // No withAnimation — GGTabBar already animates navBarExpanded locally.
+                // Global withAnimation was springing the Home feed (esp. video posts).
+                app.navBarExpanded = true
             } label: {
                 VStack(spacing: 3) {
                     activeTabGlyph
@@ -279,8 +282,11 @@ struct GGTabBar: View {
         let active = app.activeTab == tab
         return Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            withAnimation(.easeOut(duration: 0.2)) { app.activeTab = tab }
-            withAnimation(Msg.modeSpring) { app.navBarExpanded = false }
+            ScrollChromeControl.suppressTabBarJitter()
+            if app.activeTab != tab {
+                app.activeTab = tab
+            }
+            app.navBarExpanded = false
         } label: {
             icon()
                 .environment(\.ggTabActive, active)
@@ -299,8 +305,11 @@ struct GGTabBar: View {
     private var madeleineButton: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            withAnimation(.easeOut(duration: 0.2)) { app.activeTab = .madeleine }
-            withAnimation(Msg.modeSpring) { app.navBarExpanded = false }
+            ScrollChromeControl.suppressTabBarJitter()
+            if app.activeTab != .madeleine {
+                app.activeTab = .madeleine
+            }
+            app.navBarExpanded = false
         } label: {
             MiniOrb(size: 30, glow: true)
                 .frame(width: 40, height: Msg.tabHit)

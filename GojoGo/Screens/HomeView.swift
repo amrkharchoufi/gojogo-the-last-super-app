@@ -11,23 +11,36 @@ struct HomeView: View {
         ZStack(alignment: .top) {
             GGColor.bg.ignoresSafeArea()
 
-            ScrollView(showsIndicators: false) {
-                LazyVStack(spacing: 0) {
+            // A List (UITableView-backed) instead of ScrollView+LazyVStack: List keeps
+            // the top visible row pinned when off-screen rows re-measure, so re-renders
+            // from bottom-nav taps can't shift the feed. A LazyVStack, by contrast,
+            // re-estimates heterogeneous off-screen row heights on every re-render and
+            // jumps (a half-scrolled video would snap into view).
+            List {
+                Group {
                     storyRail
-                        .padding(.top, 4)
+                        .padding(.top, 52 + 4)
                         .padding(.bottom, 8)
 
                     ForEach(app.posts) { post in
-                        InstagramPostCard(post: post)
-                        Rectangle()
-                            .fill(GGColor.ink(0.08))
-                            .frame(height: 0.5)
+                        VStack(spacing: 0) {
+                            InstagramPostCard(post: post)
+                            Rectangle()
+                                .fill(GGColor.ink(0.08))
+                                .frame(height: 0.5)
+                        }
                     }
 
                     Color.clear.frame(height: tabBarInset)
                 }
-                .padding(.top, 52)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
+            .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 0)
+            .scrollContentBackground(.hidden)
+            .scrollIndicators(.hidden)
             .coordinateSpace(name: "homeFeed")
             .trackScrollChrome(hidden: $hideChrome)
 
@@ -85,6 +98,16 @@ struct HomeView: View {
             )
             .autoHideChrome(hideChrome)
         }
+        // Keep feed scroll geometry out of tab-bar spring animations.
+        .animation(nil, value: app.navBarExpanded)
+        .onChange(of: app.navBarExpanded) { _, _ in
+            ScrollChromeControl.suppressTabBarJitter()
+            hideChrome = false
+        }
+        .onChange(of: app.activeTab) { _, _ in
+            ScrollChromeControl.suppressTabBarJitter()
+            hideChrome = false
+        }
         .onChange(of: storyPicker) { _, item in
             Task {
                 if let data = try? await item?.loadTransferable(type: Data.self) {
@@ -95,18 +118,57 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Stories — single horizontal rail
+    // MARK: Stories — 3×3 circle grid (Messages Favorites style)
 
+    private let storyCircleSize: CGFloat = 80
+    private let storyColGap: CGFloat = 18
+
+    /// First 8 tray stories + More as the 9th cell.
+    private var homeStorySlots: [Story] {
+        Array(app.storyTray.prefix(8))
+    }
+
+    /// Total cells = stories + the trailing "More" cell.
+    private var storyCellCount: Int { homeStorySlots.count + 1 }
+
+    /// Row start indices for a fixed 3-column layout.
+    private var storyRowStarts: [Int] {
+        Array(stride(from: 0, to: storyCellCount, by: 3))
+    }
+
+    // A non-lazy grid: the rail is a small, fixed set of cells (≤9), so laziness
+    // buys nothing and actively hurts — a nested LazyVGrid reports a different
+    // height once it scrolls off-screen above the feed, and any re-render (e.g. a
+    // bottom-nav tap) re-resolves that height and jumps the whole feed. A plain
+    // VStack/HStack keeps a stable, deterministic height at all scroll positions.
     private var storyRail: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 14) {
-                ForEach(app.storyTray) { story in
-                    storyCell(story)
+        HStack {
+            Spacer(minLength: 0)
+            VStack(spacing: 14) {
+                ForEach(storyRowStarts, id: \.self) { start in
+                    HStack(spacing: storyColGap) {
+                        ForEach(start..<min(start + 3, storyCellCount), id: \.self) { i in
+                            storyRailCell(i)
+                        }
+                        // Pad short final rows so columns stay left-anchored.
+                        ForEach(0..<max(0, start + 3 - storyCellCount), id: \.self) { _ in
+                            Color.clear.frame(width: storyCircleSize, height: 1)
+                        }
+                    }
                 }
-                moreStoryCell
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func storyRailCell(_ i: Int) -> some View {
+        if i < homeStorySlots.count {
+            storyCell(homeStorySlots[i])
+        } else {
+            moreStoryCell
         }
     }
 
@@ -114,24 +176,25 @@ struct HomeView: View {
         Button {
             app.showStoriesBrowser = true
         } label: {
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 ZStack {
                     Circle()
                         .strokeBorder(
                             GGColor.ink(0.28),
                             style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
                         )
-                        .frame(width: 90, height: 90)
+                        .frame(width: storyCircleSize, height: storyCircleSize)
                     Text("+")
-                        .font(.system(size: 26, weight: .medium))
+                        .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(GGColor.ink(0.85))
                 }
+
                 Text("More")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(GGColor.textSecondary)
-                    .frame(width: 90)
                     .lineLimit(1)
             }
+            .frame(width: storyCircleSize)
         }
         .buttonStyle(.plain)
     }
@@ -141,34 +204,34 @@ struct HomeView: View {
         let hasMedia = story.hasMedia
         let ring: Bool = story.isYou || (hasMedia && !story.seen)
 
-        let label = VStack(spacing: 6) {
+        let label = VStack(spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
                 UserAvatar(
-                    size: 84,
+                    size: storyCircleSize,
                     letter: story.letter,
                     ring: ring,
                     imageURL: story.isYou && !hasMedia ? app.user.avatarURL : story.imageURL,
                     imageData: story.imageData
                 )
                 .opacity(story.seen && !story.isYou ? 0.72 : 1)
+                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
 
                 if story.isYou {
                     Image(systemName: "plus.circle.fill")
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.black, .white)
-                        .font(.system(size: 24))
+                        .font(.system(size: 18))
                         .background(Circle().fill(.black).padding(2))
-                        .offset(x: 2, y: 2)
+                        .offset(x: 1, y: 1)
                 }
             }
-            .frame(width: 90, height: 90)
 
             Text(story.isYou ? "Your story" : story.name)
-                .font(.system(size: 11))
-                .foregroundStyle(story.seen && !story.isYou ? GGColor.textTertiary : GGColor.textPrimary)
-                .frame(width: 90)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(story.seen && !story.isYou ? GGColor.textTertiary : GGColor.textSecondary)
                 .lineLimit(1)
         }
+        .frame(width: storyCircleSize)
 
         if story.isYou && !hasMedia {
             PhotosPicker(selection: $storyPicker, matching: .images) { label }
@@ -190,7 +253,8 @@ struct InstagramPostCard: View {
     @State private var isHolding = false
     @State private var carouselPage = 0
     /// Drives autoplay / stop when scrolling the feed.
-    @State private var isInViewport = true
+    /// Start false — otherwise every recycled cell autoplays until the observer runs.
+    @State private var isInViewport = false
 
     private var live: Post {
         app.posts.first(where: { $0.id == post.id }) ?? post
@@ -205,7 +269,10 @@ struct InstagramPostCard: View {
         return UIScreen.main.bounds.width * clamped
     }
 
-    private var shouldPlayVideo: Bool { isInViewport && !isHolding }
+    /// Only the feed's focused post may play — prevents stacked carousel / neighbor audio.
+    private var shouldPlayVideo: Bool {
+        isInViewport && !isHolding && app.activeFeedVideoPostID == live.id
+    }
 
     var body: some View {
         let card = VStack(alignment: .leading, spacing: 0) {
@@ -325,6 +392,7 @@ struct InstagramPostCard: View {
                             }
                         }
                         .tabViewStyle(.page(indexDisplayMode: .never))
+                        .clipped()
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -391,33 +459,61 @@ struct InstagramPostCard: View {
             .background {
                 FeedViewportObserver(isVisible: $isInViewport)
             }
+            .onChange(of: isInViewport) { _, visible in
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    if visible {
+                        app.activeFeedVideoPostID = live.id
+                    } else if app.activeFeedVideoPostID == live.id {
+                        app.activeFeedVideoPostID = nil
+                    }
+                }
+            }
+            .onChange(of: carouselPage) { _, _ in
+                // Drop hold-pause when switching slides; only the new page may play.
+                isHolding = false
+                if isInViewport {
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        app.activeFeedVideoPostID = live.id
+                    }
+                }
+            }
             .onDisappear {
                 isInViewport = false
                 isHolding = false
+                if app.activeFeedVideoPostID == live.id {
+                    app.activeFeedVideoPostID = nil
+                }
             }
         }
     }
 
     private func feedSlide(_ slide: PostMediaItem, index: Int) -> some View {
-        ZStack {
-            MediaImage(url: slide.imageURL, data: slide.imageData, cornerRadius: 0)
+        let isVideoSlide = slide.isVideo && !(slide.videoURL?.isEmpty ?? true)
+        // Keep current ±1 players mounted so swipe doesn't flash a poster.
+        let keepPlayerMounted = abs(carouselPage - index) <= 1
+
+        return ZStack {
+            Color.black
+
+            if isVideoSlide, let videoURL = slide.videoURL, keepPlayerMounted {
+                ShortVideoPlayer(
+                    urlString: videoURL,
+                    isActive: shouldPlayVideo && carouselPage == index,
+                    isMuted: app.feedVideosMuted
+                )
                 .frame(maxWidth: .infinity)
                 .frame(height: mediaHeight)
                 .clipped()
-
-            if slide.isVideo, let videoURL = slide.videoURL, !videoURL.isEmpty {
-                // Only the active page attaches the shared player layer (avoids duplicates).
-                if carouselPage == index {
-                    ShortVideoPlayer(
-                        urlString: videoURL,
-                        isActive: shouldPlayVideo,
-                        isMuted: app.feedVideosMuted
-                    )
+                .allowsHitTesting(false)
+            } else if !isVideoSlide {
+                MediaImage(url: slide.imageURL, data: slide.imageData, cornerRadius: 0)
                     .frame(maxWidth: .infinity)
                     .frame(height: mediaHeight)
                     .clipped()
-                    .allowsHitTesting(false)
-                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -428,23 +524,18 @@ struct InstagramPostCard: View {
             _ = app.likePost(live.id)
             heartTrigger += 1
         }
-        .onTapGesture {
-            guard slide.isVideo, !isHolding else { return }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            app.openFeedVideoAsShort(postID: live.id)
-        }
         .onLongPressGesture(
             minimumDuration: 0.22,
             maximumDistance: 40,
             pressing: { pressing in
-                guard slide.isVideo else { return }
+                guard isVideoSlide else { return }
                 // Release finger → resume. Pause only after hold fires in `perform`.
                 if !pressing {
                     isHolding = false
                 }
             },
             perform: {
-                guard slide.isVideo else { return }
+                guard isVideoSlide else { return }
                 isHolding = true
                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
             }
@@ -580,23 +671,59 @@ struct InstagramPostCard: View {
 private struct FeedViewportObserver: UIViewRepresentable {
     @Binding var isVisible: Bool
 
+    func makeCoordinator() -> Coordinator { Coordinator(isVisible: $isVisible) }
+
     func makeUIView(context: Context) -> FeedViewportUIView {
         let view = FeedViewportUIView()
         view.onVisibilityChange = { visible in
-            if isVisible != visible {
-                isVisible = visible
-            }
+            context.coordinator.apply(visible)
         }
         return view
     }
 
     func updateUIView(_ uiView: FeedViewportUIView, context: Context) {
+        context.coordinator.isVisible = $isVisible
         uiView.onVisibilityChange = { visible in
-            if isVisible != visible {
-                isVisible = visible
+            context.coordinator.apply(visible)
+        }
+        // Do not checkVisibility() here — SwiftUI updates (tab bar morph)
+        // would flicker play/pause and spring the feed.
+    }
+
+    final class Coordinator {
+        var isVisible: Binding<Bool>
+        init(isVisible: Binding<Bool>) { self.isVisible = isVisible }
+
+        func apply(_ visible: Bool) {
+            guard isVisible.wrappedValue != visible else { return }
+            if FeedViewportGate.shared.isSuppressed { return }
+            DispatchQueue.main.async {
+                guard self.isVisible.wrappedValue != visible else { return }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    self.isVisible.wrappedValue = visible
+                }
             }
         }
-        uiView.checkVisibility()
+    }
+}
+
+final class FeedViewportGate {
+    static let shared = FeedViewportGate()
+    private var suppressUntil: Date = .distantPast
+    private let lock = NSLock()
+
+    var isSuppressed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return Date() < suppressUntil
+    }
+
+    func suppress(for seconds: TimeInterval = 0.5) {
+        lock.lock()
+        suppressUntil = Date().addingTimeInterval(seconds)
+        lock.unlock()
     }
 }
 
@@ -618,6 +745,8 @@ private final class FeedViewportUIView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // Skip layout-driven checks while the tab bar is morphing.
+        guard !FeedViewportGate.shared.isSuppressed else { return }
         checkVisibility()
     }
 
@@ -658,6 +787,7 @@ private final class FeedViewportUIView: UIView {
     }
 
     @objc private func tick() {
+        guard !FeedViewportGate.shared.isSuppressed else { return }
         checkVisibility()
     }
 

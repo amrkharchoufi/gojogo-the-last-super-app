@@ -107,7 +107,9 @@ enum ComposeMediaIngest {
 
     static func placeholderPoster(for kind: ComposeMediaKind) -> Data {
         let icon = kind == .short ? "bolt.fill" : "play.rectangle.fill"
-        let size = CGSize(width: 300, height: 400)
+        let size = kind == .short
+            ? CGSize(width: 270, height: 480) // 9:16 Reels
+            : CGSize(width: 400, height: 225) // 16:9 long-form
         let renderer = UIGraphicsImageRenderer(size: size)
         let image = renderer.image { ctx in
             UIColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1).setFill()

@@ -312,6 +312,14 @@ private final class ChromeScrollGate {
     private var lastY: CGFloat = 0
     private var hasBaseline = false
     private var idleTask: Task<Void, Never>?
+    private var suppressUntil: Date = .distantPast
+
+    /// Ignore offset jitter while the tab bar morphs / layout settles.
+    func suppress(for seconds: TimeInterval = 0.4) {
+        suppressUntil = Date().addingTimeInterval(seconds)
+        hasBaseline = false
+        cancelIdle()
+    }
 
     func handle(
         y: CGFloat,
@@ -320,6 +328,12 @@ private final class ChromeScrollGate {
         deltaThreshold: CGFloat,
         idleRevealNanos: UInt64
     ) {
+        if Date() < suppressUntil {
+            lastY = y
+            hasBaseline = true
+            return
+        }
+
         if !hasBaseline {
             lastY = y
             hasBaseline = true
@@ -335,7 +349,8 @@ private final class ChromeScrollGate {
             return
         }
 
-        if abs(delta) < 0.5 { return }
+        // Ignore tiny layout adjustments (common when bottom chrome resizes).
+        if abs(delta) < 1.0 { return }
 
         if delta > deltaThreshold {
             setHidden(true)
@@ -383,5 +398,13 @@ extension View {
             .opacity(hidden ? 0 : 1)
             .allowsHitTesting(!hidden)
             .accessibilityHidden(hidden)
+    }
+}
+
+/// Call when bottom nav morphs so feed scroll chrome doesn't react to layout jitter.
+enum ScrollChromeControl {
+    @MainActor static func suppressTabBarJitter() {
+        ChromeScrollGate.shared.suppress(for: 0.5)
+        FeedViewportGate.shared.suppress(for: 0.5)
     }
 }
