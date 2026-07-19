@@ -1,7 +1,7 @@
 import SwiftUI
 import CoreLocation
 import UIKit
-import MapboxMaps
+@_spi(Experimental) import MapboxMaps
 
 /// Mapbox map surface for GojoTravel — dark night style to match the app.
 struct TravelMapView: View {
@@ -11,13 +11,29 @@ struct TravelMapView: View {
     var driver: TravelDriver?
     var showRoute: Bool
 
+    @State private var routeCoordinates: [CLLocationCoordinate2D] = []
+
+    private var routeKey: String {
+        guard showRoute, let pickup, let dropoff else { return "" }
+        return String(format: "%.5f,%.5f→%.5f,%.5f",
+                      pickup.latitude, pickup.longitude,
+                      dropoff.latitude, dropoff.longitude)
+    }
+
     var body: some View {
         Map(viewport: $viewport) {
-            if showRoute, let pickup, let dropoff {
-                PolylineAnnotation(lineCoordinates: routeCoordinates(from: pickup, to: dropoff))
-                    .lineColor(StyleColor(UIColor.white))
-                    .lineWidth(4)
-                    .lineOpacity(0.85)
+            if showRoute, routeCoordinates.count >= 2 {
+                PolylineAnnotationGroup {
+                    PolylineAnnotation(lineCoordinates: routeCoordinates)
+                        .lineWidth(5)
+                        .lineOpacity(1)
+                }
+                .lineColor(UIColor.white)
+                .lineColorUseTheme(.none)
+                .lineJoin(.round)
+                .lineCap(.round)
+                .lineEmissiveStrength(1)
+                .slot(.top)
             }
 
             if let pickup {
@@ -45,30 +61,21 @@ struct TravelMapView: View {
         }
         .mapStyle(.standard(lightPreset: .night, show3dObjects: true))
         .ignoresSafeArea()
+        .task(id: routeKey) {
+            guard showRoute, let pickup, let dropoff else {
+                routeCoordinates = []
+                return
+            }
+            let from = coord(pickup), to = coord(dropoff)
+            routeCoordinates = [from, to]
+            if let road = await MapboxDirections.route(from: from, to: to), road.count >= 2 {
+                routeCoordinates = road
+            }
+        }
     }
 
     private func coord(_ place: TravelPlace) -> CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: place.latitude, longitude: place.longitude)
-    }
-
-    /// Soft bezier-ish polyline between pickup and dropoff (prototype route).
-    private func routeCoordinates(from a: TravelPlace, to b: TravelPlace) -> [CLLocationCoordinate2D] {
-        let start = coord(a)
-        let end = coord(b)
-        let mid = CLLocationCoordinate2D(
-            latitude: (start.latitude + end.latitude) / 2 + 0.004,
-            longitude: (start.longitude + end.longitude) / 2 - 0.003
-        )
-        var points: [CLLocationCoordinate2D] = []
-        let steps = 24
-        for i in 0...steps {
-            let t = Double(i) / Double(steps)
-            let u = 1 - t
-            let lat = u * u * start.latitude + 2 * u * t * mid.latitude + t * t * end.latitude
-            let lon = u * u * start.longitude + 2 * u * t * mid.longitude + t * t * end.longitude
-            points.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
-        }
-        return points
     }
 }
 
@@ -154,13 +161,29 @@ struct DeliveryMapView: View {
     var courier: CLLocationCoordinate2D?
     var showRoute: Bool
 
+    @State private var routeCoordinates: [CLLocationCoordinate2D] = []
+
+    private var routeKey: String {
+        guard showRoute else { return "" }
+        return String(format: "%.5f,%.5f→%.5f,%.5f",
+                      restaurant.latitude, restaurant.longitude,
+                      home.latitude, home.longitude)
+    }
+
     var body: some View {
         Map(viewport: $viewport) {
-            if showRoute {
-                PolylineAnnotation(lineCoordinates: routeCoordinates(from: restaurant, to: home))
-                    .lineColor(StyleColor(UIColor.white))
-                    .lineWidth(4)
-                    .lineOpacity(0.85)
+            if showRoute, routeCoordinates.count >= 2 {
+                PolylineAnnotationGroup {
+                    PolylineAnnotation(lineCoordinates: routeCoordinates)
+                        .lineWidth(5)
+                        .lineOpacity(1)
+                }
+                .lineColor(UIColor.white)
+                .lineColorUseTheme(.none)
+                .lineJoin(.round)
+                .lineCap(.round)
+                .lineEmissiveStrength(1)
+                .slot(.top)
             }
 
             MapViewAnnotation(coordinate: restaurant) {
@@ -182,24 +205,16 @@ struct DeliveryMapView: View {
         }
         .mapStyle(.standard(lightPreset: .night, show3dObjects: true))
         .ignoresSafeArea()
-    }
-
-    private func routeCoordinates(from a: CLLocationCoordinate2D,
-                                  to b: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
-        let mid = CLLocationCoordinate2D(
-            latitude: (a.latitude + b.latitude) / 2 + 0.0035,
-            longitude: (a.longitude + b.longitude) / 2 - 0.0025
-        )
-        var points: [CLLocationCoordinate2D] = []
-        let steps = 24
-        for i in 0...steps {
-            let t = Double(i) / Double(steps)
-            let u = 1 - t
-            let lat = u * u * a.latitude + 2 * u * t * mid.latitude + t * t * b.latitude
-            let lon = u * u * a.longitude + 2 * u * t * mid.longitude + t * t * b.longitude
-            points.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
+        .task(id: routeKey) {
+            guard showRoute else {
+                routeCoordinates = []
+                return
+            }
+            routeCoordinates = [restaurant, home]
+            if let road = await MapboxDirections.route(from: restaurant, to: home), road.count >= 2 {
+                routeCoordinates = road
+            }
         }
-        return points
     }
 }
 

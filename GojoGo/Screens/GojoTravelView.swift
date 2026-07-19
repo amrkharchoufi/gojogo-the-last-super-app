@@ -21,6 +21,8 @@ struct GojoTravelView: View {
                     && [.choosingRide, .matching, .enRoute, .inTrip, .completed]
                         .contains(app.travelPhase)
             )
+            // Don't let the map eat taps meant for the ride sheet.
+            .allowsHitTesting(app.travelPhase == .home || app.travelPhase == .enRoute || app.travelPhase == .inTrip)
 
             // Top fade + brand chrome
             VStack(spacing: 0) {
@@ -39,6 +41,7 @@ struct GojoTravelView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
                 Spacer(minLength: 0)
+                    .allowsHitTesting(false)
             }
 
             bottomChrome
@@ -52,6 +55,12 @@ struct GojoTravelView: View {
         .onChange(of: app.travelPhase) { _, _ in refreshCamera(animated: true) }
         .onChange(of: app.travelDropoff?.id) { _, _ in refreshCamera(animated: true) }
         .onChange(of: app.travelDriver?.id) { _, _ in refreshCamera(animated: true) }
+        .onChange(of: app.travelDriver?.latitude) { _, _ in
+            // Follow the moving car without a heavy camera animation each tick.
+            guard app.travelPhase == .enRoute || app.travelPhase == .inTrip,
+                  let driver = app.travelDriver else { return }
+            viewport = TravelCamera.follow(driver: driver)
+        }
     }
 
     // MARK: Header
@@ -78,6 +87,10 @@ struct GojoTravelView: View {
                         .glassCapsule(tint: Color.black.opacity(0.45), interactive: false, dense: true)
                 }
                 .buttonStyle(PressableStyle())
+            } else {
+                // Sit left of the Mapbox compass so it isn't covered.
+                PartnerHeaderButton(role: .driver)
+                    .padding(.trailing, 46)
             }
         }
     }
@@ -236,13 +249,15 @@ struct GojoTravelView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     app.backFromRideChoice()
                 } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(GGColor.textPrimary)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .glassCapsule(tint: Color.black.opacity(0.35), interactive: false, dense: true)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(PressableStyle())
 
@@ -256,7 +271,7 @@ struct GojoTravelView: View {
                             .foregroundStyle(GGColor.textSecondary)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
 
             VStack(spacing: 8) {
@@ -281,12 +296,15 @@ struct GojoTravelView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
                     .background(Capsule().fill(GGColor.white))
+                    .contentShape(Capsule())
             }
             .buttonStyle(PressableStyle())
             .disabled(app.selectedRide == nil)
             .opacity(app.selectedRide == nil ? 0.45 : 1)
         }
         .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .glass(cornerRadius: 24, tint: Color.black.opacity(0.52), floating: true)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -556,7 +574,7 @@ struct GojoTravelView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(GGColor.textSecondary)
             }
-            Spacer()
+            Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(option.price)
                     .font(.ggMono(14, .semibold))
@@ -567,14 +585,16 @@ struct GojoTravelView: View {
             }
         }
         .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(selected ? GGColor.ink(0.12) : Color.clear)
+                .fill(selected ? GGColor.ink(0.12) : GGColor.ink(0.04))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(selected ? GGColor.ink(0.35) : Color.clear, lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func locationLine(dot: Color, title: String, value: String) -> some View {

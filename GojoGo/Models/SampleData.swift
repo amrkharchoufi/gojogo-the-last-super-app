@@ -263,6 +263,107 @@ enum SampleData {
 
     static let allSampleClips: [String] = [clip1, clip2, clip3, clip4, clip5, clip6]
 
+    // MARK: - Profile Home media library + random layouts
+
+    /// Pickable media for Banner / Photos-&-video blocks: every sample image,
+    /// plus each bundled clip paired with a poster frame.
+    static let homeMediaLibrary: [ProfileHomeMedia] = {
+        let images = allSampleMedia.map { ProfileHomeMedia(imageURL: $0) }
+        let videos = allSampleClips.enumerated().map { i, clip in
+            ProfileHomeMedia(videoURL: clip, posterURL: allSampleMedia[i % allSampleMedia.count])
+        }
+        // Interleave so the picker doesn't show all photos then all videos.
+        var out: [ProfileHomeMedia] = []
+        let maxCount = max(images.count, videos.count)
+        for i in 0..<maxCount {
+            if i < images.count { out.append(images[i]) }
+            if i < videos.count { out.append(videos[i]) }
+        }
+        return out
+    }()
+
+    private static let homeBannerTitles = [
+        "", "", "Welcome", "My corner of gojogo", "Currently", "Studio", "On air",
+    ]
+    private static let homeHeadings = [
+        "Welcome to my world", "Nice to see you", "Here's the vibe",
+        "What I'm making", "The good stuff", "Hey, I'm glad you're here",
+    ]
+    private static let homeSubs = [
+        "Building on gojogo — here's what I'm making.",
+        "A little bit of everything I'm into.",
+        "Work, play, and everything between.",
+        "Fresh drops and old favourites.",
+        "Thanks for stopping by 👋",
+    ]
+    private static let homeFeaturedLabels = ["Latest drop", "Pinned", "Right now", "Featured", "Don't miss"]
+    private static let homeMediaTitles = ["Moodboard", "Lately", "Snapshots", "Reels & shots", "The gallery"]
+    private static let homeGalleryTitles = ["Selected work", "Recent posts", "Highlights", "From the feed", "Best of"]
+    private static let homeNotes = [
+        "Currently building things I wish existed. DMs open for collabs.",
+        "Coffee, code, and cars. In that order.",
+        "If you made it this far, say hi — I reply to everyone.",
+        "New drops every week. Turn on notifications so you don't miss them.",
+    ]
+    private static let homeLinkLabels = ["Say hi 👋", "My website", "Work with me", "Latest project", "Book a call"]
+
+    /// A varied starter Home page — different for every user on first open.
+    static func randomProfileHome(handle: String, posts: [Post]) -> [ProfileHomeBlock] {
+        var blocks: [ProfileHomeBlock] = []
+        let lib = homeMediaLibrary
+
+        // Banner up top (most of the time).
+        if Int.random(in: 0..<10) < 7, let cover = lib.randomElement() {
+            blocks.append(ProfileHomeBlock(kind: .banner,
+                                           title: homeBannerTitles.randomElement() ?? "",
+                                           media: [cover]))
+        }
+
+        // Heading intro.
+        blocks.append(ProfileHomeBlock(kind: .heading,
+                                       title: homeHeadings.randomElement() ?? "Welcome",
+                                       text: homeSubs.randomElement() ?? "",
+                                       style: [.accent, .card, .plain].randomElement() ?? .accent))
+
+        // A media strip of pictures & clips.
+        if Int.random(in: 0..<10) < 6 {
+            let items = Array(lib.shuffled().prefix(Int.random(in: 3...6)))
+            blocks.append(ProfileHomeBlock(kind: .media,
+                                           title: homeMediaTitles.randomElement() ?? "Gallery",
+                                           media: items,
+                                           columns: [2, 3].randomElement() ?? 3))
+        }
+
+        // Featured post.
+        if let p = posts.randomElement() {
+            blocks.append(ProfileHomeBlock(kind: .featured,
+                                           title: homeFeaturedLabels.randomElement() ?? "Featured",
+                                           postIDs: [p.id]))
+        }
+
+        // Gallery of posts.
+        if posts.count > 1 {
+            blocks.append(ProfileHomeBlock(kind: .gallery,
+                                           title: homeGalleryTitles.randomElement() ?? "Selected work",
+                                           postIDs: posts.shuffled().prefix(Int.random(in: 3...6)).map(\.id),
+                                           columns: [2, 3].randomElement() ?? 3))
+        }
+
+        // Occasional note.
+        if Bool.random() {
+            blocks.append(ProfileHomeBlock(kind: .text, text: homeNotes.randomElement() ?? ""))
+        }
+
+        // Link CTA.
+        if Int.random(in: 0..<10) < 7 {
+            blocks.append(ProfileHomeBlock(kind: .link,
+                                           title: homeLinkLabels.randomElement() ?? "Say hi",
+                                           url: "https://gojogo.app/@\(handle)",
+                                           style: [.accent, .card].randomElement() ?? .accent))
+        }
+        return blocks
+    }
+
     // Legacy remote sample URLs — remapped to bundled clips for old caches.
     private static let videoBigBuck = clip1
     private static let videoElephants = clip2
@@ -758,6 +859,76 @@ enum SampleData {
             latitude: pickup.latitude + Double.random(in: -0.012...0.012),
             longitude: pickup.longitude + Double.random(in: -0.012...0.012)
         )
+    }
+
+    // MARK: - Partner jobs (driver / courier dashboard)
+
+    private static let partnerCustomers: [(String, String)] = [
+        ("Marta", "mw-marta"), ("Kaleb", "mw-kaleb"), ("Sena", "mw-sena"),
+        ("Dani", "mw-dani"), ("Omar", "mw-omar"), ("Lea", "mw-lea"),
+        ("Nadia", "p-nadia"), ("Yassine", "p-yassine"), ("Théo", "c-theo"),
+    ]
+
+    private static let driverPlaces: [(String, String)] = [
+        ("Marina Bay", "Corniche"), ("Old Medina", "Bab Marrakech"),
+        ("Twin Center", "Maârif"), ("Anfa Place", "Boulevard de la Corniche"),
+        ("Gare Casa-Port", "Downtown"), ("Morocco Mall", "Aïn Diab"),
+        ("Airport Mohammed V", "Nouaceur"), ("Habous Quarter", "New Medina"),
+    ]
+
+    private static let courierRestaurants: [String] = [
+        "Café Atlas", "Sushi Corner", "La Sqala", "Pizza Milano",
+        "Green Bowl", "Rick's Café", "Burger Yard", "Le Cabestan",
+    ]
+
+    private static let courierDropoffs: [(String, String)] = [
+        ("Home", "12 Rue Atlas"), ("Office", "Twin Center, Tower A"),
+        ("Résidence Al Manar", "Apt 4B"), ("14 Bd Zerktouni", "3rd floor"),
+        ("Villa Anfa", "Gate 2"), ("Studio Maârif", "Rue de Paris"),
+    ]
+
+    static func samplePartnerJob(role: PartnerRole) -> PartnerJob {
+        let (name, seed) = partnerCustomers.randomElement()!
+        let avatar = "https://picsum.photos/seed/\(seed)/200/200"
+        // Scatter pickup/dropoff/start around Casablanca for the map guide.
+        let cLat = 33.5731, cLon = -7.5898
+        func jitter(_ base: Double, _ spread: Double) -> Double { base + Double.random(in: -spread...spread) }
+        let pLat = jitter(cLat, 0.02), pLon = jitter(cLon, 0.025)
+        let dLat = jitter(cLat, 0.02), dLon = jitter(cLon, 0.025)
+        let oLat = pLat + Double.random(in: -0.008...0.008)
+        let oLon = pLon + Double.random(in: -0.008...0.008)
+
+        switch role {
+        case .driver:
+            let pickup = driverPlaces.randomElement()!
+            var dropoff = driverPlaces.randomElement()!
+            while dropoff == pickup { dropoff = driverPlaces.randomElement()! }
+            let km = Double.random(in: 2.4...14.5)
+            return PartnerJob(
+                role: .driver, customerName: name,
+                pickupName: pickup.0, pickupSubtitle: pickup.1,
+                dropoffName: dropoff.0, dropoffSubtitle: dropoff.1,
+                distanceKm: km, minutes: Int((km * 2.4).rounded()) + 3,
+                fare: (km * 1.35 + 2.5).rounded() + 0.5,
+                customerAvatarURL: avatar,
+                originLat: oLat, originLon: oLon,
+                pickupLat: pLat, pickupLon: pLon,
+                dropoffLat: dLat, dropoffLon: dLon)
+        case .courier:
+            let restaurant = courierRestaurants.randomElement()!
+            let drop = courierDropoffs.randomElement()!
+            let km = Double.random(in: 0.9...6.2)
+            return PartnerJob(
+                role: .courier, customerName: name,
+                pickupName: restaurant, pickupSubtitle: "Ready in 5 min",
+                dropoffName: drop.0, dropoffSubtitle: drop.1,
+                distanceKm: km, minutes: Int((km * 2.6).rounded()) + 4,
+                fare: (km * 0.9 + 2.2).rounded() + 0.5,
+                customerAvatarURL: avatar,
+                originLat: oLat, originLon: oLon,
+                pickupLat: pLat, pickupLon: pLon,
+                dropoffLat: dLat, dropoffLon: dLon)
+        }
     }
 
     // MARK: - My World

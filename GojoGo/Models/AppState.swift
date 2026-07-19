@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import CoreLocation
 
 @MainActor
 final class AppState: ObservableObject {
@@ -28,13 +30,27 @@ final class AppState: ObservableObject {
     @Published var worldIsEditing: Bool = false
     @Published var worldSharingLocation: Bool = true
     @Published var showWorldFilters: Bool = false
-    @Published var showWorldNewMessage: Bool = false
+    /// Single modal-sheet slot for My World (new message / poll / send-later).
+    @Published var worldSheet: WorldSheetKind? = nil
     @Published var worldFilterUnreadOnly: Bool = false
     /// Media staged in the chat composer, sent together with the next message.
     @Published var worldPendingAttachments: [WorldPendingAttachment] = []
     /// Conversation currently showing the "…" typing indicator.
     @Published var worldTypingConversationID: UUID? = nil
     private var worldReplyTasks: [UUID: Task<Void, Never>] = [:]
+    /// Message the tapback/action overlay is focused on (long-press target).
+    @Published var worldReactionTarget: UUID? = nil
+    /// Message the composer is currently quoting as an inline reply.
+    @Published var worldReplyingTo: UUID? = nil
+    /// In-view overlays shown over the immersive chat (sheets don't present there).
+    @Published var showWorldPollOverlay: Bool = false
+    @Published var showWorldSendLaterOverlay: Bool = false
+    /// Chosen date for a Send-Later message.
+    @Published var worldSendLaterDate: Date = Calendar.current.date(
+        byAdding: .day, value: 1, to: Date()) ?? Date()
+    /// When set, the next send is scheduled for this label instead of sent now.
+    @Published var worldSendLaterLabel: String? = nil
+    private var worldScheduledTasks: [UUID: Task<Void, Never>] = [:]
     @Published var showProfile: Bool = false
     @Published var profileUser: ProfileUser? = nil
     @Published var showStoriesBrowser: Bool = false
@@ -89,6 +105,14 @@ final class AppState: ObservableObject {
     @Published var showEditProfile: Bool = false
     @Published var viewingPostID: UUID? = nil
 
+    // Profile Home (customizable canvas tab)
+    @Published var profileHomeBlocks: [ProfileHomeBlock] = []
+    @Published var profileHomeEditing: Bool = false
+    /// Non-nil while a block editor sheet is presented.
+    @Published var editingHomeBlockID: UUID? = nil
+    /// Drives the "add a block" type-picker sheet.
+    @Published var showHomeBlockPicker: Bool = false
+
     // User + content (live, mutable)
     @Published var user = GGUser()
     @Published var interests: [Interest] = SampleData.interests
@@ -137,6 +161,28 @@ final class AppState: ObservableObject {
     @Published var deliveryOrderTotalLabel: String = ""
     @Published var deliveryOrderSummary: String = ""
     private var deliveryTask: Task<Void, Never>?
+
+    // Partner (Become a driver / delivery partner)
+    /// Roles the user has fully onboarded into (can go online).
+    @Published var partnerRoles: Set<PartnerRole> = []
+    /// Non-nil while the become-a-partner flow is presented.
+    @Published var partnerOnboardingRole: PartnerRole? = nil
+    @Published var partnerStep: PartnerOnboardingStep = .rules
+    @Published var partnerApplication = PartnerApplication(role: .driver)
+    @Published var partnerAgreedToTerms: Bool = false
+    @Published var partnerStakeProcessing: Bool = false
+    /// Non-nil while the partner dashboard (working UI) is presented.
+    @Published var partnerDashboardRole: PartnerRole? = nil
+    @Published var partnerOnline: Bool = false
+    @Published var partnerJobPhase: PartnerJobPhase = .idle
+    @Published var partnerJob: PartnerJob? = nil
+    @Published var partnerJobProgress: Double = 0
+    // Earnings / trips / rating are tracked independently per role (driver vs courier).
+    @Published var partnerEarningsByRole: [String: Double] = [:]
+    @Published var partnerJobsByRole: [String: Int] = [:]
+    @Published var partnerRatingByRole: [String: Double] = [:]
+    private var partnerOfferTask: Task<Void, Never>?
+    private var partnerJobTask: Task<Void, Never>?
 
     private var persistTask: Task<Void, Never>?
 
@@ -245,6 +291,10 @@ final class AppState: ObservableObject {
         dislikedVideoIDs = Set(cached.dislikedVideoIDs ?? [])
         downloadedVideoIDs = Set(cached.downloadedVideoIDs ?? [])
         notifyHandles = Set(cached.notifyHandles ?? [])
+        partnerRoles = Set((cached.partnerRoles ?? []).compactMap { PartnerRole(rawValue: $0) })
+        partnerEarningsByRole = cached.partnerEarningsByRole ?? [:]
+        partnerJobsByRole = cached.partnerJobsByRole ?? [:]
+        profileHomeBlocks = cached.profileHomeBlocks ?? []
         dmThreads = (cached.dmThreads ?? [:]).mapValues { $0.map { $0.asDomain() } }
         phase = .app
         onboardingStep = 3
@@ -443,6 +493,12 @@ final class AppState: ObservableObject {
         worldPendingAttachments = []
         showWorldAppsMenu = false
         showWorldContact = false
+        worldReactionTarget = nil
+        worldReplyingTo = nil
+        worldSendLaterLabel = nil
+        worldSheet = nil
+        showWorldPollOverlay = false
+        showWorldSendLaterOverlay = false
     }
 
     var worldUnreadCount: Int {
@@ -521,7 +577,7 @@ final class AppState: ObservableObject {
     /// Opens the existing 1:1 thread for a contact, creating it if needed.
     /// Always lands the thread in the main Messages list (unpinned, most recent).
     func startWorldConversation(with contact: WorldContact) {
-        showWorldNewMessage = false
+        worldSheet = nil
         showWorldFilters = false
         worldFilterUnreadOnly = false
         worldSearch = ""
@@ -631,11 +687,39 @@ final class AppState: ObservableObject {
 
         if !text.isEmpty {
             let isEmojiOnly = text.count <= 3 && text.unicodeScalars.allSatisfy { $0.properties.isEmoji }
+            let scheduled = worldSendLaterLabel
             let msg = WorldMessage(kind: isEmojiOnly ? .emoji : .text, text: text,
-                                   fromUser: true, readLabel: "Delivered")
+                                   fromUser: true,
+                                   readLabel: scheduled == nil ? "Delivered" : nil,
+                                   replyTo: currentReplySnippet(),
+                                   scheduledLabel: scheduled)
             worldDraft = ""
-            deliverWorldMessage(msg, preview: "You: \(text)")
+            clearWorldReply()
+            worldSendLaterLabel = nil
+            deliverWorldMessage(msg, preview: "You: \(text)", scheduled: scheduled != nil)
         }
+    }
+
+    /// Builds the quoted snippet for whatever message is being replied to.
+    private func currentReplySnippet() -> WorldReplySnippet? {
+        guard let rid = worldReplyingTo,
+              let convo = selectedWorldConversation,
+              let src = convo.messages.first(where: { $0.id == rid }) else { return nil }
+        let author = src.fromUser ? "You" : (src.senderName ?? convo.title)
+        return WorldReplySnippet(authorName: author,
+                                 preview: src.snippetText,
+                                 fromUser: src.fromUser)
+    }
+
+    func beginWorldReply(to id: UUID) {
+        worldReactionTarget = nil
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.85)) {
+            worldReplyingTo = id
+        }
+    }
+
+    func clearWorldReply() {
+        withAnimation(.easeOut(duration: 0.18)) { worldReplyingTo = nil }
     }
 
     func stageWorldAttachment(_ attachment: WorldPendingAttachment) {
@@ -678,20 +762,159 @@ final class AppState: ObservableObject {
     }
 
     /// Appends an outgoing message to the open thread and schedules the canned reply.
-    private func deliverWorldMessage(_ msg: WorldMessage, preview: String) {
+    /// When `scheduled` is true the bubble first appears in a pending state and is
+    /// "sent" a few seconds later (demo stand-in for Send Later).
+    private func deliverWorldMessage(_ msg: WorldMessage, preview: String, scheduled: Bool = false) {
         guard let id = selectedWorldConversationID,
               let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
         // Only the newest outgoing message carries a receipt label.
-        for j in worldConversations[i].messages.indices where worldConversations[i].messages[j].fromUser {
-            worldConversations[i].messages[j].readLabel = nil
+        if !scheduled {
+            for j in worldConversations[i].messages.indices where worldConversations[i].messages[j].fromUser {
+                worldConversations[i].messages[j].readLabel = nil
+            }
         }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.68)) {
             worldConversations[i].messages.append(msg)
-            worldConversations[i].preview = preview
+            if !scheduled { worldConversations[i].preview = preview }
         }
         bumpWorldConversationActivity(at: i)
         showWorldAppsMenu = false
-        scheduleWorldReply(for: id)
+
+        if scheduled {
+            scheduleWorldSendLater(messageID: msg.id, in: id, preview: preview)
+        } else {
+            scheduleWorldReply(for: id)
+        }
+    }
+
+    /// Fires a scheduled (Send Later) message a few seconds after it's queued.
+    private func scheduleWorldSendLater(messageID: UUID, in convoID: UUID, preview: String) {
+        worldScheduledTasks[messageID]?.cancel()
+        worldScheduledTasks[messageID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self, !Task.isCancelled,
+                  let i = self.worldConversations.firstIndex(where: { $0.id == convoID }),
+                  let j = self.worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
+            else { return }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                for k in self.worldConversations[i].messages.indices
+                where self.worldConversations[i].messages[k].fromUser {
+                    self.worldConversations[i].messages[k].readLabel = nil
+                }
+                self.worldConversations[i].messages[j].scheduledLabel = nil
+                self.worldConversations[i].messages[j].readLabel = "Delivered"
+                self.worldConversations[i].preview = preview
+            }
+            self.bumpWorldConversationActivity(at: i)
+            self.scheduleWorldReply(for: convoID)
+        }
+    }
+
+    func setWorldSendLater(_ label: String?) {
+        worldSendLaterLabel = label
+    }
+
+    // MARK: My World — tapbacks (reactions)
+
+    func toggleWorldReaction(_ tapback: WorldTapback, on messageID: UUID) {
+        guard let id = selectedWorldConversationID,
+              let i = worldConversations.firstIndex(where: { $0.id == id }),
+              let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
+        else { return }
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.6)) {
+            var reactions = worldConversations[i].messages[j].reactions
+            if let existing = reactions.firstIndex(where: { $0.fromUser && $0.tapback == tapback }) {
+                reactions.remove(at: existing)          // same tapback → toggle off
+            } else {
+                reactions.removeAll { $0.fromUser }     // one tapback per person
+                reactions.append(WorldReaction(tapback: tapback, fromUser: true))
+            }
+            worldConversations[i].messages[j].reactions = reactions
+        }
+        worldReactionTarget = nil
+    }
+
+    func copyWorldMessage(_ messageID: UUID) {
+        guard let convo = selectedWorldConversation,
+              let msg = convo.messages.first(where: { $0.id == messageID }) else { return }
+        UIPasteboard.general.string = msg.snippetText
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        worldReactionTarget = nil
+    }
+
+    func deleteWorldMessage(_ messageID: UUID) {
+        guard let id = selectedWorldConversationID,
+              let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
+        worldScheduledTasks[messageID]?.cancel()
+        worldScheduledTasks[messageID] = nil
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            worldConversations[i].messages.removeAll { $0.id == messageID }
+        }
+        worldReactionTarget = nil
+    }
+
+    // MARK: My World — polls
+
+    func sendWorldPoll(question: String, options: [String]) {
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let opts = options
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { WorldPollOption(text: $0) }
+        guard !q.isEmpty, opts.count >= 2 else { return }
+        let poll = WorldPoll(question: q, options: opts)
+        showWorldPollOverlay = false
+        deliverWorldMessage(
+            WorldMessage(kind: .poll, text: q, fromUser: true,
+                         readLabel: "Delivered", poll: poll),
+            preview: "You: 📊 \(q)")
+    }
+
+    func voteWorldPoll(messageID: UUID, optionID: UUID) {
+        guard let id = selectedWorldConversationID,
+              let i = worldConversations.firstIndex(where: { $0.id == id }),
+              let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID }),
+              var poll = worldConversations[i].messages[j].poll,
+              let k = poll.options.firstIndex(where: { $0.id == optionID })
+        else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
+            if poll.options[k].voters.contains("You") {
+                poll.options[k].voters.removeAll { $0 == "You" }
+            } else {
+                if !poll.allowsMultiple {
+                    for m in poll.options.indices { poll.options[m].voters.removeAll { $0 == "You" } }
+                }
+                poll.options[k].voters.append("You")
+            }
+            worldConversations[i].messages[j].poll = poll
+        }
+    }
+
+    func addWorldPollOption(messageID: UUID, text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty,
+              let id = selectedWorldConversationID,
+              let i = worldConversations.firstIndex(where: { $0.id == id }),
+              let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID }),
+              var poll = worldConversations[i].messages[j].poll else { return }
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
+            poll.options.append(WorldPollOption(text: t))
+            worldConversations[i].messages[j].poll = poll
+        }
+    }
+
+    // MARK: My World — chat background
+
+    func setWorldBackground(_ background: WorldChatBackground) {
+        guard let convo = selectedWorldConversation,
+              let i = worldConversations.firstIndex(where: { $0.id == convo.id }) else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.easeInOut(duration: 0.3)) {
+            worldConversations[i].background = background
+        }
     }
 
     /// Marks a thread as most recent so it floats to the top of the list.
@@ -731,6 +954,16 @@ final class AppState: ObservableObject {
         // Mark the latest outgoing message as read.
         if let last = worldConversations[i].messages.lastIndex(where: { $0.fromUser && $0.readLabel != nil }) {
             worldConversations[i].messages[last].readLabel = "Read just now"
+        }
+        // Sometimes the other side tapbacks the last thing you sent, like iMessage.
+        if Int.random(in: 0..<3) == 0,
+           let last = worldConversations[i].messages.lastIndex(where: { $0.fromUser }),
+           !worldConversations[i].messages[last].reactions.contains(where: { !$0.fromUser }) {
+            let tb = WorldTapback.allCases.randomElement() ?? .heart
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.6)) {
+                worldConversations[i].messages[last].reactions.append(
+                    WorldReaction(tapback: tb, fromUser: false))
+            }
         }
         let reply = Self.worldReplyPool.randomElement() ?? "❤️"
         let members = worldCircleMembers(of: worldConversations[i])
@@ -960,10 +1193,130 @@ final class AppState: ObservableObject {
         schedulePersist()
     }
 
+    // MARK: Profile Home (customizable canvas)
+
+    /// Generates a unique starter layout the first time the Home tab is opened.
+    func seedProfileHomeIfNeeded() {
+        guard profileHomeBlocks.isEmpty else { return }
+        profileHomeBlocks = SampleData.randomProfileHome(handle: user.handle, posts: myPosts)
+        schedulePersist()
+    }
+
+    /// Random Home layouts generated for *other* users' profiles, keyed by handle.
+    /// Not persisted — regenerated per session, stable while browsing.
+    @Published var otherProfileHomes: [String: [ProfileHomeBlock]] = [:]
+
+    /// Generates (once) a Home layout for another user's profile.
+    func ensureOtherProfileHome(handle: String, posts: [Post]) {
+        let key = handle.lowercased()
+        guard otherProfileHomes[key] == nil else { return }
+        otherProfileHomes[key] = SampleData.randomProfileHome(handle: handle, posts: posts)
+    }
+
+    func otherProfileHome(_ handle: String) -> [ProfileHomeBlock] {
+        otherProfileHomes[handle.lowercased()] ?? []
+    }
+
+    /// Discards the current Home and rolls a fresh random layout.
+    func shuffleProfileHome() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+            profileHomeBlocks = SampleData.randomProfileHome(handle: user.handle, posts: myPosts)
+        }
+        schedulePersist()
+    }
+
+    var editingHomeBlock: ProfileHomeBlock? {
+        guard let id = editingHomeBlockID else { return nil }
+        return profileHomeBlocks.first(where: { $0.id == id })
+    }
+
+    func toggleProfileHomeEditing() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+            profileHomeEditing.toggle()
+        }
+    }
+
+    /// Adds a new block of the given kind and immediately opens its editor.
+    func addHomeBlock(_ kind: ProfileHomeBlockKind) {
+        var block = ProfileHomeBlock(kind: kind)
+        switch kind {
+        case .heading:  block.title = "New heading"; block.style = .plain
+        case .banner:   block.title = ""
+        case .text:     block.text = ""
+        case .featured: block.title = "Featured"
+        case .media:    block.title = "Photos & video"; block.columns = 3
+        case .gallery:  block.title = "Gallery"; block.columns = 3
+        case .link:     block.title = "Visit"; block.url = "https://"; block.style = .accent
+        }
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            profileHomeBlocks.append(block)
+        }
+        showHomeBlockPicker = false
+        // Let the picker sheet finish dismissing before presenting the editor,
+        // so the two sheets don't collide.
+        let id = block.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.editingHomeBlockID = id
+        }
+        schedulePersist()
+    }
+
+    func updateHomeBlock(_ block: ProfileHomeBlock) {
+        guard let i = profileHomeBlocks.firstIndex(where: { $0.id == block.id }) else { return }
+        profileHomeBlocks[i] = block
+        schedulePersist()
+    }
+
+    func deleteHomeBlock(_ id: UUID) {
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            profileHomeBlocks.removeAll { $0.id == id }
+        }
+        if editingHomeBlockID == id { editingHomeBlockID = nil }
+        schedulePersist()
+    }
+
+    /// Moves a block up (-1) or down (+1) in the stack.
+    func moveHomeBlock(_ id: UUID, by offset: Int) {
+        guard let i = profileHomeBlocks.firstIndex(where: { $0.id == id }) else { return }
+        let j = i + offset
+        guard profileHomeBlocks.indices.contains(j) else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+            profileHomeBlocks.swapAt(i, j)
+        }
+        schedulePersist()
+    }
+
+    /// Posts referenced by a block, in stored order (skips any that were deleted).
+    func homeBlockPosts(_ block: ProfileHomeBlock) -> [Post] {
+        block.postIDs.compactMap { id in posts.first(where: { $0.id == id }) }
+    }
+
     func signOut() {
         persistTask?.cancel()
         travelMatchTask?.cancel()
+        partnerOfferTask?.cancel()
+        partnerJobTask?.cancel()
         SessionStore.clear()
+
+        partnerRoles = []
+        partnerOnboardingRole = nil
+        partnerDashboardRole = nil
+        partnerOnline = false
+        partnerJob = nil
+        partnerJobPhase = .idle
+        partnerEarningsByRole = [:]
+        partnerJobsByRole = [:]
+        partnerRatingByRole = [:]
+
+        profileHomeBlocks = []
+        otherProfileHomes = [:]
+        profileHomeEditing = false
+        editingHomeBlockID = nil
+        showHomeBlockPicker = false
 
         showProfile = false
         profileUser = nil
@@ -1772,6 +2125,223 @@ final class AppState: ObservableObject {
         schedulePersist()
     }
 
+    // MARK: Partner — become a driver / delivery partner
+
+    /// True once the user can work this side of the marketplace.
+    func isPartner(_ role: PartnerRole) -> Bool { partnerRoles.contains(role) }
+
+    /// Entry point from the GojoTravel / GojoDelivery header button.
+    /// Opens the working dashboard if already onboarded, else starts the flow.
+    func openPartner(_ role: PartnerRole) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if partnerRoles.contains(role) {
+            openPartnerDashboard(role)
+        } else {
+            startPartnerOnboarding(role)
+        }
+    }
+
+    // MARK: Partner — onboarding flow
+
+    func startPartnerOnboarding(_ role: PartnerRole) {
+        partnerApplication = PartnerApplication(role: role)
+        partnerAgreedToTerms = false
+        partnerStakeProcessing = false
+        partnerStep = .rules
+        withAnimation(.easeInOut(duration: 0.28)) { partnerOnboardingRole = role }
+    }
+
+    func cancelPartnerOnboarding() {
+        partnerStakeProcessing = false
+        withAnimation(.easeInOut(duration: 0.28)) { partnerOnboardingRole = nil }
+    }
+
+    /// "I agree" on the rules page → move to the stake payment.
+    func agreePartnerRules() {
+        guard partnerAgreedToTerms else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.easeInOut(duration: 0.3)) { partnerStep = .stake }
+    }
+
+    /// Pay the $30 good-conduct stake (mock — no real charge), then start KYC.
+    func payPartnerStake() {
+        guard !partnerStakeProcessing else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        partnerStakeProcessing = true
+        partnerJobTask?.cancel()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            partnerStakeProcessing = false
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.easeInOut(duration: 0.32)) { partnerStep = .kyc }
+        }
+    }
+
+    var partnerKYCComplete: Bool { partnerApplication.isComplete }
+
+    /// Submit the completed KYC → become a partner.
+    func submitPartnerKYC() {
+        guard let role = partnerOnboardingRole, partnerApplication.isComplete else { return }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        partnerRoles.insert(role)
+        // A verified partner keeps the name from their ID on file.
+        withAnimation(.easeInOut(duration: 0.35)) { partnerStep = .done }
+        schedulePersist()
+    }
+
+    /// Dismiss the completion screen; optionally jump straight into the dashboard.
+    func finishPartnerOnboarding(openDashboard: Bool) {
+        let role = partnerOnboardingRole
+        withAnimation(.easeInOut(duration: 0.28)) { partnerOnboardingRole = nil }
+        if openDashboard, let role {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.openPartnerDashboard(role)
+            }
+        }
+    }
+
+    // MARK: Partner — per-role stats
+
+    func partnerEarnings(_ role: PartnerRole) -> Double { partnerEarningsByRole[role.rawValue] ?? 0 }
+    func partnerJobs(_ role: PartnerRole) -> Int { partnerJobsByRole[role.rawValue] ?? 0 }
+    func partnerRating(_ role: PartnerRole) -> Double { partnerRatingByRole[role.rawValue] ?? 5.0 }
+
+    // MARK: Partner — working dashboard
+
+    func openPartnerDashboard(_ role: PartnerRole) {
+        partnerJobPhase = .idle
+        partnerJob = nil
+        partnerJobProgress = 0
+        withAnimation(.easeInOut(duration: 0.3)) { partnerDashboardRole = role }
+    }
+
+    func closePartnerDashboard() {
+        goOffline()
+        withAnimation(.easeInOut(duration: 0.28)) { partnerDashboardRole = nil }
+    }
+
+    func togglePartnerOnline() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        if partnerOnline { goOffline() } else { goOnline() }
+    }
+
+    private func goOnline() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) { partnerOnline = true }
+        scheduleNextOffer(initial: true)
+    }
+
+    private func goOffline() {
+        partnerOfferTask?.cancel()
+        // Never cancel an in-progress navigation job — that froze the car on the map.
+        if partnerJobPhase == .offer {
+            partnerJobTask?.cancel()
+        }
+        withAnimation(.easeInOut(duration: 0.3)) {
+            partnerOnline = false
+            if partnerJobPhase == .offer {
+                partnerJobPhase = .idle
+                partnerJob = nil
+            }
+        }
+    }
+
+    /// Queue up an incoming request after a short delay.
+    private func scheduleNextOffer(initial: Bool = false) {
+        guard let role = partnerDashboardRole, partnerOnline else { return }
+        partnerOfferTask?.cancel()
+        partnerOfferTask = Task { @MainActor in
+            let delay: UInt64 = initial ? 2_200_000_000 : UInt64.random(in: 3_000_000_000...5_000_000_000)
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled, partnerOnline, partnerJobPhase == .idle else { return }
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                partnerJob = SampleData.samplePartnerJob(role: role)
+                partnerJobPhase = .offer
+            }
+        }
+    }
+
+    func declinePartnerJob() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            partnerJob = nil
+            partnerJobPhase = .idle
+        }
+        scheduleNextOffer()
+    }
+
+    func acceptPartnerJob() {
+        guard partnerJob != nil else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        partnerJobProgress = 0
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { partnerJobPhase = .toPickup }
+        runPartnerJob()
+    }
+
+    /// Drives the accepted job through pickup → dropoff → completion,
+    /// animating the partner's position along both legs for the map guide.
+    private func runPartnerJob() {
+        partnerJobTask?.cancel()
+        partnerJobTask = Task { @MainActor in
+            // ~20 fps along each leg for smooth marker motion.
+            let legSteps = 120
+            let tickNs: UInt64 = 75_000_000 // 75ms → ~9s per leg
+
+            // Leg 1 — heading to pickup / restaurant.
+            for step in 1...legSteps {
+                try? await Task.sleep(nanoseconds: tickNs)
+                guard !Task.isCancelled, partnerJob != nil else { return }
+                partnerJobProgress = Double(step) / Double(legSteps)
+            }
+            guard !Task.isCancelled, partnerJob != nil else { return }
+            UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+            partnerJobProgress = 0
+            partnerJobPhase = .toDropoff
+
+            // Leg 2 — trip / delivery in progress to the customer.
+            for step in 1...legSteps {
+                try? await Task.sleep(nanoseconds: tickNs)
+                guard !Task.isCancelled, partnerJob != nil else { return }
+                partnerJobProgress = Double(step) / Double(legSteps)
+            }
+            guard !Task.isCancelled, let job = partnerJob else { return }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            partnerEarningsByRole[job.role.rawValue, default: 0] += job.fare
+            partnerJobsByRole[job.role.rawValue, default: 0] += 1
+            // No withAnimation — avoids leaving the nav map stuck mid-transition.
+            partnerJobPhase = .completed
+        }
+    }
+
+    /// Dismiss the completed-job card and return to waiting for offers.
+    func clearCompletedPartnerJob() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.easeInOut(duration: 0.3)) {
+            partnerJob = nil
+            partnerJobProgress = 0
+            partnerJobPhase = .idle
+        }
+        schedulePersist()
+        scheduleNextOffer()
+    }
+
+    /// Label describing what the partner is doing right now (dashboard subtitle).
+    var partnerStatusLine: String {
+        guard let role = partnerDashboardRole else { return "" }
+        switch partnerJobPhase {
+        case .idle:
+            return partnerOnline ? "Online · waiting for \(role.jobNoun) requests" : "You're offline"
+        case .offer:
+            return "New \(role.jobNoun) request"
+        case .toPickup:
+            return role == .driver ? "Heading to pickup" : "Heading to the restaurant"
+        case .toDropoff:
+            return role == .driver ? "Trip in progress" : "Delivering to customer"
+        case .completed:
+            return "\(role.jobNoun.capitalized) complete"
+        }
+    }
+
     // MARK: GojoTravel
 
     var filteredTravelPlaces: [TravelPlace] {
@@ -1821,17 +2391,77 @@ final class AppState: ObservableObject {
             try? await Task.sleep(nanoseconds: 2_200_000_000)
             guard !Task.isCancelled else { return }
             let eta = selectedRide?.etaMinutes ?? 4
-            travelDriver = SampleData.sampleDriver(near: travelPickup, eta: max(2, eta / 2))
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-                travelPhase = .enRoute
-            }
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            let driver = SampleData.sampleDriver(near: travelPickup, eta: max(2, eta / 2))
+            travelDriver = driver
+            travelPhase = .enRoute
+
+            let pickupCoord = CLLocationCoordinate2D(
+                latitude: travelPickup.latitude, longitude: travelPickup.longitude)
+            let startCoord = CLLocationCoordinate2D(
+                latitude: driver.latitude, longitude: driver.longitude)
+
+            // Drive toward the customer — paced by distance so it never teleports.
+            await animateTravelDriver(from: startCoord, to: pickupCoord, pace: .approaching)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeInOut(duration: 0.3)) { travelPhase = .inTrip }
-            try? await Task.sleep(nanoseconds: 5_500_000_000)
+
+            travelPhase = .inTrip
+
+            if let drop = travelDropoff {
+                let dropCoord = CLLocationCoordinate2D(
+                    latitude: drop.latitude, longitude: drop.longitude)
+                let from = CLLocationCoordinate2D(
+                    latitude: travelDriver?.latitude ?? pickupCoord.latitude,
+                    longitude: travelDriver?.longitude ?? pickupCoord.longitude)
+                await animateTravelDriver(from: from, to: dropCoord, pace: .inTrip)
+            }
             guard !Task.isCancelled else { return }
             completeTravelTrip()
         }
+    }
+
+    private enum TravelDriverPace {
+        case approaching  // driver → pickup
+        case inTrip       // pickup → dropoff
+
+        /// Same pace for both legs. Lower secondsPerKm = faster car.
+        var secondsPerKm: Double { 9 }
+        var minSeconds: Double { 16 }
+        var maxSeconds: Double { 42 }
+    }
+
+    /// Moves `travelDriver` along a road route at a calm demo pace.
+    private func animateTravelDriver(
+        from: CLLocationCoordinate2D,
+        to: CLLocationCoordinate2D,
+        pace: TravelDriverPace
+    ) async {
+        let route = await MapboxDirections.route(from: from, to: to) ?? [from, to]
+        let km = routePathLengthKm(route)
+        let seconds = min(pace.maxSeconds, max(pace.minSeconds, km * pace.secondsPerKm))
+        let steps = max(48, Int((seconds * 20).rounded())) // ~20 fps
+        let tickNs = UInt64((seconds / Double(steps)) * 1_000_000_000)
+        let startEta = max(1, Int(seconds / 60.0 + 0.5))
+        for step in 1...steps {
+            try? await Task.sleep(nanoseconds: tickNs)
+            guard !Task.isCancelled else { return }
+            let point = PartnerRoute.point(on: route, at: Double(step) / Double(steps))
+            guard var driver = travelDriver else { return }
+            driver.latitude = point.latitude
+            driver.longitude = point.longitude
+            let left = max(1, Int((Double(steps - step) / Double(steps) * Double(startEta)).rounded()))
+            driver.etaMinutes = left
+            travelDriver = driver
+        }
+    }
+
+    private func routePathLengthKm(_ route: [CLLocationCoordinate2D]) -> Double {
+        guard route.count > 1 else { return 0.5 }
+        var meters = 0.0
+        for i in 1..<route.count {
+            meters += CLLocation(latitude: route[i - 1].latitude, longitude: route[i - 1].longitude)
+                .distance(from: CLLocation(latitude: route[i].latitude, longitude: route[i].longitude))
+        }
+        return max(0.3, meters / 1000.0)
     }
 
     func startTravelTrip() {

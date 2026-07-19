@@ -1,0 +1,50 @@
+---
+description: Always deploy to Amr's iPhone when finishing UI/code work
+alwaysApply: true
+---
+
+# Deploy target — Amr's iPhone
+
+After finishing implementation work (UI, bug fixes, features), **build and run on Amr's iPhone** — do not stop at simulator or code-only.
+
+## Device
+
+| Field | Value |
+|---|---|
+| Name | Amr's iPhone |
+| Model | iPhone 16 Pro |
+| UDID | `00008140-001A1C2E0E60801C` |
+| CoreDevice ID | `8C5953E4-4DDC-5770-A5DE-839002C00066` |
+| Bundle ID | `com.gojo.gojogo` |
+| Project | `GojoGo.xcodeproj` / scheme `GojoGo` |
+
+Prefer the **available (paired)** Amr's iPhone. Ignore the offline Amr's iPhone / WIAME's iPhone.
+
+## Deploy steps
+
+```bash
+# 1. Build for device (needs full permissions / signing)
+xcodebuild \
+  -project GojoGo.xcodeproj \
+  -scheme GojoGo \
+  -destination 'id=00008140-001A1C2E0E60801C' \
+  -derivedDataPath /tmp/GojoGo-DerivedData \
+  -allowProvisioningUpdates \
+  build
+
+# 2. Install
+xcrun devicectl device install app \
+  --device 8C5953E4-4DDC-5770-A5DE-839002C00066 \
+  /tmp/GojoGo-DerivedData/Build/Products/Debug-iphoneos/GojoGo.app
+
+# 3. Launch
+xcrun devicectl device process launch \
+  --device 8C5953E4-4DDC-5770-A5DE-839002C00066 \
+  com.gojo.gojogo
+```
+
+## Notes
+
+- Request `all` permissions for `xcodebuild` / `devicectl` (signing + device access).
+- If the device is offline, say so and wait / ask the user to reconnect — do not silently fall back to Simulator unless asked.
+- Skip deploy only for pure docs/rules/questions with no app binary change.

@@ -26,12 +26,26 @@ struct MyWorldView: View {
         }
         .animation(.easeInOut(duration: 0.28), value: app.selectedWorldConversationID)
         .animation(.easeInOut(duration: 0.28), value: app.showWorldContact)
-        .sheet(isPresented: $app.showWorldNewMessage) {
-            NewWorldMessageSheet()
-                .environmentObject(app)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(IMColor.sheetBG)
+        .modifier(WorldSheetHost())
+    }
+}
+
+/// Hosts the My World modal sheets. Attached at the app root (MainAppView) so
+/// presentation is reliable even while the immersive chat/contact views are up —
+/// sheets attached inside those transitioned subviews get swallowed.
+struct WorldSheetHost: ViewModifier {
+    @EnvironmentObject var app: AppState
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $app.worldSheet) { kind in
+            switch kind {
+            case .newMessage:
+                NewWorldMessageSheet()
+                    .environmentObject(app)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(IMColor.sheetBG)
+            }
         }
     }
 }
@@ -74,30 +88,18 @@ private struct WorldMessagesList: View {
 
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                app.showWorldNewMessage = true
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(IMColor.label)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(IMColor.chrome))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("New message")
-
-            Button {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
                     app.showWorldFilters.toggle()
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 15, weight: .bold))
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(IMColor.label)
                     .frame(width: 34, height: 34)
                     .background(Circle().fill(IMColor.chrome))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("More")
+            .accessibilityLabel("Menu")
         }
         .padding(.horizontal, 16)
         .padding(.top, 6)
@@ -106,6 +108,11 @@ private struct WorldMessagesList: View {
 
     private var filtersMenu: some View {
         VStack(alignment: .leading, spacing: 0) {
+            filterRow("New Message", "square.and.pencil") {
+                app.showWorldFilters = false
+                app.worldSheet = .newMessage
+            }
+            Divider().background(IMColor.label.opacity(0.1))
             filterRow("All Messages", "message", checked: !app.worldFilterUnreadOnly) {
                 app.worldFilterUnreadOnly = false
                 app.showWorldFilters = false
@@ -118,12 +125,12 @@ private struct WorldMessagesList: View {
             Divider().background(IMColor.label.opacity(0.1))
             filterRow("Add by Phone", "phone.badge.plus") {
                 app.showWorldFilters = false
-                app.showWorldNewMessage = true
+                app.worldSheet = .newMessage
             }
             Divider().background(IMColor.label.opacity(0.1))
             filterRow("Add by Username", "at") {
                 app.showWorldFilters = false
-                app.showWorldNewMessage = true
+                app.worldSheet = .newMessage
             }
         }
         .padding(.vertical, 6)
@@ -218,10 +225,7 @@ private struct WorldMessagesList: View {
                         .padding(.bottom, 10)
                 }
 
-                circlesStrip
-                    .padding(.bottom, 8)
-
-                // Full Messages list — includes threads started from Circles.
+                // Full Messages list — group threads (from Circles) still appear here.
                 ForEach(app.worldFilteredConversations) { convo in
                     conversationCell(convo)
 
@@ -327,98 +331,6 @@ private struct WorldMessagesList: View {
                 imageURL: convo.avatarURL
             )
         }
-    }
-
-    // MARK: Circles
-
-    private var circlesStrip: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Circles")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(IMColor.secondary)
-                .textCase(.uppercase)
-                .padding(.horizontal, 16)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 22) {
-                    ForEach(app.worldCircles) { circle in
-                        let members = app.worldContacts.filter { circle.memberIDs.contains($0.id) }
-                        let shown = Array(members.prefix(3))
-                        VStack(spacing: 8) {
-                            // Overlap lightly so faces stay readable / tappable.
-                            ZStack(alignment: .leading) {
-                                ForEach(Array(shown.enumerated()), id: \.element.id) { i, contact in
-                                    Button {
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                        app.startWorldConversation(with: contact)
-                                    } label: {
-                                        UserAvatar(
-                                            size: 44,
-                                            gradient: contact.avatarGradient,
-                                            letter: String(contact.name.prefix(1)),
-                                            imageURL: contact.avatarURL
-                                        )
-                                        .overlay(Circle().strokeBorder(Color.black, lineWidth: 2.5))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .offset(x: CGFloat(i) * 28)
-                                    .zIndex(Double(i))
-                                }
-                                if shown.isEmpty {
-                                    Button {
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                        app.openWorldCircle(circle)
-                                    } label: {
-                                        Circle()
-                                            .fill(IMColor.chrome)
-                                            .frame(width: 44, height: 44)
-                                            .overlay(
-                                                Image(systemName: "person.2.fill")
-                                                    .font(.system(size: 15))
-                                                    .foregroundStyle(.white.opacity(0.7))
-                                            )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .frame(
-                                width: shown.isEmpty ? 44 : 44 + CGFloat(shown.count - 1) * 28,
-                                height: 44,
-                                alignment: .leading
-                            )
-
-                            Button {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                app.openWorldCircle(circle)
-                            } label: {
-                                Text(circle.name)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(IMColor.label.opacity(0.75))
-                                    .lineLimit(1)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .frame(minWidth: 96)
-                        .contextMenu {
-                            Button {
-                                app.openWorldCircle(circle)
-                            } label: {
-                                Label("Open \(circle.name)", systemImage: "person.2")
-                            }
-                            ForEach(members) { contact in
-                                Button {
-                                    app.startWorldConversation(with: contact)
-                                } label: {
-                                    Label(contact.name, systemImage: "message")
-                                }
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
-        }
-        .padding(.vertical, 6)
     }
 
     // MARK: Rows
@@ -600,7 +512,7 @@ private struct NewWorldMessageSheet: View {
                 .foregroundStyle(IMColor.label)
             HStack {
                 Spacer()
-                Button("Cancel") { app.showWorldNewMessage = false }
+                Button("Cancel") { app.worldSheet = nil }
                     .font(.system(size: 17))
                     .foregroundStyle(IMColor.blue)
             }

@@ -98,6 +98,7 @@ private struct DeliveryBrowseView: View {
                 Wordmark(size: 22, trailing: "delivery")
             }
             Spacer()
+            PartnerHeaderButton(role: .courier)
         }
         .padding(.horizontal, 20)
     }

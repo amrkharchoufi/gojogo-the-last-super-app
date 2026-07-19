@@ -14,6 +14,8 @@ struct WorldChatView: View {
     @State private var showRecorder = false
     /// Interactive swipe-to-dismiss (finger moves left → chat slides off).
     @State private var dismissDrag: CGFloat = 0
+    /// Frame of each bubble in the chat coordinate space (for the tapback overlay).
+    @State private var bubbleFrames: [UUID: CGRect] = [:]
 
     private var live: WorldConversation {
         app.worldConversations.first(where: { $0.id == conversationID })
@@ -31,11 +33,17 @@ struct WorldChatView: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
+            chatWallpaper
+
             VStack(spacing: 0) {
                 chatHeader
                 messageScroll
                 composer
             }
+
+            reactionOverlay
+            pollComposerOverlay
+            sendLaterPickerOverlay
 
             if app.showWorldAppsMenu {
                 Color.black.opacity(0.001)
@@ -70,6 +78,8 @@ struct WorldChatView: View {
             )
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: app.showWorldAppsMenu)
+        .coordinateSpace(name: "worldChat")
+        .onPreferenceChange(BubbleFrameKey.self) { bubbleFrames = $0 }
         .background(IMColor.bg.ignoresSafeArea())
         .photosPicker(
             isPresented: $showPhotoPicker,
@@ -103,9 +113,23 @@ struct WorldChatView: View {
             app.sendWorldSticker(["😂", "🔥", "❤️", "👀", "🥳", "😮", "😎"].randomElement() ?? "❤️")
         case .location:
             app.sendWorldLocation()
-        case .polls, .sendLater:
-            break // not in the prototype
+        case .polls:
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                app.showWorldPollOverlay = true
+            }
+        case .sendLater:
+            app.worldSendLaterDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+            app.setWorldSendLater(Self.sendLaterLabel(for: app.worldSendLaterDate))
         }
+    }
+
+    static func sendLaterLabel(for date: Date) -> String {
+        let cal = Calendar.current
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(date) { return "Today \(time)" }
+        if cal.isDateInTomorrow(date) { return "Tomorrow \(time)" }
+        let day = date.formatted(.dateTime.weekday(.wide))
+        return "\(day) \(time)"
     }
 
     /// Loads picked media and stages it in the composer tray (iMessage-style) instead of sending.
@@ -147,6 +171,118 @@ struct WorldChatView: View {
         let seconds = (try? await asset.load(.duration)).map(CMTimeGetSeconds) ?? 0
         let label = String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60)
         return WorldPendingAttachment(imageData: poster, isVideo: true, durationLabel: label)
+    }
+
+    // MARK: Wallpaper
+
+    @ViewBuilder
+    private var chatWallpaper: some View {
+        let stops = live.background.gradient
+        if stops.isEmpty {
+            IMColor.bg.ignoresSafeArea()
+        } else {
+            LinearGradient(colors: stops, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .ignoresSafeArea()
+                .overlay(Color.black.opacity(0.06).ignoresSafeArea())
+        }
+    }
+
+    // MARK: Tapback / action overlay
+
+    @ViewBuilder
+    private var reactionOverlay: some View {
+        if let target = app.worldReactionTarget,
+           let msg = live.messages.first(where: { $0.id == target }) {
+            let frame = bubbleFrames[target]
+                ?? CGRect(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2,
+                          width: 180, height: 44)
+            WorldReactionOverlay(
+                message: msg,
+                bubbleFrame: frame,
+                existingUserTapback: msg.reactions.first(where: { $0.fromUser })?.tapback,
+                onTapback: { app.toggleWorldReaction($0, on: target) },
+                onReply: { app.beginWorldReply(to: target); focused = true },
+                onCopy: { app.copyWorldMessage(target) },
+                onDelete: { app.deleteWorldMessage(target) },
+                onDismiss: { app.worldReactionTarget = nil }
+            ) {
+                bubbleContent(msg, tailed: true)
+            }
+            .transition(.opacity)
+            .zIndex(50)
+        }
+    }
+
+    // MARK: Poll composer / Send-Later overlays (in-view — sheets don't present here)
+
+    @ViewBuilder
+    private var pollComposerOverlay: some View {
+        if app.showWorldPollOverlay {
+            WorldOverlaySheet(
+                onDismiss: {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                        app.showWorldPollOverlay = false
+                    }
+                }
+            ) {
+                WorldPollComposer(
+                    onSend: { q, opts in app.sendWorldPoll(question: q, options: opts) },
+                    onCancel: {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                            app.showWorldPollOverlay = false
+                        }
+                    }
+                )
+                .frame(height: 460)
+            }
+            .zIndex(60)
+        }
+    }
+
+    @ViewBuilder
+    private var sendLaterPickerOverlay: some View {
+        if app.showWorldSendLaterOverlay {
+            WorldOverlaySheet(
+                onDismiss: {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                        app.showWorldSendLaterOverlay = false
+                    }
+                }
+            ) {
+                VStack(spacing: 16) {
+                    Text("Send Later")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(IMColor.label)
+                        .padding(.top, 18)
+                    DatePicker("", selection: $app.worldSendLaterDate, in: Date()...,
+                               displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.graphical)
+                        .tint(IMColor.blue)
+                        .padding(.horizontal, 16)
+                        .onChange(of: app.worldSendLaterDate) { _, newValue in
+                            app.setWorldSendLater(Self.sendLaterLabel(for: newValue))
+                        }
+                    Button {
+                        app.setWorldSendLater(Self.sendLaterLabel(for: app.worldSendLaterDate))
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                            app.showWorldSendLaterOverlay = false
+                        }
+                    } label: {
+                        Text("Done")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .background(Capsule().fill(IMColor.blue))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                }
+                .frame(height: 420)
+            }
+            .zIndex(60)
+        }
     }
 
     // MARK: Header
@@ -317,48 +453,39 @@ struct WorldChatView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 2)
 
-        case .emoji:
-            bubbleLine(msg, spacing: 60) {
-                Text(msg.text)
-                    .font(.system(size: 54))
-            }
-
-        case .file:
-            bubbleLine(msg) {
-                fileBubble(msg, tailed: isLastInCluster)
-            }
-
-        case .photo, .video:
-            bubbleLine(msg) {
-                photoBubble(msg)
-            }
-
-        case .carousel:
-            bubbleLine(msg) {
-                carouselBubble(msg)
-            }
-
-        case .audio:
-            bubbleLine(msg) {
-                audioBubble(msg, tailed: isLastInCluster)
-            }
-
-        case .location:
-            bubbleLine(msg) {
-                locationBubble(msg)
-            }
-
-        case .text:
-            bubbleLine(msg) {
-                textBubble(msg, tailed: isLastInCluster)
-            }
+        default:
+            bubbleLine(msg, spacing: msg.kind == .emoji ? 60 : 48, tailed: isLastInCluster)
         }
     }
 
-    /// Shared incoming/outgoing alignment + sender name + read receipt.
-    private func bubbleLine<Content: View>(
-        _ msg: WorldMessage, spacing: CGFloat = 48,
-        @ViewBuilder content: () -> Content
+    /// Inner bubble body for a message — reused inline and inside the tapback overlay.
+    @ViewBuilder
+    private func bubbleContent(_ msg: WorldMessage, tailed: Bool) -> some View {
+        switch msg.kind {
+        case .emoji:
+            Text(msg.text).font(.system(size: 54))
+        case .file:
+            fileBubble(msg, tailed: tailed)
+        case .photo, .video:
+            photoBubble(msg)
+        case .carousel:
+            carouselBubble(msg)
+        case .audio:
+            audioBubble(msg, tailed: tailed)
+        case .location:
+            locationBubble(msg)
+        case .poll:
+            pollBubble(msg)
+        case .text:
+            textBubble(msg, tailed: tailed)
+        case .system, .timestamp:
+            EmptyView()
+        }
+    }
+
+    /// Shared incoming/outgoing alignment + reply snippet + reactions + receipt.
+    private func bubbleLine(
+        _ msg: WorldMessage, spacing: CGFloat = 48, tailed: Bool
     ) -> some View {
         VStack(alignment: msg.fromUser ? .trailing : .leading, spacing: 3) {
             if !msg.fromUser, live.isGroup, let sender = msg.senderName {
@@ -367,12 +494,52 @@ struct WorldChatView: View {
                     .foregroundStyle(IMColor.secondary)
                     .padding(.leading, 14)
             }
+
+            if let reply = msg.replyTo {
+                replySnippet(reply, fromUser: msg.fromUser)
+            }
+
             HStack {
                 if msg.fromUser { Spacer(minLength: spacing) }
-                content()
+                bubbleContent(msg, tailed: tailed)
+                    .opacity(app.worldReactionTarget == msg.id ? 0 : 1)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: BubbleFrameKey.self,
+                                value: [msg.id: proxy.frame(in: .named("worldChat"))])
+                        }
+                    )
+                    .overlay(alignment: msg.fromUser ? .topLeading : .topTrailing) {
+                        if !msg.reactions.isEmpty {
+                            ReactionBadge(reactions: msg.reactions, fromUser: msg.fromUser)
+                                .offset(x: msg.fromUser ? -10 : 10, y: -14)
+                        }
+                    }
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 0.3)
+                            .onEnded { _ in
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                focused = false
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
+                                    app.worldReactionTarget = msg.id
+                                }
+                            }
+                    )
                 if !msg.fromUser { Spacer(minLength: spacing) }
             }
-            if let read = msg.readLabel {
+
+            if let scheduled = msg.scheduledLabel {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Scheduled · \(scheduled)")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(IMColor.blue)
+                .padding(.trailing, msg.fromUser ? 4 : 0)
+                .transition(.opacity)
+            } else if let read = msg.readLabel {
                 Text(read)
                     .font(.system(size: 11))
                     .foregroundStyle(IMColor.secondary)
@@ -381,7 +548,38 @@ struct WorldChatView: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, msg.reactions.isEmpty ? 1 : 8)
+    }
+
+    /// Quoted snippet shown above an inline reply, iMessage-style.
+    private func replySnippet(_ reply: WorldReplySnippet, fromUser: Bool) -> some View {
+        HStack {
+            if fromUser { Spacer(minLength: 60) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(reply.authorName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(IMColor.secondary)
+                Text(reply.preview)
+                    .font(.system(size: 13))
+                    .foregroundStyle(IMColor.secondary)
+                    .lineLimit(2)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(IMColor.bubbleGray.opacity(0.55))
+            )
+            .overlay(alignment: fromUser ? .trailing : .leading) {
+                Capsule()
+                    .fill(IMColor.secondary.opacity(0.5))
+                    .frame(width: 3, height: 20)
+                    .offset(x: fromUser ? 6 : -6)
+            }
+            if !fromUser { Spacer(minLength: 60) }
+        }
+        .padding(.horizontal, 6)
+        .opacity(0.9)
     }
 
     private func textBubble(_ msg: WorldMessage, tailed: Bool) -> some View {
@@ -518,9 +716,112 @@ struct WorldChatView: View {
         )
     }
 
+    private func pollBubble(_ msg: WorldMessage) -> some View {
+        WorldPollBubble(
+            poll: msg.poll ?? WorldPoll(question: msg.text, options: []),
+            fromUser: msg.fromUser,
+            onVote: { app.voteWorldPoll(messageID: msg.id, optionID: $0) },
+            onAddOption: { app.addWorldPollOption(messageID: msg.id, text: $0) }
+        )
+    }
+
     // MARK: Composer
 
     private var composer: some View {
+        VStack(spacing: 8) {
+            if app.worldReplyingTo != nil { replyBar }
+            if let label = app.worldSendLaterLabel { sendLaterBar(label) }
+            composerRow
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
+        .background(IMColor.bg)
+        .safeAreaPadding(.bottom, 0)
+        .animation(.spring(response: 0.34, dampingFraction: 0.85), value: app.worldReplyingTo)
+        .animation(.spring(response: 0.34, dampingFraction: 0.85), value: app.worldSendLaterLabel)
+    }
+
+    /// Quoted-message bar shown above the composer when replying.
+    private var replyBar: some View {
+        HStack(spacing: 10) {
+            Capsule().fill(IMColor.blue).frame(width: 3, height: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Replying to \(replyTargetName)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(IMColor.secondary)
+                Text(replyTargetPreview)
+                    .font(.system(size: 13))
+                    .foregroundStyle(IMColor.label)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button { app.clearWorldReply() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(IMColor.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(IMColor.inputFill))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var replyTargetName: String {
+        guard let rid = app.worldReplyingTo,
+              let src = live.messages.first(where: { $0.id == rid }) else { return "" }
+        return src.fromUser ? "You" : (src.senderName ?? live.title)
+    }
+
+    private var replyTargetPreview: String {
+        guard let rid = app.worldReplyingTo,
+              let src = live.messages.first(where: { $0.id == rid }) else { return "" }
+        return src.snippetText
+    }
+
+    /// Scheduled-send bar shown above the composer (Send Later).
+    private func sendLaterBar(_ label: String) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                    app.showWorldSendLaterOverlay = true
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(label)
+                        .font(.system(size: 14, weight: .semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundStyle(IMColor.blue)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Button { app.setWorldSendLater(nil) } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(IMColor.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(IMColor.inputFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(IMColor.blue.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                )
+        )
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var composerRow: some View {
         HStack(alignment: .bottom, spacing: 12) {
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -549,7 +850,8 @@ struct WorldChatView: View {
                 }
 
                 HStack(alignment: .bottom, spacing: 6) {
-                    TextField("iMessage", text: $app.worldDraft, axis: .vertical)
+                    TextField(app.worldSendLaterLabel == nil ? "iMessage" : "Send Later",
+                              text: $app.worldDraft, axis: .vertical)
                         .font(.system(size: 17))
                         .foregroundStyle(IMColor.label)
                         .lineLimit(1...5)
@@ -607,11 +909,6 @@ struct WorldChatView: View {
             .animation(.spring(response: 0.35, dampingFraction: 0.86),
                        value: app.worldPendingAttachments.count)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 8)
-        .background(IMColor.bg)
-        .safeAreaPadding(.bottom, 0)
     }
 
     /// Staged photos/videos shown above the text row, iMessage-style.
@@ -675,7 +972,7 @@ private extension WorldMessageKind {
     /// Kinds that render as chat bubbles and participate in tail clustering.
     var isBubble: Bool {
         switch self {
-        case .text, .file, .emoji, .photo, .video, .carousel, .audio, .location: return true
+        case .text, .file, .emoji, .photo, .video, .carousel, .audio, .location, .poll: return true
         case .system, .timestamp: return false
         }
     }
@@ -995,18 +1292,493 @@ struct WorldAppsDrawer: View {
         }
         .padding(.vertical, 8)
         .frame(width: 230)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .liquidGlass(cornerRadius: 28, interactive: false)
+    }
+}
+
+// MARK: - In-view bottom-sheet overlay (used where UIKit sheets can't present)
+
+struct WorldOverlaySheet<Content: View>: View {
+    var onDismiss: () -> Void
+    @ViewBuilder var content: () -> Content
+    @State private var appeared = false
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(appeared ? 0.4 : 0)
+                .ignoresSafeArea()
+                .onTapGesture { onDismiss() }
+
+            content()
+                .frame(maxWidth: .infinity)
+                .background(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 22, bottomLeadingRadius: 0,
+                        bottomTrailingRadius: 0, topTrailingRadius: 22, style: .continuous)
+                        .fill(IMColor.sheetBG)
+                        .ignoresSafeArea(edges: .bottom)
+                )
+                .overlay(alignment: .top) {
+                    Capsule().fill(IMColor.secondary.opacity(0.5))
+                        .frame(width: 36, height: 5)
+                        .padding(.top, 8)
+                }
+                .offset(y: appeared ? 0 : 600)
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { appeared = true }
+        }
+    }
+}
+
+// MARK: - Bubble frame reporting (for the tapback overlay)
+
+struct BubbleFrameKey: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+// MARK: - Tapback badge stuck to a bubble corner
+
+struct ReactionBadge: View {
+    let reactions: [WorldReaction]
+    let fromUser: Bool
+
+    var body: some View {
+        // Show the most recent one prominently; iMessage stacks, we keep it clean.
+        HStack(spacing: -6) {
+            ForEach(reactions.suffix(2)) { r in
+                Image(systemName: r.tapback.badgeSymbol)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(r.tapback == .heart
+                                     ? Color(red: 1, green: 0.27, blue: 0.35)
+                                     : (r.fromUser ? Color.white : IMColor.label))
+                    .frame(width: 26, height: 26)
+                    .background(
+                        Circle()
+                            .fill(r.fromUser ? IMColor.blue : IMColor.bubbleGray)
+                            .overlay(Circle().strokeBorder(IMColor.bg, lineWidth: 1.5))
+                    )
+            }
+        }
+    }
+}
+
+// MARK: - Long-press tapback + action overlay
+
+struct WorldReactionOverlay<Bubble: View>: View {
+    let message: WorldMessage
+    let bubbleFrame: CGRect
+    let existingUserTapback: WorldTapback?
+    var onTapback: (WorldTapback) -> Void
+    var onReply: () -> Void
+    var onCopy: () -> Void
+    var onDelete: () -> Void
+    var onDismiss: () -> Void
+    @ViewBuilder var bubble: () -> Bubble
+
+    @State private var appeared = false
+
+    private var fromUser: Bool { message.fromUser }
+
+    /// Keep the lifted bubble on-screen even when the original sits under the tapback bar.
+    private var bubbleY: CGFloat {
+        let minY: CGFloat = 190
+        let maxY = UIScreen.main.bounds.height - 240
+        return min(max(bubbleFrame.midY, minY), maxY)
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
                 .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(IMColor.chrome.opacity(0.95))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .strokeBorder(IMColor.label.opacity(0.1), lineWidth: 0.5)
-                )
+                .environment(\.colorScheme, .dark)
+                .ignoresSafeArea()
+                .opacity(appeared ? 1 : 0)
+                .onTapGesture { onDismiss() }
+
+            // Tapback picker bar
+            tapbackBar
+                .position(x: barX, y: bubbleY - bubbleFrame.height / 2 - 44)
+                .scaleEffect(appeared ? 1 : 0.6, anchor: .bottom)
+                .opacity(appeared ? 1 : 0)
+
+            // The lifted bubble
+            bubble()
+                .position(x: fromUser ? bubbleFrame.midX : bubbleFrame.midX, y: bubbleY)
+                .scaleEffect(appeared ? 1 : 0.9, anchor: fromUser ? .trailing : .leading)
+
+            // Action menu
+            actionMenu
+                .position(x: menuX, y: bubbleY + bubbleFrame.height / 2 + 12 + menuHeight / 2)
+                .scaleEffect(appeared ? 1 : 0.8, anchor: fromUser ? .topTrailing : .topLeading)
+                .opacity(appeared ? 1 : 0)
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) { appeared = true }
+        }
+    }
+
+    private var barX: CGFloat {
+        let w: CGFloat = 300
+        let half = w / 2 + 12
+        return min(max(bubbleFrame.midX, half), UIScreen.main.bounds.width - half)
+    }
+
+    private var menuWidth: CGFloat { 230 }
+    private var menuHeight: CGFloat { CGFloat(actions.count) * 48 }
+    private var menuX: CGFloat {
+        let half = menuWidth / 2 + 12
+        let anchor = fromUser ? bubbleFrame.maxX - menuWidth / 2 : bubbleFrame.minX + menuWidth / 2
+        return min(max(anchor, half), UIScreen.main.bounds.width - half)
+    }
+
+    private var tapbackBar: some View {
+        HStack(spacing: 10) {
+            ForEach(WorldTapback.allCases) { tb in
+                Button {
+                    onTapback(tb)
+                } label: {
+                    Image(systemName: tb.pickerSymbol)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(existingUserTapback == tb ? Color.white
+                                         : (tb == .heart ? Color(red: 1, green: 0.4, blue: 0.5) : IMColor.label))
+                        .frame(width: 38, height: 38)
+                        .background(
+                            Circle().fill(existingUserTapback == tb ? IMColor.blue : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+                .overlay(Capsule().fill(IMColor.chrome.opacity(0.75)))
+                .overlay(Capsule().strokeBorder(IMColor.label.opacity(0.12), lineWidth: 0.5))
         )
-        .shadow(color: .black.opacity(0.4), radius: 24, y: 10)
+        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+    }
+
+    private struct MenuAction: Identifiable {
+        let id = UUID()
+        let title: String
+        let icon: String
+        let destructive: Bool
+        let action: () -> Void
+    }
+
+    private var actions: [MenuAction] {
+        [
+            MenuAction(title: "Reply", icon: "arrowshape.turn.up.left", destructive: false, action: onReply),
+            MenuAction(title: "Copy", icon: "doc.on.doc", destructive: false, action: onCopy),
+            MenuAction(title: "Translate", icon: "character.bubble", destructive: false, action: onDismiss),
+            MenuAction(title: "Delete", icon: "trash", destructive: true, action: onDelete),
+        ]
+    }
+
+    private var actionMenu: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(actions.enumerated()), id: \.element.id) { i, item in
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    item.action()
+                } label: {
+                    HStack {
+                        Text(item.title)
+                            .font(.system(size: 17))
+                            .foregroundStyle(item.destructive ? Color(red: 1, green: 0.27, blue: 0.23) : IMColor.label)
+                        Spacer()
+                        Image(systemName: item.icon)
+                            .font(.system(size: 17))
+                            .foregroundStyle(item.destructive ? Color(red: 1, green: 0.27, blue: 0.23) : IMColor.label)
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if i < actions.count - 1 {
+                    Divider().background(IMColor.label.opacity(0.08))
+                }
+            }
+        }
+        .frame(width: menuWidth)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(IMColor.chrome.opacity(0.9)))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
+    }
+}
+
+// MARK: - Poll bubble
+
+struct WorldPollBubble: View {
+    let poll: WorldPoll
+    let fromUser: Bool
+    var onVote: (UUID) -> Void
+    var onAddOption: (String) -> Void
+
+    @State private var addingOption = false
+    @State private var newOption = ""
+    @FocusState private var addFocused: Bool
+
+    private var total: Int { max(poll.totalVotes, 1) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Poll")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle((fromUser ? Color.white : IMColor.label).opacity(0.75))
+
+            Text(poll.question)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(fromUser ? Color.white : IMColor.label)
+
+            VStack(spacing: 8) {
+                ForEach(poll.options) { opt in
+                    optionRow(opt)
+                }
+            }
+
+            if addingOption {
+                HStack(spacing: 8) {
+                    TextField("New option", text: $newOption)
+                        .font(.system(size: 15))
+                        .foregroundStyle(fromUser ? Color.white : IMColor.label)
+                        .focused($addFocused)
+                        .onSubmit(commitOption)
+                    Button(action: commitOption) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(fromUser ? Color.white : IMColor.blue)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 12).fill(bgTint.opacity(0.4)))
+            } else {
+                Button {
+                    addingOption = true
+                    addFocused = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle")
+                        Text("Add Choice")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle((fromUser ? Color.white : IMColor.blue).opacity(0.9))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text("\(poll.totalVotes) vote\(poll.totalVotes == 1 ? "" : "s")")
+                .font(.system(size: 12))
+                .foregroundStyle((fromUser ? Color.white : IMColor.secondary).opacity(0.7))
+        }
+        .padding(14)
+        .frame(width: 250, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(fromUser ? IMColor.blue : IMColor.bubbleGray)
+        )
+    }
+
+    private var bgTint: Color { fromUser ? Color.white : IMColor.label }
+
+    private func optionRow(_ opt: WorldPollOption) -> some View {
+        let picked = opt.voters.contains("You")
+        let fraction = Double(opt.voters.count) / Double(total)
+        return Button {
+            onVote(opt.id)
+        } label: {
+            ZStack(alignment: .leading) {
+                GeometryReader { geo in
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(bgTint.opacity(0.18))
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(bgTint.opacity(0.32))
+                        .frame(width: max(38, geo.size.width * fraction))
+                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: fraction)
+                }
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .strokeBorder(bgTint.opacity(0.6), lineWidth: 1.5)
+                            .frame(width: 20, height: 20)
+                        if picked {
+                            Circle().fill(fromUser ? Color.white : IMColor.blue)
+                                .frame(width: 20, height: 20)
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(fromUser ? IMColor.blue : Color.white)
+                        }
+                    }
+                    Text(opt.text)
+                        .font(.system(size: 15, weight: picked ? .semibold : .regular))
+                        .foregroundStyle(fromUser ? Color.white : IMColor.label)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if opt.voters.count > 0 {
+                        Text("\(opt.voters.count)")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle((fromUser ? Color.white : IMColor.label).opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            .frame(height: 40)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func commitOption() {
+        let t = newOption.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { addingOption = false; return }
+        onAddOption(t)
+        newOption = ""
+        addingOption = false
+        addFocused = false
+    }
+}
+
+// MARK: - Poll composer sheet
+
+struct WorldPollComposer: View {
+    var onSend: (String, [String]) -> Void
+    var onCancel: () -> Void = {}
+
+    @State private var question = ""
+    @State private var options: [String] = ["", ""]
+    @FocusState private var focusedField: Int?
+
+    private var canSend: Bool {
+        !question.trimmingCharacters(in: .whitespaces).isEmpty
+            && options.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count >= 2
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    questionField
+                    choicesSection
+                }
+                .padding(16)
+            }
+        }
+        .background(IMColor.sheetBG)
+        .onAppear { focusedField = -1 }
+    }
+
+    private var questionField: some View {
+        field("QUESTION") {
+            TextField("Ask something…", text: $question)
+                .font(.system(size: 17))
+                .foregroundStyle(IMColor.label)
+                .focused($focusedField, equals: -1)
+        }
+    }
+
+    private var choicesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("CHOICES")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(IMColor.secondary)
+                .padding(.leading, 4)
+
+            ForEach(options.indices, id: \.self) { i in
+                choiceRow(i)
+            }
+
+            Button {
+                withAnimation { options.append("") }
+                focusedField = options.count - 1
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                    Text("Add Choice")
+                }
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(IMColor.blue)
+                .padding(.vertical, 6)
+                .padding(.leading, 4)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func choiceRow(_ i: Int) -> some View {
+        HStack(spacing: 10) {
+            TextField("Choice \(i + 1)", text: $options[i])
+                .font(.system(size: 17))
+                .foregroundStyle(IMColor.label)
+                .focused($focusedField, equals: i)
+            if options.count > 2 {
+                Button {
+                    withAnimation { _ = options.remove(at: i) }
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .foregroundStyle(IMColor.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(IMColor.chrome))
+    }
+
+    private var header: some View {
+        ZStack {
+            Text("New Poll")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(IMColor.label)
+            HStack {
+                Button("Cancel") { onCancel() }
+                    .font(.system(size: 17))
+                    .foregroundStyle(IMColor.blue)
+                Spacer()
+                Button {
+                    onSend(question, options)
+                } label: {
+                    Text("Send")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(canSend ? IMColor.blue : IMColor.secondary)
+                }
+                .disabled(!canSend)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+    }
+
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(IMColor.secondary)
+                .padding(.leading, 4)
+            content()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(IMColor.chrome))
+        }
     }
 }

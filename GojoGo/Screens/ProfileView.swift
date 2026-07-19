@@ -18,6 +18,20 @@ private struct ProfileGridItem: Identifiable {
     var target: ProfileGridTarget? = nil
 }
 
+/// Profile content tabs. Home (customizable canvas) is own-profile only.
+private enum ProfileTab: Hashable {
+    case home, grid, reels, saved
+
+    var icon: String {
+        switch self {
+        case .home:  return "house"
+        case .grid:  return "square.grid.3x3"
+        case .reels: return "play.rectangle"
+        case .saved: return "person.crop.square"
+        }
+    }
+}
+
 struct ProfileView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.dismiss) private var dismiss
@@ -29,6 +43,28 @@ struct ProfileView: View {
 
     private var isOwn: Bool { profile.isOwn }
 
+    /// Tabs available for this profile. Everyone gets a customizable Home first.
+    private var tabs: [ProfileTab] {
+        isOwn ? [.home, .grid, .reels, .saved] : [.home, .grid, .reels]
+    }
+
+    private var selectedTab: ProfileTab {
+        tabs.indices.contains(tab) ? tabs[tab] : .grid
+    }
+
+    /// Posts authored by the profile being viewed.
+    private var profilePosts: [Post] {
+        if isOwn { return app.myPosts }
+        return app.posts.filter {
+            $0.author == profile.handle || $0.author == "@\(profile.handle)"
+        }
+    }
+
+    /// Home blocks for the profile: the live own layout, or the visited user's.
+    private var homeBlocks: [ProfileHomeBlock] {
+        isOwn ? app.profileHomeBlocks : app.otherProfileHome(profile.handle)
+    }
+
     private var gridItems: [ProfileGridItem] {
         let posts: [Post] = {
             if isOwn { return app.myPosts }
@@ -37,8 +73,10 @@ struct ProfileView: View {
             }
         }()
 
-        switch tab {
-        case 0:
+        switch selectedTab {
+        case .home:
+            return []
+        case .grid:
             return posts.map { post in
                 if post.imageURL != nil || post.imageData != nil {
                     return ProfileGridItem(id: "post-\(post.id)",
@@ -49,7 +87,7 @@ struct ProfileView: View {
                                        kind: .text(post.text ?? "Post"),
                                        target: .post(post.id))
             }
-        case 1:
+        case .reels:
             if isOwn {
                 let longs = app.myVideos.map {
                     ProfileGridItem(id: "vid-\($0.id)",
@@ -68,7 +106,7 @@ struct ProfileView: View {
                                 kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil),
                                 target: .post($0.id))
             }
-        case 2:
+        case .saved:
             if isOwn {
                 return app.savedPosts.prefix(12).map { post in
                     if post.imageURL != nil || post.imageData != nil {
@@ -81,8 +119,6 @@ struct ProfileView: View {
                                            target: .post(post.id))
                 }
             }
-            return []
-        default:
             return []
         }
     }
@@ -120,7 +156,11 @@ struct ProfileView: View {
                         .padding(.top, 12)
 
                     Section {
-                        contentGrid
+                        if selectedTab == .home {
+                            ProfileHomeTab(isOwn: isOwn, blocks: homeBlocks)
+                        } else {
+                            contentGrid
+                        }
                     } header: {
                         iconTabs
                             .padding(.top, 14)
@@ -137,6 +177,9 @@ struct ProfileView: View {
                 app.profileUser = .own(from: app.user, posts: app.myPosts.count)
             }
             app.user.postCount = app.myPosts.count
+            if !isOwn {
+                app.ensureOtherProfileHome(handle: profile.handle, posts: profilePosts)
+            }
         }
         // These open from inside this sheet, so they must present from here.
         .sheet(isPresented: $app.showEditProfile) {
@@ -156,6 +199,25 @@ struct ProfileView: View {
             set: { if !$0 { app.closePostViewer() } }
         )) {
             PostViewerSheet().environmentObject(app)
+        }
+        .sheet(isPresented: $app.showHomeBlockPicker) {
+            ProfileHomeBlockPicker()
+                .environmentObject(app)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.editingHomeBlockID != nil },
+            set: { if !$0 { app.editingHomeBlockID = nil } }
+        )) {
+            if let block = app.editingHomeBlock {
+                ProfileHomeBlockEditor(block: block)
+                    .environmentObject(app)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(GGColor.sheetBG)
+            }
         }
     }
 
@@ -215,7 +277,9 @@ struct ProfileView: View {
                         Label("Edit profile", systemImage: "pencil")
                     }
                     Button {
-                        withAnimation(.easeOut(duration: 0.2)) { tab = 2 }
+                        if let i = tabs.firstIndex(of: .saved) {
+                            withAnimation(.easeOut(duration: 0.2)) { tab = i }
+                        }
                     } label: {
                         Label("Saved", systemImage: "bookmark")
                     }
@@ -427,16 +491,15 @@ struct ProfileView: View {
     // MARK: Tabs
 
     private var iconTabs: some View {
-        let icons = ["square.grid.3x3", "play.rectangle", "person.crop.square"]
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             HStack(spacing: 0) {
-                ForEach(Array(icons.enumerated()), id: \.offset) { i, icon in
+                ForEach(Array(tabs.enumerated()), id: \.offset) { i, item in
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         withAnimation(.easeOut(duration: 0.2)) { tab = i }
                     } label: {
                         VStack(spacing: 10) {
-                            Image(systemName: icon)
+                            Image(systemName: item.icon)
                                 .font(.system(size: 18, weight: .medium))
                                 .foregroundStyle(i == tab ? GGColor.textPrimary : GGColor.textTertiary)
                                 .frame(maxWidth: .infinity)

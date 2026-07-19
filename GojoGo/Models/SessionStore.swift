@@ -228,6 +228,13 @@ struct CachedSession: Codable {
     var dmThreads: [String: [CachedChatMessage]]?
     var navModeRaw: String?
     var appThemeRaw: String?
+    /// Roles the user has onboarded into (driver / courier). Optional for old caches.
+    var partnerRoles: [String]?
+    /// Per-role earnings / trip counts, keyed by role rawValue. Optional for old caches.
+    var partnerEarningsByRole: [String: Double]?
+    var partnerJobsByRole: [String: Int]?
+    /// Customizable profile Home layout. Optional for old caches.
+    var profileHomeBlocks: [ProfileHomeBlock]?
 }
 
 struct CachedUser: Codable {
@@ -428,6 +435,10 @@ extension CachedSession {
         dmThreads = app.dmThreads.mapValues { $0.map(CachedChatMessage.init) }
         navModeRaw = app.navMode.rawValue
         appThemeRaw = app.appTheme.rawValue
+        partnerRoles = app.partnerRoles.map(\.rawValue)
+        partnerEarningsByRole = app.partnerEarningsByRole
+        partnerJobsByRole = app.partnerJobsByRole
+        profileHomeBlocks = app.profileHomeBlocks
     }
 }
 

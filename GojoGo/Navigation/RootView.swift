@@ -136,6 +136,18 @@ struct MainAppView: View {
         )) {
             PostViewerSheet().environmentObject(app)
         }
+        .fullScreenCover(isPresented: Binding(
+            get: { app.partnerOnboardingRole != nil },
+            set: { if !$0 { app.cancelPartnerOnboarding() } }
+        )) {
+            PartnerOnboardingView().environmentObject(app)
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { app.partnerDashboardRole != nil },
+            set: { if !$0 { app.closePartnerDashboard() } }
+        )) {
+            PartnerDashboardView().environmentObject(app)
+        }
         .onChange(of: app.showCompose) { _, open in
             if open {
                 app.showCompose = false

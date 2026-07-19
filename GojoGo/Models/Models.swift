@@ -591,8 +591,86 @@ enum WorldMessageKind {
     case carousel
     case audio
     case location
+    case poll
     case system
     case timestamp
+}
+
+/// The six iMessage tapbacks (+ their SF Symbol overlay glyph).
+enum WorldTapback: String, CaseIterable, Identifiable {
+    case heart, thumbsUp, thumbsDown, haha, exclaim, question
+    var id: String { rawValue }
+
+    /// Big glyph shown in the floating reaction picker.
+    var pickerSymbol: String {
+        switch self {
+        case .heart:      return "heart.fill"
+        case .thumbsUp:   return "hand.thumbsup.fill"
+        case .thumbsDown: return "hand.thumbsdown.fill"
+        case .haha:       return "face.smiling.fill"
+        case .exclaim:    return "exclamationmark.2"
+        case .question:   return "questionmark"
+        }
+    }
+
+    /// Compact glyph baked into the badge that sticks to the bubble corner.
+    var badgeSymbol: String {
+        switch self {
+        case .heart:      return "heart.fill"
+        case .thumbsUp:   return "hand.thumbsup.fill"
+        case .thumbsDown: return "hand.thumbsdown.fill"
+        case .haha:       return "face.smiling.fill"
+        case .exclaim:    return "exclamationmark.2"
+        case .question:   return "questionmark"
+        }
+    }
+}
+
+/// A tapback reaction stuck to a bubble.
+struct WorldReaction: Identifiable, Equatable {
+    let id: UUID
+    var tapback: WorldTapback
+    var fromUser: Bool
+
+    init(id: UUID = UUID(), tapback: WorldTapback, fromUser: Bool) {
+        self.id = id; self.tapback = tapback; self.fromUser = fromUser
+    }
+}
+
+/// A quoted snippet shown above a bubble when it's an inline reply.
+struct WorldReplySnippet: Equatable {
+    var authorName: String
+    var preview: String
+    var fromUser: Bool
+}
+
+/// A single poll option with its voters.
+struct WorldPollOption: Identifiable, Equatable {
+    let id: UUID
+    var text: String
+    /// Display names of everyone who picked this option ("You" for the user).
+    var voters: [String]
+
+    init(id: UUID = UUID(), text: String, voters: [String] = []) {
+        self.id = id; self.text = text; self.voters = voters
+    }
+}
+
+/// An iMessage-style poll embedded in a message.
+struct WorldPoll: Equatable {
+    var question: String
+    var options: [WorldPollOption]
+    /// Whether the user may pick more than one option.
+    var allowsMultiple: Bool
+
+    init(question: String, options: [WorldPollOption], allowsMultiple: Bool = true) {
+        self.question = question; self.options = options; self.allowsMultiple = allowsMultiple
+    }
+
+    var totalVotes: Int { options.reduce(0) { $0 + $1.voters.count } }
+    func youVoted(_ optionID: UUID) -> Bool {
+        options.first { $0.id == optionID }?.voters.contains("You") ?? false
+    }
 }
 
 /// One slide inside a chat media carousel (photo and/or video).
@@ -633,15 +711,42 @@ struct WorldMessage: Identifiable {
     var durationLabel: String?
     var senderName: String?
     var carouselItems: [WorldCarouselItem]
+    /// Tapbacks stuck to this bubble.
+    var reactions: [WorldReaction]
+    /// Quoted snippet when this is an inline reply.
+    var replyTo: WorldReplySnippet?
+    /// Poll payload for `.poll` messages.
+    var poll: WorldPoll?
+    /// Set while a Send-Later message is waiting to be delivered.
+    var scheduledLabel: String?
 
     init(id: UUID = UUID(), kind: WorldMessageKind = .text, text: String,
          fromUser: Bool = false, fileName: String? = nil, fileMeta: String? = nil,
          readLabel: String? = nil, imageData: Data? = nil, durationLabel: String? = nil,
-         senderName: String? = nil, carouselItems: [WorldCarouselItem] = []) {
+         senderName: String? = nil, carouselItems: [WorldCarouselItem] = [],
+         reactions: [WorldReaction] = [], replyTo: WorldReplySnippet? = nil,
+         poll: WorldPoll? = nil, scheduledLabel: String? = nil) {
         self.id = id; self.kind = kind; self.text = text; self.fromUser = fromUser
         self.fileName = fileName; self.fileMeta = fileMeta; self.readLabel = readLabel
         self.imageData = imageData; self.durationLabel = durationLabel
         self.senderName = senderName; self.carouselItems = carouselItems
+        self.reactions = reactions; self.replyTo = replyTo
+        self.poll = poll; self.scheduledLabel = scheduledLabel
+    }
+
+    /// One-line description used for reply snippets & list previews.
+    var snippetText: String {
+        switch kind {
+        case .text, .emoji: return text
+        case .file:         return "📄 \(fileName ?? "Attachment")"
+        case .photo:        return "📷 Photo"
+        case .video:        return "📹 Video"
+        case .carousel:     return "🖼 \(carouselItems.count) items"
+        case .audio:        return "🎤 Audio message"
+        case .location:     return "📍 Location"
+        case .poll:         return "📊 \(poll?.question ?? "Poll")"
+        case .system, .timestamp: return text
+        }
     }
 }
 
@@ -700,19 +805,68 @@ struct WorldConversation: Identifiable {
     var filterBadge: String?
     /// Used to float threads to the top when you send or receive a message.
     var lastActivityAt: Date
+    /// Chat wallpaper chosen in the contact's Backgrounds tab.
+    var background: WorldChatBackground
 
     init(id: UUID = UUID(), contactID: UUID? = nil, circleID: UUID? = nil,
          title: String, preview: String, timeAgo: String, unread: Int = 0,
          isGroup: Bool = false, pinned: Bool = false, avatarURL: String? = nil,
          avatarGradient: [Color] = [Color(hex: "26303F"), Color(hex: "141821")],
          messages: [WorldMessage] = [], filterBadge: String? = nil,
-         lastActivityAt: Date = Date()) {
+         lastActivityAt: Date = Date(), background: WorldChatBackground = .none) {
         self.id = id; self.contactID = contactID; self.circleID = circleID
         self.title = title; self.preview = preview; self.timeAgo = timeAgo
         self.unread = unread; self.isGroup = isGroup; self.pinned = pinned
         self.avatarURL = avatarURL; self.avatarGradient = avatarGradient
         self.messages = messages; self.filterBadge = filterBadge
-        self.lastActivityAt = lastActivityAt
+        self.lastActivityAt = lastActivityAt; self.background = background
+    }
+}
+
+/// Modal sheet slot for the My World list (non-immersive). Poll & Send-Later are
+/// shown as in-view overlays instead, because UIKit sheets don't present reliably
+/// over the immersive chat.
+enum WorldSheetKind: Int, Identifiable {
+    case newMessage
+    var id: Int { rawValue }
+}
+
+/// Selectable chat wallpaper for a My World conversation (mirrors iMessage Backgrounds).
+enum WorldChatBackground: String, CaseIterable, Identifiable {
+    case none, sky, water, aurora, dusk, bloom, graphite
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none:     return "None"
+        case .sky:      return "Sky"
+        case .water:    return "Water"
+        case .aurora:   return "Aurora"
+        case .dusk:     return "Dusk"
+        case .bloom:    return "Bloom"
+        case .graphite: return "Graphite"
+        }
+    }
+
+    /// Gradient stops for the wallpaper (empty = use the plain page background).
+    var gradient: [Color] {
+        switch self {
+        case .none:     return []
+        case .sky:      return [Color(hex: "2E5B9E"), Color(hex: "8AB6E8"), Color(hex: "E7B98F")]
+        case .water:    return [Color(hex: "0B4F6C"), Color(hex: "1B98C4"), Color(hex: "8FD3E8")]
+        case .aurora:   return [Color(hex: "0B2A3A"), Color(hex: "1D7A6E"), Color(hex: "3AC0E0")]
+        case .dusk:     return [Color(hex: "3A1C5A"), Color(hex: "8E3B76"), Color(hex: "E8865A")]
+        case .bloom:    return [Color(hex: "F58AA8"), Color(hex: "F6B078"), Color(hex: "FBD9A0")]
+        case .graphite: return [Color(hex: "1A1A1C"), Color(hex: "2C2C2E"), Color(hex: "3A3A3C")]
+        }
+    }
+
+    /// Whether the wallpaper is bright enough that bubbles/labels need extra contrast.
+    var isLight: Bool {
+        switch self {
+        case .bloom: return true
+        default:     return false
+        }
     }
 }
 
@@ -855,5 +1009,309 @@ struct DeliveryPastOrder: Identifiable {
         self.id = id; self.restaurantName = restaurantName; self.imageURL = imageURL
         self.itemsSummary = itemsSummary; self.totalLabel = totalLabel
         self.dateLabel = dateLabel; self.rating = rating
+    }
+}
+
+// MARK: - Partner (Become a driver / delivery partner)
+
+/// A side of the marketplace the user can sign up to work on.
+enum PartnerRole: String, Codable, Equatable, CaseIterable {
+    case driver     // GojoTravel
+    case courier    // GojoDelivery ("delivery guy")
+
+    /// Amount, in USD, held as a good-conduct stake before the partner can work.
+    static let stakeAmount: Double = 30
+
+    var title: String { self == .driver ? "Driver" : "Delivery Partner" }
+    var ctaTitle: String { self == .driver ? "Become a driver" : "Become a delivery partner" }
+    var service: String { self == .driver ? "GojoTravel" : "GojoDelivery" }
+    var wordmarkTrailing: String { self == .driver ? "travel" : "delivery" }
+    var icon: String { self == .driver ? "car.fill" : "bag.fill" }
+    var earner: String { self == .driver ? "riders" : "customers" }
+    var jobNoun: String { self == .driver ? "trip" : "delivery" }
+}
+
+/// Stage of the become-a-partner flow.
+enum PartnerOnboardingStep: Int, Equatable, Comparable {
+    case rules      // rules / how it works, tap "I agree"
+    case stake      // pay the $30 good-conduct stake
+    case kyc        // upload ID + (driver) vehicle papers
+    case done       // process complete
+
+    static func < (a: PartnerOnboardingStep, b: PartnerOnboardingStep) -> Bool {
+        a.rawValue < b.rawValue
+    }
+}
+
+enum IDDocumentType: String, CaseIterable, Identifiable {
+    case idCard = "National ID"
+    case passport = "Passport"
+    var id: String { rawValue }
+    var icon: String { self == .idCard ? "person.text.rectangle.fill" : "book.closed.fill" }
+}
+
+enum CourierVehicle: String, CaseIterable, Identifiable {
+    case bicycle = "Bicycle"
+    case scooter = "Scooter"
+    case motorbike = "Motorbike"
+    case car = "Car"
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .bicycle: return "bicycle"
+        case .scooter: return "scooter"
+        case .motorbike: return "figure.outdoor.cycle"
+        case .car: return "car.fill"
+        }
+    }
+}
+
+/// What a driver drives. A trottinette (kick/e-scooter) needs no licence or
+/// vehicle registration, so its KYC is identity-only.
+enum DriverVehicle: String, CaseIterable, Identifiable {
+    case car = "Car"
+    case motorcycle = "Motorcycle"
+    case trottinette = "Trottinette"
+
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .car:         return "car.fill"
+        case .motorcycle:  return "figure.outdoor.cycle"
+        case .trottinette: return "scooter"
+        }
+    }
+    /// Cars & motorcycles need a licence + registration; trottinettes don't.
+    var requiresLicense: Bool { self != .trottinette }
+}
+
+/// KYC + vehicle data captured during onboarding.
+struct PartnerApplication: Equatable {
+    var role: PartnerRole
+
+    // Identity (both roles)
+    var fullName: String = ""
+    var idType: IDDocumentType = .idCard
+    var idNumber: String = ""
+    var idPhotoCaptured: Bool = false
+    var selfieCaptured: Bool = false
+
+    // Driver — vehicle type + (for car/motorcycle) papers
+    var driverVehicle: DriverVehicle = .car
+    var licenseNumber: String = ""
+    var licenseCaptured: Bool = false
+    var vehicleMake: String = ""
+    var vehicleModel: String = ""
+    var vehicleYear: String = ""
+    var vehicleColor: String = ""
+    var plate: String = ""
+    var registrationCaptured: Bool = false   // "carte grise" — vehicle registration
+
+    // Courier — vehicle type
+    var vehicleType: CourierVehicle = .motorbike
+
+    /// Whether every required field for the role is filled / captured.
+    var isComplete: Bool {
+        let identityDone = !fullName.trimmingCharacters(in: .whitespaces).isEmpty
+            && !idNumber.trimmingCharacters(in: .whitespaces).isEmpty
+            && idPhotoCaptured && selfieCaptured
+        guard identityDone else { return false }
+        switch role {
+        case .driver:
+            // Trottinettes are identity-only — no licence or vehicle papers.
+            guard driverVehicle.requiresLicense else { return true }
+            return !licenseNumber.trimmingCharacters(in: .whitespaces).isEmpty
+                && licenseCaptured
+                && !vehicleMake.trimmingCharacters(in: .whitespaces).isEmpty
+                && !vehicleModel.trimmingCharacters(in: .whitespaces).isEmpty
+                && !plate.trimmingCharacters(in: .whitespaces).isEmpty
+                && registrationCaptured
+        case .courier:
+            return true
+        }
+    }
+}
+
+/// Phase of a live job while the partner is online.
+enum PartnerJobPhase: Equatable {
+    case idle           // online, waiting for offers
+    case offer          // an incoming request is on screen
+    case toPickup       // accepted, heading to pickup / restaurant
+    case toDropoff      // picked up, heading to the customer
+    case completed      // dropped off — rate + collect
+}
+
+/// A ride or delivery offered to an online partner.
+struct PartnerJob: Identifiable, Equatable {
+    let id: UUID
+    var role: PartnerRole
+    var customerName: String
+    var pickupName: String
+    var pickupSubtitle: String
+    var dropoffName: String
+    var dropoffSubtitle: String
+    var distanceKm: Double
+    var minutes: Int
+    var fare: Double
+    var customerAvatarURL: String?
+    // Map coordinates for the live route guide.
+    var originLat: Double    // where the partner starts (heading to pickup)
+    var originLon: Double
+    var pickupLat: Double
+    var pickupLon: Double
+    var dropoffLat: Double
+    var dropoffLon: Double
+
+    init(id: UUID = UUID(), role: PartnerRole, customerName: String,
+         pickupName: String, pickupSubtitle: String,
+         dropoffName: String, dropoffSubtitle: String,
+         distanceKm: Double, minutes: Int, fare: Double,
+         customerAvatarURL: String? = nil,
+         originLat: Double = 33.5731, originLon: Double = -7.5898,
+         pickupLat: Double = 33.5731, pickupLon: Double = -7.5898,
+         dropoffLat: Double = 33.5731, dropoffLon: Double = -7.5898) {
+        self.id = id; self.role = role; self.customerName = customerName
+        self.pickupName = pickupName; self.pickupSubtitle = pickupSubtitle
+        self.dropoffName = dropoffName; self.dropoffSubtitle = dropoffSubtitle
+        self.distanceKm = distanceKm; self.minutes = minutes; self.fare = fare
+        self.customerAvatarURL = customerAvatarURL
+        self.originLat = originLat; self.originLon = originLon
+        self.pickupLat = pickupLat; self.pickupLon = pickupLon
+        self.dropoffLat = dropoffLat; self.dropoffLon = dropoffLon
+    }
+
+    var fareLabel: String { String(format: "$%.2f", fare) }
+    var distanceLabel: String { String(format: "%.1f km", distanceKm) }
+}
+
+// MARK: - Profile Home (customizable profile canvas)
+
+/// The kinds of blocks a user can stack to compose their profile Home tab.
+enum ProfileHomeBlockKind: String, Codable, CaseIterable, Identifiable {
+    case heading    // big title + optional subtitle
+    case banner     // wide cover — a picture or video
+    case text       // a freeform note
+    case featured   // one post shown as a large hero
+    case media      // free-standing pictures & videos (not tied to a post)
+    case gallery    // a titled set of posts in a grid
+    case link       // a tappable link/CTA button
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .heading:  return "Heading"
+        case .banner:   return "Banner"
+        case .text:     return "Text note"
+        case .featured: return "Featured post"
+        case .media:    return "Photos & video"
+        case .gallery:  return "Gallery"
+        case .link:     return "Link button"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .heading:  return "textformat.size"
+        case .banner:   return "photo.on.rectangle.angled"
+        case .text:     return "text.alignleft"
+        case .featured: return "star.square"
+        case .media:    return "photo.stack"
+        case .gallery:  return "square.grid.2x2"
+        case .link:     return "link"
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .heading:  return "A section title to break up your page"
+        case .banner:   return "A wide cover photo or video up top"
+        case .text:     return "Say something in your own words"
+        case .featured: return "Spotlight a single post, big and bold"
+        case .media:    return "Drop in pictures and clips — no post needed"
+        case .gallery:  return "Curate a set of posts your way"
+        case .link:     return "Send people anywhere with one tap"
+        }
+    }
+}
+
+/// A single picture or video used by Banner / Photos-&-video blocks.
+/// Images come from the sample library (`imageURL`) or an imported photo
+/// (`imageData`); videos reference a bundled clip (`videoURL`) + poster.
+struct ProfileHomeMedia: Identifiable, Equatable, Codable {
+    var id: UUID
+    var imageURL: String?
+    var imageData: Data?
+    var videoURL: String?
+    var posterURL: String?
+
+    init(id: UUID = UUID(), imageURL: String? = nil, imageData: Data? = nil,
+         videoURL: String? = nil, posterURL: String? = nil) {
+        self.id = id; self.imageURL = imageURL; self.imageData = imageData
+        self.videoURL = videoURL; self.posterURL = posterURL
+    }
+
+    var isVideo: Bool { videoURL != nil }
+
+    /// Whether two media refer to the same underlying asset (ignores id).
+    func sameAsset(as other: ProfileHomeMedia) -> Bool {
+        imageURL == other.imageURL && videoURL == other.videoURL && imageData == other.imageData
+    }
+}
+
+/// Visual treatment applied to heading / link blocks.
+enum ProfileHomeStyle: String, Codable, CaseIterable, Identifiable {
+    case plain      // bare text
+    case card       // glass card
+    case accent     // filled ink banner / CTA
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .plain:  return "Plain"
+        case .card:   return "Card"
+        case .accent: return "Accent"
+        }
+    }
+}
+
+/// One composable block on the profile Home tab.
+struct ProfileHomeBlock: Identifiable, Equatable, Codable {
+    var id: UUID
+    var kind: ProfileHomeBlockKind
+    var title: String
+    var text: String
+    var url: String
+    var postIDs: [UUID]
+    var media: [ProfileHomeMedia]   // banner / photos-&-video blocks
+    var columns: Int                // gallery / media: 1…3
+    var style: ProfileHomeStyle
+
+    init(id: UUID = UUID(), kind: ProfileHomeBlockKind,
+         title: String = "", text: String = "", url: String = "",
+         postIDs: [UUID] = [], media: [ProfileHomeMedia] = [],
+         columns: Int = 3, style: ProfileHomeStyle = .card) {
+        self.id = id; self.kind = kind; self.title = title; self.text = text
+        self.url = url; self.postIDs = postIDs; self.media = media
+        self.columns = columns; self.style = style
+    }
+
+    // Resilient decoding so layouts saved by older builds (before `media`)
+    // still load instead of throwing and wiping the whole session.
+    enum CodingKeys: String, CodingKey {
+        case id, kind, title, text, url, postIDs, media, columns, style
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decode(ProfileHomeBlockKind.self, forKey: .kind)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        url = try c.decodeIfPresent(String.self, forKey: .url) ?? ""
+        postIDs = try c.decodeIfPresent([UUID].self, forKey: .postIDs) ?? []
+        media = try c.decodeIfPresent([ProfileHomeMedia].self, forKey: .media) ?? []
+        columns = try c.decodeIfPresent(Int.self, forKey: .columns) ?? 3
+        style = try c.decodeIfPresent(ProfileHomeStyle.self, forKey: .style) ?? .card
     }
 }

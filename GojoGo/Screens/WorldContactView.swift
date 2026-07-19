@@ -11,6 +11,7 @@ struct WorldContactView: View {
         case backgrounds = "Backgrounds"
         case photos = "Photos"
         case links = "Links"
+        case documents = "Documents"
         case locations = "Locations"
         var id: String { rawValue }
     }
@@ -148,8 +149,146 @@ struct WorldContactView: View {
             photosGrid
         case .locations:
             locationOnly
-        case .backgrounds, .links:
-            emptyTab(tab.rawValue)
+        case .backgrounds:
+            backgroundsGrid
+        case .links:
+            linksSection
+        case .documents:
+            documentsSection
+        }
+    }
+
+    // MARK: Backgrounds
+
+    private var backgroundsGrid: some View {
+        let current = convo?.background ?? .none
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3),
+                         spacing: 18) {
+            ForEach(WorldChatBackground.allCases) { bg in
+                Button {
+                    app.setWorldBackground(bg)
+                } label: {
+                    VStack(spacing: 8) {
+                        ZStack {
+                            if bg == .none {
+                                Circle().fill(IMColor.chrome)
+                                    .overlay(
+                                        Image(systemName: "circle.slash")
+                                            .font(.system(size: 22))
+                                            .foregroundStyle(IMColor.secondary)
+                                    )
+                            } else {
+                                Circle().fill(
+                                    LinearGradient(colors: bg.gradient,
+                                                   startPoint: .topLeading, endPoint: .bottomTrailing))
+                            }
+                        }
+                        .frame(width: 84, height: 84)
+                        .overlay(
+                            Circle().strokeBorder(
+                                current == bg ? IMColor.blue : Color.clear, lineWidth: 3)
+                        )
+                        .overlay(alignment: .bottomTrailing) {
+                            if current == bg {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, IMColor.blue)
+                                    .font(.system(size: 22))
+                                    .offset(x: 2, y: 2)
+                            }
+                        }
+
+                        Text(bg.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(current == bg ? IMColor.label : IMColor.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+    }
+
+    // MARK: Links
+
+    private var linksSection: some View {
+        VStack(spacing: 12) {
+            linkCard(icon: "video.fill", tint: Color(red: 0.2, green: 0.78, blue: 0.35),
+                     title: "FaceTime", subtitle: "Link")
+            ForEach(sharedLinks, id: \.self) { url in
+                linkCard(icon: "link", tint: IMColor.blue, title: url, subtitle: "Shared link")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+    }
+
+    private var sharedLinks: [String] {
+        (convo?.messages ?? []).flatMap { msg -> [String] in
+            guard msg.kind == .text else { return [] }
+            return msg.text
+                .split(separator: " ")
+                .map(String.init)
+                .filter { $0.hasPrefix("http://") || $0.hasPrefix("https://") || $0.hasPrefix("www.") }
+        }
+    }
+
+    private func linkCard(icon: String, tint: Color, title: String, subtitle: String) -> some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(tint)
+                .frame(width: 54, height: 54)
+                .overlay(Image(systemName: icon).font(.system(size: 22)).foregroundStyle(.white))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(IMColor.label)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(IMColor.secondary)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(IMColor.chrome))
+    }
+
+    // MARK: Documents
+
+    private var documentsSection: some View {
+        let docs = (convo?.messages ?? []).filter { $0.kind == .file }
+        return Group {
+            if docs.isEmpty {
+                emptyTab("documents")
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
+                                    GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    ForEach(docs) { doc in
+                        VStack(spacing: 8) {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(IMColor.chrome)
+                                .frame(height: 120)
+                                .overlay(
+                                    Image(systemName: "doc.text.fill")
+                                        .font(.system(size: 40))
+                                        .foregroundStyle(IMColor.blue)
+                                )
+                            Text(doc.fileName ?? "Document")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(IMColor.label)
+                                .lineLimit(1)
+                            Text(doc.fileMeta ?? "File")
+                                .font(.system(size: 11))
+                                .foregroundStyle(IMColor.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+            }
         }
     }
 
