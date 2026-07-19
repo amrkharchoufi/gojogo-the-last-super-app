@@ -55,7 +55,7 @@ struct PostActions: View {
         HStack(spacing: 16) {
             Button {
                 let wasLiked = live.liked
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.55)) {
+                withAnimation(.ggPop) {
                     app.toggleLike(live.id)
                 }
                 if !wasLiked {
@@ -70,7 +70,7 @@ struct PostActions: View {
                     Image(systemName: live.liked ? "heart.fill" : "heart")
                         .font(.system(size: 24, weight: .regular))
                         .scaleEffect(heartBounce ? 1.35 : 1)
-                        .animation(.spring(response: 0.28, dampingFraction: 0.52), value: heartBounce)
+                        .animation(.ggPop, value: heartBounce)
                     if live.likeCount > 0 {
                         Text(formatCount(live.likeCount))
                             .font(.system(size: 14, weight: .semibold))
@@ -90,7 +90,7 @@ struct PostActions: View {
             Spacer(minLength: 8)
 
             Button {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) {
+                withAnimation(.ggSnappy) {
                     app.toggleBookmark(live.id)
                 }
             } label: {

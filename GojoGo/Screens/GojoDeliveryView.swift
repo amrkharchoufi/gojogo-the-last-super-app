@@ -26,8 +26,8 @@ struct GojoDeliveryView: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.28), value: app.selectedDeliveryRestaurantID)
-        .animation(.easeInOut(duration: 0.28), value: app.deliveryStatus != nil)
+        .animation(.ggOverlay, value: app.selectedDeliveryRestaurantID)
+        .animation(.ggOverlay, value: app.deliveryStatus != nil)
         .sheet(isPresented: $app.showDeliveryCheckout) {
             DeliveryCheckoutSheet()
                 .environmentObject(app)
@@ -85,7 +85,7 @@ private struct DeliveryBrowseView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.88), value: app.deliveryCart.isEmpty)
+        .animation(.ggNav, value: app.deliveryCart.isEmpty)
     }
 
     private var header: some View {
@@ -141,7 +141,7 @@ private struct DeliveryBrowseView: View {
                 .autocorrectionDisabled()
             if !app.deliverySearch.isEmpty {
                 Button {
-                    withAnimation(.easeOut(duration: 0.15)) { app.deliverySearch = "" }
+                    withAnimation(.ggSnappy) { app.deliverySearch = "" }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 15))
@@ -163,7 +163,7 @@ private struct DeliveryBrowseView: View {
                     let active = app.deliveryCategory == cat.name
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        withAnimation(.easeOut(duration: 0.2)) { app.deliveryCategory = cat.name }
+                        withAnimation(.ggSnappy) { app.deliveryCategory = cat.name }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: cat.icon)
@@ -406,7 +406,7 @@ private struct DeliveryRestaurantView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.88), value: app.deliveryCart.isEmpty)
+        .animation(.ggNav, value: app.deliveryCart.isEmpty)
     }
 
     private var hero: some View {

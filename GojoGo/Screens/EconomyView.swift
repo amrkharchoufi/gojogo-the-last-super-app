@@ -200,7 +200,7 @@ struct EconomyView: View {
                 .onSubmit { searchFocused = false }
             if !query.isEmpty {
                 Button {
-                    withAnimation(.easeOut(duration: 0.15)) { query = "" }
+                    withAnimation(.ggSnappy) { query = "" }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 15))
@@ -217,13 +217,13 @@ struct EconomyView: View {
     private var filterChips: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { nearMe.toggle() }
+                withAnimation(.ggSnappy) { nearMe.toggle() }
             } label: {
                 MonoChip(text: "near me", active: nearMe)
             }
             .buttonStyle(.plain)
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { underBudget.toggle() }
+                withAnimation(.ggSnappy) { underBudget.toggle() }
             } label: {
                 MonoChip(text: "≤ $300", active: underBudget)
             }
@@ -265,7 +265,7 @@ struct EconomyView: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        withAnimation(.easeOut(duration: 0.2)) { category = cat }
+                        withAnimation(.ggSnappy) { category = cat }
                     }
                 }
             }
@@ -467,7 +467,7 @@ struct EconomyView: View {
 
     private func saveButton(_ product: Product) -> some View {
         Button {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) {
+            withAnimation(.ggSnappy) {
                 app.toggleSaveProduct(product.id)
             }
         } label: {

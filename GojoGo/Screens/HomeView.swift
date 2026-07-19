@@ -344,7 +344,7 @@ struct InstagramPostCard: View {
 
             if live.showFollow {
                 Button {
-                    withAnimation(.easeOut(duration: 0.2)) { app.toggleFollow(postID: live.id) }
+                    withAnimation(.ggSnappy) { app.toggleFollow(postID: live.id) }
                 } label: {
                     Text(live.following ? "Following" : "Follow")
                         .font(.system(size: 13, weight: .semibold))
@@ -566,7 +566,7 @@ struct InstagramPostCard: View {
     @ViewBuilder
     private var postContextMenu: some View {
         Button {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) {
+            withAnimation(.ggPop) {
                 app.toggleLike(live.id)
             }
         } label: {
@@ -581,7 +581,7 @@ struct InstagramPostCard: View {
         }
 
         Button {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) {
+            withAnimation(.ggSnappy) {
                 app.toggleBookmark(live.id)
             }
         } label: {
@@ -591,7 +591,7 @@ struct InstagramPostCard: View {
 
         if live.showFollow {
             Button {
-                withAnimation(.easeOut(duration: 0.2)) {
+                withAnimation(.ggSnappy) {
                     app.toggleFollow(postID: live.id)
                 }
             } label: {
@@ -619,7 +619,7 @@ struct InstagramPostCard: View {
         Divider()
 
         Button(role: .destructive) {
-            withAnimation(.easeInOut(duration: 0.25)) {
+            withAnimation(.ggTab) {
                 app.hidePost(live.id)
             }
         } label: {
@@ -627,7 +627,7 @@ struct InstagramPostCard: View {
         }
 
         Button(role: .destructive) {
-            withAnimation(.easeInOut(duration: 0.25)) {
+            withAnimation(.ggTab) {
                 app.hidePost(live.id)
             }
         } label: {

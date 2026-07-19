@@ -49,7 +49,7 @@ struct WorldChatView: View {
                 Color.black.opacity(0.001)
                     .ignoresSafeArea()
                     .onTapGesture {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+                        withAnimation(.ggNav) {
                             app.showWorldAppsMenu = false
                         }
                     }
@@ -77,7 +77,7 @@ struct WorldChatView: View {
                 }
             )
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.88), value: app.showWorldAppsMenu)
+        .animation(.ggNav, value: app.showWorldAppsMenu)
         .coordinateSpace(name: "worldChat")
         .onPreferenceChange(BubbleFrameKey.self) { bubbleFrames = $0 }
         .background(IMColor.bg.ignoresSafeArea())
@@ -101,7 +101,7 @@ struct WorldChatView: View {
     // MARK: Drawer actions
 
     private func handleDrawer(_ action: WorldAppAction) {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+        withAnimation(.ggNav) {
             app.showWorldAppsMenu = false
         }
         switch action {
@@ -114,7 +114,7 @@ struct WorldChatView: View {
         case .location:
             app.sendWorldLocation()
         case .polls:
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+            withAnimation(.ggNav) {
                 app.showWorldPollOverlay = true
             }
         case .sendLater:
@@ -220,7 +220,7 @@ struct WorldChatView: View {
         if app.showWorldPollOverlay {
             WorldOverlaySheet(
                 onDismiss: {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                    withAnimation(.ggNav) {
                         app.showWorldPollOverlay = false
                     }
                 }
@@ -228,7 +228,7 @@ struct WorldChatView: View {
                 WorldPollComposer(
                     onSend: { q, opts in app.sendWorldPoll(question: q, options: opts) },
                     onCancel: {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                        withAnimation(.ggNav) {
                             app.showWorldPollOverlay = false
                         }
                     }
@@ -244,7 +244,7 @@ struct WorldChatView: View {
         if app.showWorldSendLaterOverlay {
             WorldOverlaySheet(
                 onDismiss: {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                    withAnimation(.ggNav) {
                         app.showWorldSendLaterOverlay = false
                     }
                 }
@@ -264,7 +264,7 @@ struct WorldChatView: View {
                         }
                     Button {
                         app.setWorldSendLater(Self.sendLaterLabel(for: app.worldSendLaterDate))
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                        withAnimation(.ggNav) {
                             app.showWorldSendLaterOverlay = false
                         }
                     } label: {
@@ -396,7 +396,7 @@ struct WorldChatView: View {
                 .padding(.horizontal, 10)
                 .padding(.top, 4)
                 .padding(.bottom, 12)
-                .animation(.spring(response: 0.42, dampingFraction: 0.68), value: live.messages.count)
+                .animation(.ggSnappy, value: live.messages.count)
             }
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: live.messages.count) { _, _ in
@@ -404,7 +404,7 @@ struct WorldChatView: View {
             }
             .onChange(of: isTyping) { _, typing in
                 if typing {
-                    withAnimation(.easeOut(duration: 0.2)) {
+                    withAnimation(.ggSnappy) {
                         proxy.scrollTo("typing", anchor: .bottom)
                     }
                 }
@@ -416,7 +416,7 @@ struct WorldChatView: View {
     private func scrollToEnd(_ proxy: ScrollViewProxy) {
         guard let last = live.messages.last else { return }
         DispatchQueue.main.async {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            withAnimation(.ggNav) {
                 proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
@@ -521,7 +521,7 @@ struct WorldChatView: View {
                             .onEnded { _ in
                                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                 focused = false
-                                withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
+                                withAnimation(.ggNav) {
                                     app.worldReactionTarget = msg.id
                                 }
                             }
@@ -738,8 +738,8 @@ struct WorldChatView: View {
         .padding(.bottom, 8)
         .background(IMColor.bg)
         .safeAreaPadding(.bottom, 0)
-        .animation(.spring(response: 0.34, dampingFraction: 0.85), value: app.worldReplyingTo)
-        .animation(.spring(response: 0.34, dampingFraction: 0.85), value: app.worldSendLaterLabel)
+        .animation(.ggNav, value: app.worldReplyingTo)
+        .animation(.ggNav, value: app.worldSendLaterLabel)
     }
 
     /// Quoted-message bar shown above the composer when replying.
@@ -785,7 +785,7 @@ struct WorldChatView: View {
     private func sendLaterBar(_ label: String) -> some View {
         HStack(spacing: 10) {
             Button {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                withAnimation(.ggNav) {
                     app.showWorldSendLaterOverlay = true
                 }
             } label: {
@@ -826,7 +826,7 @@ struct WorldChatView: View {
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 focused = false
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+                withAnimation(.ggNav) {
                     app.showWorldAppsMenu.toggle()
                 }
             } label: {
@@ -905,8 +905,8 @@ struct WorldChatView: View {
                             .strokeBorder(IMColor.label.opacity(0.09), lineWidth: 0.66)
                     )
             )
-            .animation(.easeOut(duration: 0.15), value: canSend)
-            .animation(.spring(response: 0.35, dampingFraction: 0.86),
+            .animation(.ggSnappy, value: canSend)
+            .animation(.ggNav,
                        value: app.worldPendingAttachments.count)
         }
     }
@@ -1087,7 +1087,7 @@ private struct TypingIndicatorBubble: View {
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 400_000_000)
-                withAnimation(.easeInOut(duration: 0.3)) { phase = (phase + 1) % 3 }
+                withAnimation(.ggOverlay) { phase = (phase + 1) % 3 }
             }
         }
     }
@@ -1174,7 +1174,7 @@ private struct SwipeLeftDismissBridge: UIViewRepresentable {
                         self.offset.wrappedValue = 0
                     }
                 } else {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                    withAnimation(.ggNav) {
                         offset.wrappedValue = 0
                     }
                 }
@@ -1326,7 +1326,7 @@ struct WorldOverlaySheet<Content: View>: View {
                 .offset(y: appeared ? 0 : 600)
         }
         .onAppear {
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { appeared = true }
+            withAnimation(.ggNav) { appeared = true }
         }
     }
 }
@@ -1417,7 +1417,7 @@ struct WorldReactionOverlay<Bubble: View>: View {
                 .opacity(appeared ? 1 : 0)
         }
         .onAppear {
-            withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) { appeared = true }
+            withAnimation(.ggSnappy) { appeared = true }
         }
     }
 
@@ -1613,7 +1613,7 @@ struct WorldPollBubble: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(bgTint.opacity(0.32))
                         .frame(width: max(38, geo.size.width * fraction))
-                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: fraction)
+                        .animation(.ggNav, value: fraction)
                 }
                 HStack(spacing: 10) {
                     ZStack {

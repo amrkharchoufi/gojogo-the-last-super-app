@@ -278,7 +278,7 @@ struct GojoTravelView: View {
                 ForEach(app.travelRideOptions) { option in
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        withAnimation(.easeOut(duration: 0.18)) { app.selectedRide = option }
+                        withAnimation(.ggSnappy) { app.selectedRide = option }
                     } label: {
                         rideRow(option, selected: app.selectedRide?.id == option.id)
                     }

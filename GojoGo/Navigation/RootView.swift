@@ -3,6 +3,11 @@ import SwiftUI
 struct MainAppView: View {
     @EnvironmentObject var app: AppState
 
+    /// Identity of the visible section — drives the crossfade between tabs / My World.
+    private var surfaceID: AnyHashable {
+        app.navMode == .myWorld ? AnyHashable("myWorld") : AnyHashable(app.activeTab)
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
@@ -21,11 +26,14 @@ struct MainAppView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Don't attach implicit animations to the whole tab surface — they
-            // cascade into ScrollView contentOffset and make Home jump on nav taps.
-            .animation(nil, value: app.activeTab)
-            .animation(nil, value: app.navMode)
-            .animation(nil, value: app.navBarExpanded)
+            // Crossfade between sections. Keyed identity + a scoped `.ggTab` animation
+            // keeps the transition on the section swap only — it can't leak into a
+            // section's own ScrollView offset (that only ever changes on activeTab/navMode,
+            // and each incoming section is a fresh view). navBarExpanded is deliberately
+            // absent from the key so expanding the dock never re-animates the content.
+            .id(surfaceID)
+            .transition(.opacity)
+            .animation(.ggTab, value: surfaceID)
 
             // Soft scrim when composing — Apple blur feel
             if app.isComposing {
@@ -63,10 +71,10 @@ struct MainAppView: View {
                     .zIndex(50)
             }
         }
-        .animation(.easeOut(duration: 0.18), value: app.storyOverlayActive)
+        .animation(.ggOverlay, value: app.storyOverlayActive)
         // Don't ignore keyboard — composer must sit above it when open.
-        .animation(.easeOut(duration: 0.25), value: app.isComposing)
-        .animation(.spring(response: 0.40, dampingFraction: 0.88), value: app.isWorldImmersive)
+        .animation(.ggOverlay, value: app.isComposing)
+        .animation(.ggGentle, value: app.isWorldImmersive)
         .sheet(isPresented: Binding(
             get: { app.showProfile },
             set: { if !$0 { app.closeProfile() } }

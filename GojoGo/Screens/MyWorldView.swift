@@ -24,8 +24,8 @@ struct MyWorldView: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.28), value: app.selectedWorldConversationID)
-        .animation(.easeInOut(duration: 0.28), value: app.showWorldContact)
+        .animation(.ggOverlay, value: app.selectedWorldConversationID)
+        .animation(.ggOverlay, value: app.showWorldContact)
         .modifier(WorldSheetHost())
     }
 }
@@ -73,7 +73,7 @@ private struct WorldMessagesList: View {
     private var topBar: some View {
         HStack(spacing: 10) {
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { app.worldIsEditing.toggle() }
+                withAnimation(.ggSnappy) { app.worldIsEditing.toggle() }
             } label: {
                 Text(app.worldIsEditing ? "Done" : "Edit")
                     .font(.system(size: 16, weight: .semibold))
@@ -88,7 +88,7 @@ private struct WorldMessagesList: View {
 
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                withAnimation(.ggNav) {
                     app.showWorldFilters.toggle()
                 }
             } label: {
@@ -195,7 +195,7 @@ private struct WorldMessagesList: View {
                 .autocorrectionDisabled()
             if !app.worldSearch.isEmpty {
                 Button {
-                    withAnimation(.easeOut(duration: 0.15)) { app.worldSearch = "" }
+                    withAnimation(.ggSnappy) { app.worldSearch = "" }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16))
@@ -362,7 +362,7 @@ private struct WorldMessagesList: View {
             .buttonStyle(.plain)
             .contextMenu { rowMenu(convo) }
         }
-        .animation(.easeOut(duration: 0.2), value: app.worldIsEditing)
+        .animation(.ggSnappy, value: app.worldIsEditing)
     }
 
     @ViewBuilder

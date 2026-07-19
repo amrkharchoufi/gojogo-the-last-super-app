@@ -97,6 +97,27 @@ enum GGColor {
                                              startPoint: .topLeading, endPoint: .bottomTrailing)
 }
 
+// MARK: - Motion
+// One shared motion vocabulary so every surface animates with the same feel.
+// Reach for a named token instead of hand-tuning a spring per call site.
+
+extension Animation {
+    /// Section / tab crossfade and chrome reveal — a clean, quick ease.
+    static let ggTab = Animation.easeInOut(duration: 0.26)
+    /// Navigation morph — tab-bar expand/collapse, dock swaps. Snappy, fully settled.
+    static let ggNav = Animation.spring(response: 0.38, dampingFraction: 0.86)
+    /// Larger surfaces — mode switches, immersive show/hide. Softer landing.
+    static let ggGentle = Animation.spring(response: 0.44, dampingFraction: 0.9)
+    /// Small controls — chips, toggles, segmented switches. A touch of life.
+    static let ggSnappy = Animation.spring(response: 0.3, dampingFraction: 0.78)
+    /// Button press feedback — fast, no overshoot.
+    static let ggPress = Animation.easeOut(duration: 0.12)
+    /// Playful pop — likes, hearts, reactions.
+    static let ggPop = Animation.spring(response: 0.3, dampingFraction: 0.62)
+    /// Overlays and scrims — sheets, dimmers, composer backdrop.
+    static let ggOverlay = Animation.easeInOut(duration: 0.28)
+}
+
 // MARK: - Typography
 // SF Pro (system default) for UI. New York (system serif) for explanatory copy.
 

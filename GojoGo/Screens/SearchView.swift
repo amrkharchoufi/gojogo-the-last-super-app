@@ -116,7 +116,7 @@ struct SearchView: View {
             HStack(spacing: 8) {
                 ForEach(SearchScope.allCases, id: \.self) { s in
                     Button {
-                        withAnimation(.easeOut(duration: 0.2)) { scope = s }
+                        withAnimation(.ggSnappy) { scope = s }
                     } label: {
                         MonoChip(text: s.rawValue, active: scope == s)
                     }
@@ -230,7 +230,7 @@ struct SearchView: View {
             .buttonStyle(.plain)
 
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { app.toggleFollowPerson(p.id) }
+                withAnimation(.ggSnappy) { app.toggleFollowPerson(p.id) }
             } label: {
                 Text(p.following ? "Following" : "Follow")
                     .font(.system(size: 12, weight: .semibold))
@@ -314,7 +314,7 @@ struct SearchView: View {
                 ForEach(matchedShorts.prefix(6)) { short in
                     Button {
                         app.focusedShortID = short.id
-                        withAnimation(.easeOut(duration: 0.25)) {
+                        withAnimation(.ggTab) {
                             app.activeTab = .watch
                             app.watchSubFeed = .shorts
                         }
@@ -417,7 +417,7 @@ struct SearchView: View {
                                 .foregroundStyle(GGColor.textSecondary)
 
                             Button {
-                                withAnimation(.easeOut(duration: 0.2)) { app.toggleFollowPerson(p.id) }
+                                withAnimation(.ggSnappy) { app.toggleFollowPerson(p.id) }
                             } label: {
                                 Text(p.following ? "Following" : "Follow")
                                     .font(.system(size: 10, weight: .semibold))

@@ -10,8 +10,8 @@ private enum Msg {
     static let sendFill = GGColor.ink(0.18)
     static let label = GGColor.ink(0.95)
     static let placeholder = GGColor.ink(0.38)
-    static let spring = Animation.spring(response: 0.40, dampingFraction: 0.88)
-    static let modeSpring = Animation.spring(response: 0.42, dampingFraction: 0.86)
+    static let spring = Animation.ggNav
+    static let modeSpring = Animation.ggGentle
     static let tabHit: CGFloat = 44
     static let plusHit: CGFloat = 52
 }
@@ -618,7 +618,7 @@ struct TabPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .opacity(configuration.isPressed ? 0.7 : 1)
-            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .animation(.ggPress, value: configuration.isPressed)
     }
 }
 
@@ -627,7 +627,7 @@ struct SoftPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .opacity(configuration.isPressed ? 0.85 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .animation(.ggPress, value: configuration.isPressed)
     }
 }
 

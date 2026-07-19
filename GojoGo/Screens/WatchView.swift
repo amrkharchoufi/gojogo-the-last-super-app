@@ -8,13 +8,25 @@ struct LongFormFeedView: View {
         ZStack(alignment: .top) {
             GGColor.bg.ignoresSafeArea()
 
-            ScrollView(showsIndicators: false) {
-                LazyVStack(spacing: 18) {
-                    ForEach(app.videos) { VideoCard(video: $0) }
+            // List (not ScrollView+LazyVStack) so the feed keeps its scroll position
+            // when it re-renders on a bottom-nav tap — same fix as the Home feed.
+            List {
+                Group {
+                    Color.clear.frame(height: 92)
+                    ForEach(app.videos) { video in
+                        VideoCard(video: video)
+                            .padding(.bottom, 18)
+                    }
                     Color.clear.frame(height: tabBarInset)
                 }
-                .padding(.top, 92)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
+            .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 0)
+            .scrollContentBackground(.hidden)
+            .scrollIndicators(.hidden)
             .trackScrollChrome(hidden: $hideChrome)
 
             HStack {
@@ -58,9 +70,9 @@ struct WatchView: View {
                     let all = WatchSubFeed.allCases
                     guard let idx = all.firstIndex(of: app.watchSubFeed) else { return }
                     if v.translation.width < 0, idx < all.count - 1 {
-                        withAnimation(.easeOut(duration: 0.25)) { app.watchSubFeed = all[idx + 1] }
+                        withAnimation(.ggTab) { app.watchSubFeed = all[idx + 1] }
                     } else if v.translation.width > 0, idx > 0 {
-                        withAnimation(.easeOut(duration: 0.25)) { app.watchSubFeed = all[idx - 1] }
+                        withAnimation(.ggTab) { app.watchSubFeed = all[idx - 1] }
                     }
                 })
     }
@@ -179,7 +191,7 @@ struct VideoCard: View {
         }
         Divider()
         Button(role: .destructive) {
-            withAnimation(.easeInOut(duration: 0.25)) {
+            withAnimation(.ggTab) {
                 app.reportVideo(live.id)
             }
         } label: {
