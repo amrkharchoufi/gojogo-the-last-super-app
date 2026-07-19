@@ -16,6 +16,12 @@ private struct ProfileGridItem: Identifiable {
     let id: String
     let kind: ProfileGridKind
     var target: ProfileGridTarget? = nil
+    /// Posts-grid corner badge: multi-photo carousel.
+    var isCarousel: Bool = false
+    /// Posts-grid corner badge: video/reel.
+    var isVideoPost: Bool = false
+    /// Reels-grid overlay: play count.
+    var views: Int = 0
 }
 
 /// Profile content tabs. Home (customizable canvas) is own-profile only.
@@ -78,33 +84,46 @@ struct ProfileView: View {
             return []
         case .grid:
             return posts.map { post in
-                if post.imageURL != nil || post.imageData != nil {
-                    return ProfileGridItem(id: "post-\(post.id)",
-                                           kind: .image(url: post.imageURL, data: post.imageData),
-                                           target: .post(post.id))
-                }
+                let hasImage = post.imageURL != nil || post.imageData != nil
+                    || post.mediaItems.first?.imageData != nil
+                let kind: ProfileGridKind = hasImage
+                    ? .image(url: post.imageURL, data: postThumbData(post))
+                    : .text(post.text ?? "Post")
                 return ProfileGridItem(id: "post-\(post.id)",
-                                       kind: .text(post.text ?? "Post"),
-                                       target: .post(post.id))
+                                       kind: kind,
+                                       target: .post(post.id),
+                                       isCarousel: post.isCarousel,
+                                       isVideoPost: post.isVideo)
             }
         case .reels:
             if isOwn {
-                let longs = app.myVideos.map {
-                    ProfileGridItem(id: "vid-\($0.id)",
-                                    kind: .video(url: $0.thumbURL, data: $0.thumbData, duration: $0.duration),
-                                    target: .longForm($0.id))
-                }
+                // Every video the user posted, from any surface: Shorts, long-form
+                // (Watch), and video feed posts — the last of which were missing.
                 let shorts = app.myShorts.map {
                     ProfileGridItem(id: "short-\($0.id)",
                                     kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil),
-                                    target: .short($0.id))
+                                    target: .short($0.id),
+                                    views: syntheticViews(likes: $0.likeCount, seed: $0.id.uuidString))
                 }
-                return longs + shorts
+                let videoPosts = app.myPosts.filter(\.isVideo).map {
+                    ProfileGridItem(id: "reelpost-\($0.id)",
+                                    kind: .video(url: $0.imageURL, data: postThumbData($0), duration: nil),
+                                    target: .post($0.id),
+                                    views: syntheticViews(likes: $0.likeCount, seed: $0.id.uuidString))
+                }
+                let longs = app.myVideos.map {
+                    ProfileGridItem(id: "vid-\($0.id)",
+                                    kind: .video(url: $0.thumbURL, data: $0.thumbData, duration: $0.duration),
+                                    target: .longForm($0.id),
+                                    views: syntheticViews(likes: $0.likes, seed: $0.id.uuidString))
+                }
+                return shorts + videoPosts + longs
             }
-            return posts.filter { $0.imageURL != nil || $0.imageData != nil }.map {
+            return posts.filter(\.isVideo).map {
                 ProfileGridItem(id: "reel-\($0.id)",
-                                kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil),
-                                target: .post($0.id))
+                                kind: .video(url: $0.imageURL, data: postThumbData($0), duration: nil),
+                                target: .post($0.id),
+                                views: syntheticViews(likes: $0.likeCount, seed: $0.id.uuidString))
             }
         case .saved:
             if isOwn {
@@ -121,6 +140,18 @@ struct ProfileView: View {
             }
             return []
         }
+    }
+
+    /// Best still to represent a post in a grid cell (poster, or first carousel slide).
+    private func postThumbData(_ post: Post) -> Data? {
+        post.imageData ?? post.mediaItems.first?.imageData
+    }
+
+    /// Stable, realistic-looking play count for demo media (no real analytics yet).
+    private func syntheticViews(likes: Int, seed: String) -> Int {
+        var h = 5381
+        for b in seed.utf8 { h = ((h &* 33) &+ Int(b)) & 0x7fffffff }
+        return likes > 0 ? likes * 12 + (h % 4000) : (h % 60000) + 300
     }
 
     private func open(_ target: ProfileGridTarget?) {
@@ -523,32 +554,85 @@ struct ProfileView: View {
     private var contentGrid: some View {
         Group {
             if gridItems.isEmpty {
-                Text(isOwn ? "No posts yet." : "No posts yet.")
+                Text("No posts yet.")
                     .font(.system(size: 14))
                     .foregroundStyle(GGColor.textTertiary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 56)
+            } else if selectedTab == .reels {
+                reelsGrid
             } else {
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: 1.5), count: 3),
-                    spacing: 1.5
-                ) {
-                    ForEach(gridItems) { item in
-                        gridCell(item)
-                            .aspectRatio(1, contentMode: .fit)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            .onTapGesture { open(item.target) }
-                    }
-                }
+                postsGrid
             }
         }
     }
 
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 1.5), count: 3)
+    }
+
+    /// Square photo grid with carousel / video corner badges.
+    private var postsGrid: some View {
+        LazyVGrid(columns: gridColumns, spacing: 1.5) {
+            ForEach(gridItems) { item in
+                thumbBase(item)
+                    .aspectRatio(1, contentMode: .fit)
+                    .clipped()
+                    .overlay(alignment: .topTrailing) {
+                        if item.isCarousel {
+                            cornerBadge("square.on.square.fill")
+                        } else if item.isVideoPost {
+                            cornerBadge("play.fill")
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { open(item.target) }
+            }
+        }
+    }
+
+    /// Portrait reels grid with a play-count overlay.
+    private var reelsGrid: some View {
+        LazyVGrid(columns: gridColumns, spacing: 1.5) {
+            ForEach(gridItems) { item in
+                thumbBase(item)
+                    .aspectRatio(3.0 / 5.0, contentMode: .fit)
+                    .clipped()
+                    .overlay(alignment: .bottom) {
+                        LinearGradient(colors: [.clear, .black.opacity(0.5)],
+                                       startPoint: .center, endPoint: .bottom)
+                            .allowsHitTesting(false)
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 11, weight: .bold))
+                            Text(formatCount(item.views))
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(8)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { open(item.target) }
+            }
+        }
+    }
+
+    private func cornerBadge(_ icon: String) -> some View {
+        Image(systemName: icon)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+            .padding(7)
+    }
+
     @ViewBuilder
-    private func gridCell(_ item: ProfileGridItem) -> some View {
+    private func thumbBase(_ item: ProfileGridItem) -> some View {
         switch item.kind {
         case .image(let url, let data):
+            MediaImage(url: url, data: data, cornerRadius: 0)
+        case .video(let url, let data, _):
             MediaImage(url: url, data: data, cornerRadius: 0)
         case .text(let text):
             ZStack(alignment: .topLeading) {
@@ -558,22 +642,6 @@ struct ProfileView: View {
                     .foregroundStyle(GGColor.textPrimary)
                     .lineLimit(5)
                     .padding(8)
-            }
-        case .video(let url, let data, let duration):
-            ZStack(alignment: .bottomLeading) {
-                MediaImage(url: url, data: data, cornerRadius: 0)
-                Image(systemName: "play.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-                    .shadow(radius: 4)
-                    .padding(8)
-                if let duration {
-                    Text(duration)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(6)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                }
             }
         }
     }
