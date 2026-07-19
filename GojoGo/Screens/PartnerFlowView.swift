@@ -620,9 +620,16 @@ private struct PartnerKYCPage: View {
                                 .foregroundStyle(active ? GGColor.onAccent : GGColor.textPrimary)
                                 .frame(width: 40, height: 40)
                                 .background(Circle().fill(active ? GGColor.white : GGColor.ink(0.08)))
-                            Text(v.rawValue)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(GGColor.textPrimary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(v.rawValue)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(GGColor.textPrimary)
+                                if v == .onFeet {
+                                    Text("Walk deliveries nearby")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(GGColor.textTertiary)
+                                }
+                            }
                             Spacer()
                             Image(systemName: active ? "checkmark.circle.fill" : "circle")
                                 .font(.system(size: 18))

@@ -1256,6 +1256,9 @@ enum SampleData {
             DeliveryCourier(name: "Mehdi K.", rating: 4.97, deliveries: 3020,
                             vehicle: "Scooter · Honda",
                             avatarURL: food.courier3),
+            DeliveryCourier(name: "Amine T.", rating: 4.91, deliveries: 890,
+                            vehicle: "On feet",
+                            avatarURL: food.courier1),
         ]
         return couriers.randomElement() ?? couriers[0]
     }

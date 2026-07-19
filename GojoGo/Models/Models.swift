@@ -1051,6 +1051,7 @@ enum IDDocumentType: String, CaseIterable, Identifiable {
 }
 
 enum CourierVehicle: String, CaseIterable, Identifiable {
+    case onFeet = "On feet"
     case bicycle = "Bicycle"
     case scooter = "Scooter"
     case motorbike = "Motorbike"
@@ -1058,6 +1059,7 @@ enum CourierVehicle: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var icon: String {
         switch self {
+        case .onFeet: return "figure.walk"
         case .bicycle: return "bicycle"
         case .scooter: return "scooter"
         case .motorbike: return "figure.outdoor.cycle"
