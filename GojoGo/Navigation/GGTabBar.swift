@@ -97,28 +97,29 @@ struct GGTabBar: View {
                 // Global withAnimation was springing the Home feed (esp. video posts).
                 app.navBarExpanded = true
             } label: {
-                VStack(spacing: 3) {
+                HStack(spacing: 6) {
                     activeTabGlyph
-                        .frame(height: 20)
                     Text(activeTabTitle)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 9, weight: .bold))
+                        .opacity(0.55)
                 }
-                .foregroundStyle(Msg.systemBlue)
-                .frame(minWidth: 68)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .foregroundStyle(GGColor.onAccent)
+                .frame(height: 30)
+                .padding(.horizontal, 14)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(GGColor.ink(0.13))
+                        .fill(GGColor.white)
                 )
                 .contentShape(Capsule(style: .continuous))
             }
             .buttonStyle(TabPressStyle())
             .accessibilityLabel("\(activeTabTitle), show all sections")
         }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
         .background(
             Capsule(style: .continuous)
                 .fill(GGColor.pill)
@@ -212,14 +213,13 @@ struct GGTabBar: View {
         .accessibilityAddTraits(active ? .isSelected : [])
     }
 
-    /// Expanded Collections tabs — leading My World collapses back.
+    /// Expanded Collections tabs — Madeleine centered as the hero, 3 sections each side.
     private var collectionsModeCapsule: some View {
         HStack(spacing: 0) {
-            myWorldEntryButton
             tabButton(.home)  { HomeIcon() }
             tabButton(.watch) { WatchIcon() }
-            madeleineButton
             tabButton(.travel) { TravelIcon() }
+            madeleineButton
             tabButton(.delivery) { DeliveryIcon() }
             tabButton(.economy) { BagIcon() }
             tabButton(.search)  { SearchIcon() }
@@ -290,14 +290,15 @@ struct GGTabBar: View {
         } label: {
             icon()
                 .environment(\.ggTabActive, active)
-                .frame(width: 40, height: Msg.tabHit)
-                .background(
-                    Capsule()
-                        .fill(active ? GGColor.ink(0.28) : .clear)
-                        .padding(.vertical, 7)
-                        .padding(.horizontal, 2)
-                )
-                .contentShape(Circle())
+                .frame(width: 42, height: Msg.tabHit)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(GGColor.white)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 3)
+                        .opacity(active ? 1 : 0)
+                }
+                .contentShape(Capsule())
         }
         .buttonStyle(TabPressStyle())
     }
@@ -311,9 +312,16 @@ struct GGTabBar: View {
             }
             app.navBarExpanded = false
         } label: {
-            MiniOrb(size: 30, glow: true)
-                .frame(width: 40, height: Msg.tabHit)
-                .contentShape(Circle())
+            MiniOrb(size: 28, glow: true)
+                .frame(width: 42, height: Msg.tabHit)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(GGColor.ink(0.16))
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 3)
+                        .opacity(app.activeTab == .madeleine ? 1 : 0)
+                }
+                .contentShape(Capsule())
                 .opacity(app.activeTab == .madeleine ? 1 : 0.9)
         }
         .buttonStyle(TabPressStyle())
@@ -642,7 +650,8 @@ extension EnvironmentValues {
 private struct IconStroke: ViewModifier {
     @Environment(\.ggTabActive) var active
     func body(content: Content) -> some View {
-        content.foregroundStyle(active ? Msg.blue : GGColor.ink(0.55))
+        // Active icon sits on the white indicator pill → dark ink; inactive → muted grey.
+        content.foregroundStyle(active ? GGColor.onAccent : GGColor.ink(0.55))
     }
 }
 private extension View { func iconStroke() -> some View { modifier(IconStroke()) } }
