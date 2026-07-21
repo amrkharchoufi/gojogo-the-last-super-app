@@ -3,6 +3,48 @@ import UIKit
 
 let tabBarInset: CGFloat = 100
 
+/// Shared empty-content placeholder used across feeds and catalogs.
+struct GGEmptyState: View {
+    let icon: String
+    let title: String
+    var message: String? = nil
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 32, weight: .regular))
+                .foregroundStyle(GGColor.textTertiary)
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+                .multilineTextAlignment(.center)
+            if let message {
+                Text(message)
+                    .font(.system(size: 14))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+            }
+            if let actionTitle, let action {
+                Button(action: action) {
+                    Text(actionTitle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(GGColor.white))
+                }
+                .buttonStyle(PressableStyle())
+                .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 56)
+    }
+}
+
 /// Instagram-style white heart burst for double-tap / like.
 struct HeartBurstOverlay: View {
     var trigger: Int

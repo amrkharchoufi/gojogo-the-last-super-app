@@ -99,9 +99,6 @@ struct GGTabBar: View {
             } label: {
                 HStack(spacing: 6) {
                     activeTabGlyph
-                    Text(activeTabTitle)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
                     Image(systemName: "chevron.up")
                         .font(.system(size: 9, weight: .bold))
                         .opacity(0.55)

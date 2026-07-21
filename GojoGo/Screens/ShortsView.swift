@@ -15,16 +15,25 @@ struct ShortsView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                // Only keep current ±1 mounted for smooth preload without thrashing.
-                ForEach(visibleIndices, id: \.self) { i in
-                    let short = app.shorts[i]
-                    ShortCard(
-                        shortID: short.id,
-                        isActive: i == index,
-                        isSettled: dragY == 0 && i == index
+                if app.shorts.isEmpty {
+                    GGEmptyState(
+                        icon: "rectangle.stack",
+                        title: "No Shorts yet",
+                        message: "Vertical clips will appear here when people start posting."
                     )
-                    .frame(width: w, height: h)
-                    .offset(y: CGFloat(i - index) * h + dragY)
+                    .foregroundStyle(.white)
+                } else {
+                    // Only keep current ±1 mounted for smooth preload without thrashing.
+                    ForEach(visibleIndices, id: \.self) { i in
+                        let short = app.shorts[i]
+                        ShortCard(
+                            shortID: short.id,
+                            isActive: i == index,
+                            isSettled: dragY == 0 && i == index
+                        )
+                        .frame(width: w, height: h)
+                        .offset(y: CGFloat(i - index) * h + dragY)
+                    }
                 }
             }
             .frame(width: w, height: h)
@@ -33,6 +42,7 @@ struct ShortsView: View {
             .highPriorityGesture(
                 DragGesture(minimumDistance: 12)
                     .onChanged { v in
+                        guard !app.shorts.isEmpty else { return }
                         guard abs(v.translation.height) > abs(v.translation.width) * 0.85 else { return }
                         // Rubber-band at ends.
                         var ty = v.translation.height
@@ -41,6 +51,10 @@ struct ShortsView: View {
                         dragY = ty
                     }
                     .onEnded { v in
+                        guard !app.shorts.isEmpty else {
+                            dragY = 0
+                            return
+                        }
                         guard abs(v.translation.height) > abs(v.translation.width) * 0.85 else {
                             withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.86)) {
                                 dragY = 0

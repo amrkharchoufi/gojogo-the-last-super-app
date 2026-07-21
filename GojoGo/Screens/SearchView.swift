@@ -43,15 +43,18 @@ struct SearchView: View {
 
     private var matchedProducts: [Product] {
         ([app.featuredProduct] + app.products).filter {
-            $0.name.lowercased().contains(trimmed)
-                || $0.category.lowercased().contains(trimmed)
-                || $0.seller.lowercased().contains(trimmed)
+            !$0.name.isEmpty
+                && ($0.name.lowercased().contains(trimmed)
+                    || $0.category.lowercased().contains(trimmed)
+                    || $0.seller.lowercased().contains(trimmed))
         }
     }
 
     private var matchedShows: [TVShow] {
         ([app.tvHero] + app.tvShows).filter {
-            $0.title.lowercased().contains(trimmed) || $0.synopsis.lowercased().contains(trimmed)
+            !$0.title.isEmpty
+                && ($0.title.lowercased().contains(trimmed)
+                    || $0.synopsis.lowercased().contains(trimmed))
         }
     }
 
@@ -395,69 +398,88 @@ struct SearchView: View {
 
     @ViewBuilder
     private var defaultSections: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "People you might know")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 14) {
-                    ForEach(app.people) { p in
-                        VStack(spacing: 6) {
-                            Button {
-                                app.openUserProfile(handle: p.name, avatarURL: p.avatarURL,
-                                                    avatarGradient: p.gradient)
-                            } label: {
-                                UserAvatar(size: 56, letter: String(p.name.prefix(1)).uppercased(),
-                                           imageURL: p.avatarURL)
-                                    .overlay(Circle().strokeBorder(
-                                        p.following ? GGColor.blue : GGColor.ink(0.1),
-                                        lineWidth: p.following ? 2 : 1))
+        let hasDiscover = !app.people.isEmpty
+            || !SampleData.searchContent.isEmpty
+            || !app.products.isEmpty
+
+        if !hasDiscover {
+            GGEmptyState(
+                icon: "magnifyingglass",
+                title: "Nothing to discover yet",
+                message: "Search will surface people, posts, and products as they appear."
+            )
+            .padding(.top, 24)
+        } else {
+            if !app.people.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(title: "People you might know")
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 14) {
+                            ForEach(app.people) { p in
+                                VStack(spacing: 6) {
+                                    Button {
+                                        app.openUserProfile(handle: p.name, avatarURL: p.avatarURL,
+                                                            avatarGradient: p.gradient)
+                                    } label: {
+                                        UserAvatar(size: 56, letter: String(p.name.prefix(1)).uppercased(),
+                                                   imageURL: p.avatarURL)
+                                            .overlay(Circle().strokeBorder(
+                                                p.following ? GGColor.blue : GGColor.ink(0.1),
+                                                lineWidth: p.following ? 2 : 1))
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Text(p.name).font(.system(size: 11))
+                                        .foregroundStyle(GGColor.textSecondary)
+
+                                    Button {
+                                        withAnimation(.ggSnappy) { app.toggleFollowPerson(p.id) }
+                                    } label: {
+                                        Text(p.following ? "Following" : "Follow")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(p.following ? GGColor.textTertiary : GGColor.blue)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
-                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
 
-                            Text(p.name).font(.system(size: 11))
-                                .foregroundStyle(GGColor.textSecondary)
-
-                            Button {
-                                withAnimation(.ggSnappy) { app.toggleFollowPerson(p.id) }
-                            } label: {
-                                Text(p.following ? "Following" : "Follow")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(p.following ? GGColor.textTertiary : GGColor.blue)
+            if !SampleData.searchContent.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(title: "Content to interest you")
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                                        GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        ForEach(SampleData.searchContent) { tile in
+                            Button { app.activeTab = .watch } label: {
+                                ZStack(alignment: .bottomLeading) {
+                                    MediaImage(url: tile.imageURL, cornerRadius: 18)
+                                    LinearGradient(colors: [.clear, .black.opacity(0.65)],
+                                                   startPoint: .center, endPoint: .bottom)
+                                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                                    Text(tile.title)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.9))
+                                        .padding(10)
+                                }
+                                .frame(height: 96)
+                                .overlay(RoundedRectangle(cornerRadius: 18)
+                                    .strokeBorder(GGColor.ink(0.09), lineWidth: 1))
                             }
                             .buttonStyle(.plain)
                         }
                     }
                 }
             }
-        }
 
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Content to interest you")
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
-                                GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                ForEach(SampleData.searchContent) { tile in
-                    Button { app.activeTab = .watch } label: {
-                        ZStack(alignment: .bottomLeading) {
-                            MediaImage(url: tile.imageURL, cornerRadius: 18)
-                            LinearGradient(colors: [.clear, .black.opacity(0.65)],
-                                           startPoint: .center, endPoint: .bottom)
-                                .clipShape(RoundedRectangle(cornerRadius: 18))
-                            Text(tile.title)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .padding(10)
-                        }
-                        .frame(height: 96)
-                        .overlay(RoundedRectangle(cornerRadius: 18)
-                            .strokeBorder(GGColor.ink(0.09), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
+            if !app.products.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(title: "Trending on Economy")
+                    ForEach(Array(app.products.prefix(3))) { productRow($0) }
                 }
             }
-        }
-
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Trending on Economy")
-            ForEach(Array(app.products.prefix(3))) { productRow($0) }
         }
     }
 }

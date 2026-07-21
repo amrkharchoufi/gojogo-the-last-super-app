@@ -430,21 +430,22 @@ struct WorldContactView: View {
 
     private var photosGrid: some View {
         let chatPhotos = app.worldChatPhotos(for: convo)
-        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 3),
+        return Group {
+            if chatPhotos.isEmpty {
+                emptyTab("Photos")
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 3),
                                    GridItem(.flexible(), spacing: 3),
                                    GridItem(.flexible(), spacing: 3)], spacing: 3) {
-            ForEach(Array(chatPhotos.enumerated()), id: \.offset) { _, data in
-                MediaImage(data: data, cornerRadius: 0)
-                    .frame(minHeight: 110)
-                    .clipped()
-            }
-            ForEach(0..<max(0, 9 - chatPhotos.count), id: \.self) { i in
-                MediaImage(url: "https://picsum.photos/seed/mw-photo-\(i)/400/400", cornerRadius: 0)
-                    .frame(minHeight: 110)
-                    .clipped()
+                    ForEach(Array(chatPhotos.enumerated()), id: \.offset) { _, data in
+                        MediaImage(data: data, cornerRadius: 0)
+                            .frame(minHeight: 110)
+                            .clipped()
+                    }
+                }
+                .padding(.horizontal, 16)
             }
         }
-        .padding(.horizontal, 16)
     }
 
     private func emptyTab(_ name: String) -> some View {

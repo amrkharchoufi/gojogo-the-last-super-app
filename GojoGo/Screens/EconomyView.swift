@@ -10,7 +10,7 @@ struct EconomyView: View {
     @FocusState private var searchFocused: Bool
 
     private var catalog: [Product] {
-        [app.featuredProduct] + app.products
+        ([app.featuredProduct] + app.products).filter { !$0.name.isEmpty }
     }
 
     private var filtered: [Product] {
@@ -79,37 +79,50 @@ struct EconomyView: View {
                         .padding(.top, 16)
                         .zIndex(1)
 
-                    dealBanner
-                        .padding(.horizontal, 16)
-                        .padding(.top, 18)
-                        .zIndex(0)
+                    if catalog.isEmpty {
+                        GGEmptyState(
+                            icon: "bag",
+                            title: "No listings yet",
+                            message: "Be the first to sell something nearby.",
+                            actionTitle: "Sell an item",
+                            action: { app.showSellSheet = true }
+                        )
+                        .padding(.top, 40)
+                    } else {
+                        if !app.featuredProduct.name.isEmpty || !filtered.isEmpty {
+                            dealBanner
+                                .padding(.horizontal, 16)
+                                .padding(.top, 18)
+                                .zIndex(0)
+                        }
 
-                    if !app.savedProducts.isEmpty {
+                        if !app.savedProducts.isEmpty {
+                            productRail(
+                                title: "Keep shopping",
+                                subtitle: "From your saved list",
+                                products: app.savedProducts
+                            )
+                            .padding(.top, 22)
+                        }
+
                         productRail(
-                            title: "Keep shopping",
-                            subtitle: "From your saved list",
-                            products: app.savedProducts
+                            title: "Today's deals",
+                            subtitle: "Best prices near you",
+                            products: deals
                         )
                         .padding(.top, 22)
-                    }
 
-                    productRail(
-                        title: "Today's deals",
-                        subtitle: "Best prices near you",
-                        products: deals
-                    )
-                    .padding(.top, 22)
-
-                    productRail(
-                        title: category == "All" ? "Inspired by your browsing" : "More in \(category)",
-                        subtitle: "Top picks nearby",
-                        products: topPicks
-                    )
-                    .padding(.top, 22)
-
-                    resultsGrid
-                        .padding(.horizontal, 16)
+                        productRail(
+                            title: category == "All" ? "Inspired by your browsing" : "More in \(category)",
+                            subtitle: "Top picks nearby",
+                            products: topPicks
+                        )
                         .padding(.top, 22)
+
+                        resultsGrid
+                            .padding(.horizontal, 16)
+                            .padding(.top, 22)
+                    }
 
                     Color.clear.frame(height: tabBarInset)
                 }

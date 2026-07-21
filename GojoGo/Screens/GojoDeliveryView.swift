@@ -62,7 +62,9 @@ private struct DeliveryBrowseView: View {
                         if app.filteredDeliveryRestaurants.isEmpty {
                             emptyState
                         } else {
-                            promoBanner
+                            if SampleData.deliveryPromoImageURL != nil {
+                                promoBanner
+                            }
 
                             if !app.deliveryPastOrders.isEmpty {
                                 orderAgainRail
@@ -187,29 +189,33 @@ private struct DeliveryBrowseView: View {
     }
 
     private var promoBanner: some View {
-        ZStack(alignment: .bottomLeading) {
-            MediaImage(url: SampleData.deliveryPromoImageURL, cornerRadius: 20)
-                .frame(height: 130)
-                .overlay(
-                    LinearGradient(colors: [Color.black.opacity(0.75), Color.black.opacity(0.05)],
-                                   startPoint: .leading, endPoint: .trailing)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                )
-            VStack(alignment: .leading, spacing: 4) {
-                Text("FIRST ORDER")
-                    .font(.ggMono(10, .semibold))
-                    .tracking(0.8)
-                    .foregroundStyle(Color.white.opacity(0.75))
-                Text("Free delivery all week")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.white)
-                Text("On orders over $10")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.white.opacity(0.8))
+        Group {
+            if let url = SampleData.deliveryPromoImageURL {
+                ZStack(alignment: .bottomLeading) {
+                    MediaImage(url: url, cornerRadius: 20)
+                        .frame(height: 130)
+                        .overlay(
+                            LinearGradient(colors: [Color.black.opacity(0.75), Color.black.opacity(0.05)],
+                                           startPoint: .leading, endPoint: .trailing)
+                                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        )
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("FIRST ORDER")
+                            .font(.ggMono(10, .semibold))
+                            .tracking(0.8)
+                            .foregroundStyle(Color.white.opacity(0.75))
+                        Text("Free delivery all week")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text("On orders over $10")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.white.opacity(0.8))
+                    }
+                    .padding(16)
+                }
+                .padding(.horizontal, 16)
             }
-            .padding(16)
         }
-        .padding(.horizontal, 16)
     }
 
     private var orderAgainRail: some View {
@@ -365,16 +371,15 @@ private struct DeliveryBrowseView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "fork.knife")
-                .font(.system(size: 30))
-                .foregroundStyle(GGColor.textTertiary)
-            Text("No restaurants match that")
-                .font(.system(size: 14))
-                .foregroundStyle(GGColor.textSecondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 60)
+        GGEmptyState(
+            icon: "fork.knife",
+            title: app.deliveryRestaurants.isEmpty
+                ? "No restaurants yet"
+                : "No restaurants match that",
+            message: app.deliveryRestaurants.isEmpty
+                ? "Delivery partners will show up here when they're nearby."
+                : nil
+        )
     }
 }
 
@@ -385,7 +390,10 @@ private struct DeliveryRestaurantView: View {
 
     private var restaurant: DeliveryRestaurant {
         app.selectedDeliveryRestaurant
-            ?? SampleData.deliveryRestaurants[0]
+            ?? app.deliveryRestaurants.first
+            ?? DeliveryRestaurant(
+                name: "Restaurant", cuisine: "", rating: 0,
+                reviews: "0", etaMinutes: 0, feeLabel: "—")
     }
 
     var body: some View {

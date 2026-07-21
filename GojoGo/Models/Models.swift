@@ -103,16 +103,16 @@ enum AuthPhase { case welcome, email, onboarding, app }
 // MARK: - User
 
 struct GGUser {
-    var name: String = "Jad"
-    var handle: String = "jad"
+    var name: String = ""
+    var handle: String = ""
     var birthYear: Int = 2004
     var interests: [String] = []
     var avatarGradient: [Color] = [Color(hex: "26303F"), Color(hex: "141821")]
-    var avatarURL: String? = "https://picsum.photos/seed/jad-avatar/200/200"
-    var followingCount: Int = 1204
-    var followerCount: Int = 8600
-    var postCount: Int = 3
-    var bio: String = "Building on gojogo."
+    var avatarURL: String? = nil
+    var followingCount: Int = 0
+    var followerCount: Int = 0
+    var postCount: Int = 0
+    var bio: String = ""
     var category: String = "Creator"
 }
 

@@ -22,12 +22,23 @@ struct HomeView: View {
                         .padding(.top, 52 + 4)
                         .padding(.bottom, 8)
 
-                    ForEach(app.posts) { post in
-                        VStack(spacing: 0) {
-                            InstagramPostCard(post: post)
-                            Rectangle()
-                                .fill(GGColor.ink(0.08))
-                                .frame(height: 0.5)
+                    if app.posts.isEmpty {
+                        GGEmptyState(
+                            icon: "square.and.pencil",
+                            title: "No posts yet",
+                            message: "Share a photo, video, or thought to get your feed started.",
+                            actionTitle: "Create a post",
+                            action: { app.openComposer() }
+                        )
+                        .padding(.top, 40)
+                    } else {
+                        ForEach(app.posts) { post in
+                            VStack(spacing: 0) {
+                                InstagramPostCard(post: post)
+                                Rectangle()
+                                    .fill(GGColor.ink(0.08))
+                                    .frame(height: 0.5)
+                            }
                         }
                     }
 
@@ -143,7 +154,7 @@ struct HomeView: View {
     // VStack/HStack keeps a stable, deterministic height at all scroll positions.
     private var storyRail: some View {
         HStack {
-            Spacer(minLength: 0)
+            Spacer(minLength: 0).allowsHitTesting(false)
             VStack(spacing: 14) {
                 ForEach(storyRowStarts, id: \.self) { start in
                     HStack(spacing: storyColGap) {
@@ -152,12 +163,15 @@ struct HomeView: View {
                         }
                         // Pad short final rows so columns stay left-anchored.
                         ForEach(0..<max(0, start + 3 - storyCellCount), id: \.self) { _ in
-                            Color.clear.frame(width: storyCircleSize, height: 1)
+                            Color.clear
+                                .frame(width: storyCircleSize, height: 1)
+                                .allowsHitTesting(false)
                         }
                     }
                 }
             }
-            Spacer(minLength: 0)
+            .fixedSize()
+            Spacer(minLength: 0).allowsHitTesting(false)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -204,27 +218,8 @@ struct HomeView: View {
         let hasMedia = story.hasMedia
         let ring: Bool = story.isYou || (hasMedia && !story.seen)
 
-        let label = VStack(spacing: 8) {
-            ZStack(alignment: .bottomTrailing) {
-                UserAvatar(
-                    size: storyCircleSize,
-                    letter: story.letter,
-                    ring: ring,
-                    imageURL: story.isYou && !hasMedia ? app.user.avatarURL : story.imageURL,
-                    imageData: story.imageData
-                )
-                .opacity(story.seen && !story.isYou ? 0.72 : 1)
-                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
-
-                if story.isYou {
-                    Image(systemName: "plus.circle.fill")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.black, .white)
-                        .font(.system(size: 18))
-                        .background(Circle().fill(.black).padding(2))
-                        .offset(x: 1, y: 1)
-                }
-            }
+        VStack(spacing: 8) {
+            storyAvatar(story, hasMedia: hasMedia, ring: ring)
 
             Text(story.isYou ? "Your story" : story.name)
                 .font(.system(size: 12, weight: .medium))
@@ -232,15 +227,54 @@ struct HomeView: View {
                 .lineLimit(1)
         }
         .frame(width: storyCircleSize)
+        // Keep empty space in the stories row from inheriting the PhotosPicker hit target.
+        .contentShape(Rectangle())
+        .fixedSize()
+    }
 
-        if story.isYou && !hasMedia {
-            PhotosPicker(selection: $storyPicker, matching: .images) { label }
-        } else if hasMedia {
-            Button { app.openStory(story) } label: { label }
-                .buttonStyle(.plain)
-        } else {
-            label
+    @ViewBuilder
+    private func storyAvatar(_ story: Story, hasMedia: Bool, ring: Bool) -> some View {
+        let avatar = UserAvatar(
+            size: storyCircleSize,
+            letter: story.letter,
+            ring: ring,
+            imageURL: story.isYou && !hasMedia ? app.user.avatarURL : story.imageURL,
+            imageData: story.imageData
+        )
+        .opacity(story.seen && !story.isYou ? 0.72 : 1)
+        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+
+        let plusBadge = Image(systemName: "plus.circle.fill")
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.black, .white)
+            .font(.system(size: 18))
+            .background(Circle().fill(.black).padding(2))
+            .offset(x: 1, y: 1)
+            .allowsHitTesting(false)
+
+        // Keep the PhotosPicker hit target on the circle only; draw the + badge
+        // outside so it isn't clipped.
+        ZStack(alignment: .bottomTrailing) {
+            if story.isYou && !hasMedia {
+                PhotosPicker(selection: $storyPicker, matching: .images) { avatar }
+                    .buttonStyle(.plain)
+                    .frame(width: storyCircleSize, height: storyCircleSize)
+                    .contentShape(Circle())
+            } else if hasMedia {
+                Button { app.openStory(story) } label: { avatar }
+                    .buttonStyle(.plain)
+                    .frame(width: storyCircleSize, height: storyCircleSize)
+                    .contentShape(Circle())
+            } else {
+                avatar
+                    .frame(width: storyCircleSize, height: storyCircleSize)
+            }
+
+            if story.isYou {
+                plusBadge
+            }
         }
+        .frame(width: storyCircleSize, height: storyCircleSize)
     }
 }
 

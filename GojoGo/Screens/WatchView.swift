@@ -13,9 +13,18 @@ struct LongFormFeedView: View {
             List {
                 Group {
                     Color.clear.frame(height: 92)
-                    ForEach(app.videos) { video in
-                        VideoCard(video: video)
-                            .padding(.bottom, 18)
+                    if app.videos.isEmpty {
+                        GGEmptyState(
+                            icon: "play.rectangle",
+                            title: "No videos yet",
+                            message: "Long-form videos you watch and publish will show up here."
+                        )
+                        .padding(.top, 80)
+                    } else {
+                        ForEach(app.videos) { video in
+                            VideoCard(video: video)
+                                .padding(.bottom, 18)
+                        }
                     }
                     Color.clear.frame(height: tabBarInset)
                 }

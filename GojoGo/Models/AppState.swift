@@ -214,6 +214,7 @@ final class AppState: ObservableObject {
     var savedShorts: [Short] { shorts.filter(\.bookmarked) }
 
     init() {
+        Self.purgeLegacyMockContentIfNeeded()
         if let cached = SessionStore.load() {
             applyCachedSession(cached)
             return
@@ -221,28 +222,17 @@ final class AppState: ObservableObject {
         bootstrapFreshSession()
     }
 
-    private func bootstrapFreshSession() {
-        commentsByPost = SampleData.seedComments(for: posts)
-        for i in posts.indices {
-            posts[i].commentCount = commentsByPost[posts[i].id]?.count ?? 0
-        }
-        // Seed the profile with real own posts for the current handle
-        let own = SampleData.ownSeedPosts(
-            handle: user.handle,
-            name: user.name,
-            avatarURL: user.avatarURL,
-            avatarGradient: user.avatarGradient)
-        posts.insert(contentsOf: own, at: 0)
-        user.postCount = myPosts.count
+    /// One-time wipe so devices that still have cached mock feeds start clean.
+    private static func purgeLegacyMockContentIfNeeded() {
+        let key = "gojogo.purgedMockContent.v2"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        SessionStore.clear()
+        UserDefaults.standard.set(true, forKey: key)
+    }
 
-        // Seed one saved item so Saved isn't empty out of the box
-        if let i = posts.firstIndex(where: { $0.author == "marta.st" }) {
-            posts[i].bookmarked = true
-            savedPostIDs.insert(posts[i].id)
-        }
-        if let i = videos.firstIndex(where: { $0.channel == "kal.eb" }) {
-            videos[i].saved = true
-        }
+    private func bootstrapFreshSession() {
+        commentsByPost = [:]
+        user.postCount = myPosts.count
     }
 
     private func applyCachedSession(_ cached: CachedSession) {
@@ -338,89 +328,72 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Swap placeholder picsum URLs on seed content for the bundled sample assets.
+    /// Strip leftover remote placeholder media from older caches.
     private func refreshSampleMediaFromSeed() {
-        let seedByKey = Dictionary(
-            SampleData.posts.map { ("\($0.author)|\($0.text ?? "")", $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        func isPlaceholder(_ url: String?) -> Bool {
+            guard let url, !url.isEmpty else { return false }
+            return url.contains("picsum.photos")
+                || url.contains("images.unsplash.com")
+                || url.hasPrefix("Sample")
+                || url.hasPrefix("bundlevideo:")
+        }
+
         for i in posts.indices {
-            let key = "\(posts[i].author)|\(posts[i].text ?? "")"
-            if let seed = seedByKey[key] {
-                posts[i].imageURL = seed.imageURL
-                posts[i].avatarURL = seed.avatarURL
-                posts[i].mediaItems = seed.mediaItems
-                posts[i].imageAspect = seed.imageAspect
-                posts[i].videoURL = seed.videoURL
-            } else if let url = posts[i].imageURL, url.contains("picsum.photos") {
-                let pick = SampleData.allSampleMedia[abs(key.hashValue) % SampleData.allSampleMedia.count]
-                posts[i].imageURL = pick
-            }
-            if let avatar = posts[i].avatarURL, avatar.contains("picsum.photos") {
-                posts[i].avatarURL = SampleData.allSampleMedia[
-                    abs(posts[i].author.hashValue) % SampleData.allSampleMedia.count
-                ]
-            }
-            if let v = posts[i].videoURL, v.hasPrefix("http") {
+            if isPlaceholder(posts[i].imageURL) { posts[i].imageURL = nil }
+            if isPlaceholder(posts[i].avatarURL) { posts[i].avatarURL = nil }
+            if let v = posts[i].videoURL {
                 posts[i].videoURL = SampleData.repairedVideoURL(v)
+                if isPlaceholder(posts[i].videoURL) { posts[i].videoURL = nil }
             }
             for j in posts[i].mediaItems.indices {
-                if let u = posts[i].mediaItems[j].imageURL, u.contains("picsum.photos") {
-                    posts[i].mediaItems[j].imageURL = SampleData.allSampleMedia[
-                        (i + j) % SampleData.allSampleMedia.count
-                    ]
+                if isPlaceholder(posts[i].mediaItems[j].imageURL) {
+                    posts[i].mediaItems[j].imageURL = nil
                 }
-                if let v = posts[i].mediaItems[j].videoURL, v.hasPrefix("http") {
+                if let v = posts[i].mediaItems[j].videoURL {
                     posts[i].mediaItems[j].videoURL = SampleData.repairedVideoURL(v)
+                    if isPlaceholder(posts[i].mediaItems[j].videoURL) {
+                        posts[i].mediaItems[j].videoURL = nil
+                    }
                 }
             }
         }
 
-        let storySeed = Dictionary(uniqueKeysWithValues: SampleData.stories.map { ($0.name, $0) })
         for i in stories.indices {
-            guard let seed = storySeed[stories[i].name], !seed.frames.isEmpty else { continue }
-            stories[i].frames = seed.frames
+            for j in stories[i].frames.indices where isPlaceholder(stories[i].frames[j].imageURL) {
+                stories[i].frames[j].imageURL = nil
+            }
         }
 
-        let shortSeed = Dictionary(uniqueKeysWithValues: SampleData.shorts.map { ($0.caption, $0) })
         for i in shorts.indices {
-            if let seed = shortSeed[shorts[i].caption] {
-                shorts[i].imageURL = seed.imageURL
-                shorts[i].videoURL = seed.videoURL
-            } else if let u = shorts[i].imageURL, u.contains("picsum.photos") {
-                shorts[i].imageURL = SampleData.allSampleMedia[i % SampleData.allSampleMedia.count]
-            }
-            if let v = shorts[i].videoURL, v.hasPrefix("http") {
+            if isPlaceholder(shorts[i].imageURL) { shorts[i].imageURL = nil }
+            if let v = shorts[i].videoURL {
                 shorts[i].videoURL = SampleData.repairedVideoURL(v)
+                if isPlaceholder(shorts[i].videoURL) { shorts[i].videoURL = nil }
             }
         }
 
-        let videoSeed = Dictionary(uniqueKeysWithValues: SampleData.videos.map { ($0.title, $0) })
         for i in videos.indices {
-            if let seed = videoSeed[videos[i].title] {
-                videos[i].thumbURL = seed.thumbURL
-                videos[i].videoURL = seed.videoURL
-            } else if let u = videos[i].thumbURL, u.contains("picsum.photos") {
-                videos[i].thumbURL = SampleData.allSampleMedia[i % SampleData.allSampleMedia.count]
-            }
-            if let v = videos[i].videoURL, v.hasPrefix("http") {
+            if isPlaceholder(videos[i].thumbURL) { videos[i].thumbURL = nil }
+            if let v = videos[i].videoURL {
                 videos[i].videoURL = SampleData.repairedVideoURL(v)
+                if isPlaceholder(videos[i].videoURL) { videos[i].videoURL = nil }
             }
         }
 
-        let productSeed = Dictionary(
-            uniqueKeysWithValues: (SampleData.products + [SampleData.featuredProduct]).map { ($0.name, $0) }
-        )
-        if let seed = productSeed[featuredProduct.name] {
-            featuredProduct.imageURL = seed.imageURL
+        if isPlaceholder(featuredProduct.imageURL) { featuredProduct.imageURL = nil }
+        for i in products.indices where isPlaceholder(products[i].imageURL) {
+            products[i].imageURL = nil
         }
-        for i in products.indices {
-            if let seed = productSeed[products[i].name] {
-                products[i].imageURL = seed.imageURL
-            } else if let u = products[i].imageURL, u.contains("picsum.photos") {
-                products[i].imageURL = SampleData.allSampleMedia[i % SampleData.allSampleMedia.count]
-            }
+
+        if isPlaceholder(user.avatarURL) { user.avatarURL = nil }
+        if isPlaceholder(tvHero.imageURL) { tvHero.imageURL = nil }
+        for i in tvShows.indices where isPlaceholder(tvShows[i].imageURL) {
+            tvShows[i].imageURL = nil
         }
+        for i in people.indices where isPlaceholder(people[i].avatarURL) {
+            people[i].avatarURL = nil
+        }
+        profilePhotos.removeAll { isPlaceholder($0) }
     }
 
     /// Writes the current connected session to disk.
@@ -1374,6 +1347,10 @@ final class AppState: ObservableObject {
     }
 
     func finishOnboarding() {
+        if user.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !user.handle.isEmpty {
+            user.name = user.handle
+        }
         user.interests = interests.filter(\.selected).map(\.title)
         remapOwnContentToCurrentHandle()
         user.postCount = myPosts.count
@@ -1640,7 +1617,7 @@ final class AppState: ObservableObject {
                 kind: .like, actor: firstFan,
                 text: "and others liked your post.",
                 timeAgo: "now",
-                avatarURL: "https://picsum.photos/seed/p-\(firstFan)/120/120",
+                avatarURL: nil,
                 previewURL: self.posts[i].imageURL))
             self.schedulePersist()
         }
@@ -1651,7 +1628,7 @@ final class AppState: ObservableObject {
                         "More of this please.", "Instant save."].randomElement()!
             var list = self.commentsByPost[postID] ?? []
             list.insert(Comment(author: commenter, text: text,
-                                avatarURL: "https://picsum.photos/seed/p-\(commenter)/120/120",
+                                avatarURL: nil,
                                 timeAgo: "now"), at: 0)
             self.commentsByPost[postID] = list
             self.posts[i].commentCount = list.count
@@ -1659,7 +1636,7 @@ final class AppState: ObservableObject {
                 kind: .comment, actor: commenter,
                 text: "commented: “\(text)”",
                 timeAgo: "now",
-                avatarURL: "https://picsum.photos/seed/p-\(commenter)/120/120",
+                avatarURL: nil,
                 previewURL: self.posts[i].imageURL))
             self.schedulePersist()
         }
@@ -2019,7 +1996,7 @@ final class AppState: ObservableObject {
     // MARK: Economy / people
 
     var savedProducts: [Product] {
-        ([featuredProduct] + products).filter(\.saved)
+        ([featuredProduct] + products).filter { !$0.name.isEmpty && $0.saved }
     }
 
     func liveProduct(id: UUID) -> Product? {
@@ -2737,8 +2714,11 @@ final class AppState: ObservableObject {
         let name = user.name
 
         if lower.contains("feed") || lower.contains("summar") {
+            if posts.isEmpty {
+                return ("Your feed is empty right now — nothing to summarize yet. Share a post and I’ll dig in.", nil)
+            }
             let top = posts.max(by: { $0.likeCount < $1.likeCount })
-            let reply = "Your feed has \(posts.count) posts right now. The one doing best is from \(top?.author ?? "marta.st") with \(formatCount(top?.likeCount ?? 0)) likes. You have \(unreadActivityCount) unread notifications — want the highlights?"
+            let reply = "Your feed has \(posts.count) posts right now. The one doing best is from \(top?.author ?? "someone") with \(formatCount(top?.likeCount ?? 0)) likes. You have \(unreadActivityCount) unread notifications — want the highlights?"
             return (reply, FileChip(name: "feed-digest.pdf", sub: "\(posts.count) posts · 1 min read"))
         }
         if lower.contains("weekend") || lower.contains("plan") {
@@ -2752,18 +2732,26 @@ final class AppState: ObservableObject {
                     FileChip(name: "study-plan.pdf", sub: "outline · 5 steps"))
         }
         if lower.contains("ride") || lower.contains("taxi") || lower.contains("airport") || lower.contains("go to") {
-            return ("I can get you a ride. A GojoGo to SFO is about $38 and 4 minutes away right now. Open GojoTravel and I'll pre-fill the destination.", nil)
+            return ("I can get you a ride. Open GojoTravel and pick a destination — I'll help with options from there.", nil)
         }
         if lower.contains("sell") || lower.contains("listing") {
-            return ("Selling is easy: snap a photo, set a price, and I'll suggest a category. Similar items near you are going for $30–$300 depending on condition. Tap Sell in Economy to start.", nil)
+            return ("Selling is easy: snap a photo, set a price, and I'll suggest a category. Tap Sell in Economy to start.", nil)
         }
         if lower.contains("buy") || lower.contains("phone") || lower.contains("camera") {
-            let match = products.first(where: { lower.contains($0.category.lowercased()) }) ?? featuredProduct
+            let catalog = ([featuredProduct] + products).filter { !$0.name.isEmpty }
+            guard let match = catalog.first(where: { lower.contains($0.category.lowercased()) }) ?? catalog.first else {
+                return ("There aren’t any Economy listings yet. Check back soon, or tap Sell if you want to list something yourself.", nil)
+            }
             return ("Best match nearby: \(match.name) at \(match.price), \(match.distance) away from \(match.seller). Condition is listed as \(match.condition.lowercased()). Want me to open it?", nil)
         }
         if lower.contains("watch") || lower.contains("show") || lower.contains("movie") {
-            let pick = tvShows.randomElement()?.title ?? "Night Signal"
-            return ("Based on what you've been watching, try “\(pick)” tonight — it's trending on GojoTV. You're also \(Int((tvHero.progress) * 100))% through \(tvHero.title) if you'd rather finish that.", nil)
+            if let pick = tvShows.randomElement()?.title ?? (tvHero.title.isEmpty ? nil : tvHero.title) {
+                let progressNote = tvHero.title.isEmpty || tvHero.progress <= 0
+                    ? ""
+                    : " You're also \(Int(tvHero.progress * 100))% through \(tvHero.title) if you'd rather finish that."
+                return ("Based on what you've been watching, try “\(pick)” tonight — it's on GojoTV.\(progressNote)", nil)
+            }
+            return ("GojoTV is empty right now — nothing queued to recommend yet.", nil)
         }
         if lower.contains("hello") || lower.contains("hey") || lower.contains("hi ") || lower == "hi" {
             return ("Hey \(name)! I can plan your weekend, summarize your feed, find rides, or hunt deals on Economy. What do you need?", nil)

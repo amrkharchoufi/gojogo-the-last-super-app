@@ -8,11 +8,11 @@ struct GojoTVView: View {
     private let filters = ["Home", "My List", "Series", "Docs", "Kids", "Live"]
 
     private var continueShows: [TVShow] {
-        ([app.tvHero] + app.tvShows).filter { $0.progress > 0.05 }
+        ([app.tvHero] + app.tvShows).filter { !$0.title.isEmpty && $0.progress > 0.05 }
     }
 
     private var myList: [TVShow] {
-        ([app.tvHero] + app.tvShows).filter(\.onWatchlist)
+        ([app.tvHero] + app.tvShows).filter { !$0.title.isEmpty && $0.onWatchlist }
     }
 
     var body: some View {
@@ -21,32 +21,43 @@ struct GojoTVView: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
-                    heroCard.padding(.horizontal, 16)
-
-                    filterRow.padding(.horizontal, 16)
-
-                    if filter == "My List" {
-                        myListSection
+                    if app.tvShows.isEmpty && app.tvHero.title.isEmpty {
+                        GGEmptyState(
+                            icon: "tv",
+                            title: "Nothing on GojoTV yet",
+                            message: "Series and films will show up here when they're available."
+                        )
+                        .padding(.top, 80)
                     } else {
-                        if !continueShows.isEmpty {
-                            rail(title: "Continue watching", shows: continueShows, style: .landscape)
+                        if !app.tvHero.title.isEmpty {
+                            heroCard.padding(.horizontal, 16)
                         }
-                        rail(title: "Top this month",
-                             shows: Array(app.tvShows.prefix(4)),
-                             style: .poster,
-                             ranked: true)
-                        rail(title: "Documentaries",
-                             shows: app.tvShows.filter { $0.badge.contains("DOC") },
-                             style: .landscape)
-                        rail(title: "Family time",
-                             shows: app.tvShows.filter { ["KIDS", "LIFESTYLE"].contains($0.badge) || $0.title.contains("Kitchen") || $0.title.contains("Cartoon") },
-                             style: .landscape)
-                        rail(title: "Live & nights",
-                             shows: app.tvShows.filter { $0.badge == "LIVE" || $0.title.contains("Night") },
-                             style: .landscape)
-                        rail(title: "All originals",
-                             shows: app.tvShows,
-                             style: .poster)
+
+                        filterRow.padding(.horizontal, 16)
+
+                        if filter == "My List" {
+                            myListSection
+                        } else {
+                            if !continueShows.isEmpty {
+                                rail(title: "Continue watching", shows: continueShows, style: .landscape)
+                            }
+                            rail(title: "Top this month",
+                                 shows: Array(app.tvShows.prefix(4)),
+                                 style: .poster,
+                                 ranked: true)
+                            rail(title: "Documentaries",
+                                 shows: app.tvShows.filter { $0.badge.contains("DOC") },
+                                 style: .landscape)
+                            rail(title: "Family time",
+                                 shows: app.tvShows.filter { ["KIDS", "LIFESTYLE"].contains($0.badge) || $0.title.contains("Kitchen") || $0.title.contains("Cartoon") },
+                                 style: .landscape)
+                            rail(title: "Live & nights",
+                                 shows: app.tvShows.filter { $0.badge == "LIVE" || $0.title.contains("Night") },
+                                 style: .landscape)
+                            rail(title: "All originals",
+                                 shows: app.tvShows,
+                                 style: .poster)
+                        }
                     }
 
                     Color.clear.frame(height: tabBarInset)

@@ -252,12 +252,21 @@ private struct WorldMessagesList: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: app.worldFilterUnreadOnly ? "checkmark.message" : "magnifyingglass")
+            Image(systemName: app.worldConversations.isEmpty
+                  ? "bubble.left.and.bubble.right"
+                  : (app.worldFilterUnreadOnly ? "checkmark.message" : "magnifyingglass"))
                 .font(.system(size: 30))
                 .foregroundStyle(IMColor.secondary)
-            Text(app.worldFilterUnreadOnly ? "No unread messages" : "No results")
+            Text(app.worldConversations.isEmpty
+                  ? "No messages yet"
+                  : (app.worldFilterUnreadOnly ? "No unread messages" : "No results"))
                 .font(.system(size: 15))
                 .foregroundStyle(IMColor.secondary)
+            if app.worldConversations.isEmpty {
+                Text("Start a chat from the compose button.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(IMColor.secondary.opacity(0.8))
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 56)

@@ -729,10 +729,18 @@ struct ProfileHomeBlockEditor: View {
             }
 
             label("From your library")
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
-                      spacing: 6) {
-                ForEach(SampleData.homeMediaLibrary) { m in
-                    libraryCell(m)
+            if SampleData.homeMediaLibrary.isEmpty {
+                Text("Import a photo above — there’s no sample media library.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                          spacing: 6) {
+                    ForEach(SampleData.homeMediaLibrary) { m in
+                        libraryCell(m)
+                    }
                 }
             }
         }
