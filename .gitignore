@@ -19,3 +19,9 @@ Secrets.xcconfig
 
 # OS
 .DS_Store
+
+# Backend / infra
+backend/target/
+infra/node_modules/
+infra/cdk.out/
+infra/.env.deploy

@@ -1,0 +1,21 @@
+{
+  "GojoGoAuthStack": {
+    "UserPoolClientId": "5gouehsu6bgaur82gcebiubvt0",
+    "IssuerUri": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ImKOJoJaA",
+    "UserPoolId": "us-east-1_ImKOJoJaA",
+    "ExportsOutputRefUserPool6BA7E5F296FD7236": "us-east-1_ImKOJoJaA"
+  },
+  "GojoGoDataStack": {
+    "ExportsOutputFnGetAttPostgres9DC8BB04EndpointAddress36F9722A": "gojogodatastack-postgres9dc8bb04-eudbfwduhm5c.ccpumiyo88o1.us-east-1.rds.amazonaws.com",
+    "DbEndpoint": "gojogodatastack-postgres9dc8bb04-eudbfwduhm5c.ccpumiyo88o1.us-east-1.rds.amazonaws.com"
+  },
+  "GojoGoEcrStack": {
+    "ExportsOutputFnGetAttBackendRepo7FFBAD06Arn33FD1219": "arn:aws:ecr:us-east-1:578109959809:repository/gojogo-backend",
+    "ExportsOutputRefBackendRepo7FFBAD06405267DF": "gojogo-backend",
+    "RepositoryUri": "578109959809.dkr.ecr.us-east-1.amazonaws.com/gojogo-backend"
+  },
+  "GojoGoAppStack": {
+    "ServiceUrl": "https://pmv3e2g3yv.us-east-1.awsapprunner.com",
+    "ServiceArn": "arn:aws:apprunner:us-east-1:578109959809:service/gojogo-backend/ff8ba66ef00142e3839deca19ec8285c"
+  }
+}
