@@ -13,5 +13,7 @@ interface UserProfileRepository extends JpaRepository<UserProfile, UUID> {
 
     boolean existsByHandle(String handle);
 
+    Optional<UserProfile> findByHandle(String handle);
+
     List<UserProfile> findByIdIn(Collection<UUID> ids);
 }

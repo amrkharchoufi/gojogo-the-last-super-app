@@ -47,6 +47,12 @@ class ProfileService implements ProfileApi {
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<ProfileDto> findByHandle(String handle) {
+        return repository.findByHandle(handle.toLowerCase(Locale.ROOT)).map(ProfileService::toDto);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Map<UUID, ProfileDto> findByIds(Collection<UUID> ids) {
         if (ids.isEmpty()) {
             return Map.of();

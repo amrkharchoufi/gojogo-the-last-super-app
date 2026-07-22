@@ -33,11 +33,21 @@ final class SocialStore {
         profileIdByHandle[handle.lowercased()]
     }
 
+    func registerProfile(id: UUID, handle: String) {
+        profileIdByHandle[handle.lowercased()] = id
+    }
+
     // MARK: Feed / posts
 
-    func fetchFeed(limit: Int = 50) async throws -> [Post] {
-        let feed: FeedDTO = try await APIClient.shared.get("/v1/feed?limit=\(limit)")
-        return feed.posts.map { map($0) }
+    func fetchFeed(before: String? = nil, limit: Int = 30) async throws
+        -> (posts: [Post], nextBefore: String?) {
+        var path = "/v1/feed?limit=\(limit)"
+        if let before,
+           let encoded = before.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            path += "&before=\(encoded)"
+        }
+        let feed: FeedDTO = try await APIClient.shared.get(path)
+        return (feed.posts.map { map($0) }, feed.nextBefore)
     }
 
     func createPost(text: String?, slides: [(imageUrl: String?, videoUrl: String?)],

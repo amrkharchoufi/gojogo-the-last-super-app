@@ -46,23 +46,56 @@ extension AppState {
 
     /// Replaces the home feed + story rail with live content.
     func refreshSocial() async {
+        if posts.isEmpty { feedLoading = true }
+        defer { feedLoading = false }
         do {
-            let feed = try await SocialStore.shared.fetchFeed()
+            let page = try await SocialStore.shared.fetchFeed()
             var rings = try await SocialStore.shared.fetchStories()
             if !rings.contains(where: \.isYou) {
                 rings.insert(Story(name: "You", letter: String((user.name.first ?? "g").uppercased()),
                                    gradient: user.avatarGradient, frames: [], isYou: true), at: 0)
             }
+            feedNextBefore = page.nextBefore
             withAnimation(.easeOut(duration: 0.3)) {
-                posts = feed
+                posts = page.posts
                 stories = rings
-                savedPostIDs = Set(feed.filter(\.bookmarked).map(\.id))
+                savedPostIDs = Set(page.posts.filter(\.bookmarked).map(\.id))
             }
             commentsByPost = commentsByPost.filter { !SocialStore.shared.remotePostIds.contains($0.key) }
         } catch {
             #if DEBUG
             print("Feed refresh failed: \(error.localizedDescription)")
             #endif
+        }
+    }
+
+    /// Pull-to-refresh on Home.
+    func pullRefreshFeed() async {
+        guard backendConnected else { return }
+        await refreshSocial()
+        await refreshOwnCounts()
+    }
+
+    /// Fetches the next feed page when the given post is near the bottom.
+    func loadMoreFeedIfNeeded(after postID: UUID) {
+        guard backendConnected,
+              !feedLoadingMore,
+              let cursor = feedNextBefore,
+              let index = posts.firstIndex(where: { $0.id == postID }),
+              index >= posts.count - 3 else { return }
+        feedLoadingMore = true
+        Task {
+            defer { feedLoadingMore = false }
+            do {
+                let page = try await SocialStore.shared.fetchFeed(before: cursor)
+                feedNextBefore = page.nextBefore
+                let existing = Set(posts.map(\.id))
+                posts.append(contentsOf: page.posts.filter { !existing.contains($0.id) })
+            } catch {
+                #if DEBUG
+                print("Feed page load failed: \(error.localizedDescription)")
+                #endif
+            }
         }
     }
 
@@ -401,11 +434,18 @@ extension AppState {
 
     /// Upgrades an opened profile sheet with live data when the author is real.
     func refreshRemoteProfile(handle: String) {
-        guard backendConnected,
-              let profileId = SocialStore.shared.profileId(forHandle: handle) else { return }
+        guard backendConnected else { return }
         Task {
             do {
-                let view = try await ProfileStore.shared.view(profileId)
+                let view: ProfileViewDTO
+                if let profileId = SocialStore.shared.profileId(forHandle: handle) {
+                    view = try await ProfileStore.shared.view(profileId)
+                } else {
+                    // Unknown locally — resolve by handle (404s for sample-data authors).
+                    view = try await ProfileStore.shared.view(handle: handle)
+                }
+                let profileId = view.id
+                SocialStore.shared.registerProfile(id: profileId, handle: view.handle)
                 guard showProfile, profileUser?.handle.lowercased() == handle.lowercased() else { return }
                 profileUser = ProfileUser(
                     name: view.name,

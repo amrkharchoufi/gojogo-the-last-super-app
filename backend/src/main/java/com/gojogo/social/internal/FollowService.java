@@ -48,6 +48,13 @@ class FollowService {
     }
 
     @Transactional(readOnly = true)
+    ProfileViewResponse viewByHandle(UUID me, String handle) {
+        ProfileDto profile = profiles.findByHandle(handle)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such profile"));
+        return view(me, profile.id());
+    }
+
+    @Transactional(readOnly = true)
     ProfileViewResponse view(UUID me, UUID profileId) {
         ProfileDto profile = requireProfile(profileId);
         String name = profile.displayName() != null ? profile.displayName() : profile.handle();

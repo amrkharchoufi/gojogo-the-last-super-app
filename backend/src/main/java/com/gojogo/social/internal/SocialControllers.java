@@ -133,6 +133,11 @@ class FollowController {
         return follows.view(current.require(jwt).id(), profileId);
     }
 
+    @GetMapping("/v1/profiles/by-handle/{handle}")
+    ProfileViewResponse viewByHandle(@AuthenticationPrincipal Jwt jwt, @PathVariable String handle) {
+        return follows.viewByHandle(current.require(jwt).id(), handle);
+    }
+
     @GetMapping("/v1/profiles/{profileId}/posts")
     List<PostResponse> profilePosts(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId,
                                     @RequestParam(defaultValue = "30") int limit) {

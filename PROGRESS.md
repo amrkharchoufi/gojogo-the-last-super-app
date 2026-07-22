@@ -15,7 +15,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture and milestone p
 - [x] **Milestone 2 — Profiles + social API** ✅
 - [x] **Milestone 3 — Media upload** ✅ (CloudFront deferred — see known issues)
 - [x] **Milestone 4 — iOS wiring** ✅ auth/feed/social/profile/media wired to the live backend; verified in simulator
-- [ ] **Milestone 5 — Buffer / hardening** ← next
+- [x] **Milestone 5 — Buffer / hardening** ✅ — **Phase 1 complete.** Next: Phase 2 (realtime + commerce, see ARCHITECTURE.md §8) when budget is topped up.
+
+## Milestone 5 additions
+
+- Backend: `@RestControllerAdvice` for consistent `{"message"}` error bodies (+ `server.error.include-message: always`); `GET /v1/profiles/by-handle/{handle}` profile view lookup. Deployed + verified (error shapes, by-handle, cursor pagination).
+- iOS: feed pagination (keyset cursor, loads more near the list bottom), pull-to-refresh on Home, loading spinner on first feed load, own-profile counts refresh on open, profile-by-handle fallback when the local id map misses. Verified in simulator incl. keychain session restore.
 
 ## What's deployed
 
@@ -78,8 +83,8 @@ Two-user curl flow against prod: sign-up/sign-in both users → A updates profil
 - App Runner bills ~24/7 (~$25/mo with RDS); `aws apprunner pause-service` when idle.
 - **Media is served straight from S3** (public-read on `media/*`) until AWS Support verifies the account for CloudFront — see incidents log. Uploaded objects are never listed or deleted yet (no cleanup of orphaned uploads).
 - **Simulator MCP panel blocked**: `xcode-select` doesn't point at Xcode — fix with `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` (needs user password).
-- Milestones 1–4 are **not yet committed to git**.
+- All milestone work is committed locally; push to GitHub when ready (`git push`).
 
 ## To resume in a new session
 
-Say: *"Read PROGRESS.md and ARCHITECTURE.md, start Milestone 5."* Everything needed is in those two files.
+Say: *"Read PROGRESS.md and ARCHITECTURE.md, start Phase 2."* Everything needed is in those two files. Outstanding user-only actions: add `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` GitHub repo secrets (untested deploy workflow), ask AWS Support to verify the account for CloudFront, run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` for the live simulator panel.

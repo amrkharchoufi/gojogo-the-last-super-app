@@ -23,14 +23,24 @@ struct HomeView: View {
                         .padding(.bottom, 8)
 
                     if app.posts.isEmpty {
-                        GGEmptyState(
-                            icon: "square.and.pencil",
-                            title: "No posts yet",
-                            message: "Share a photo, video, or thought to get your feed started.",
-                            actionTitle: "Create a post",
-                            action: { app.openComposer() }
-                        )
-                        .padding(.top, 40)
+                        if app.feedLoading {
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                    .tint(GGColor.textSecondary)
+                                Spacer()
+                            }
+                            .padding(.top, 120)
+                        } else {
+                            GGEmptyState(
+                                icon: "square.and.pencil",
+                                title: "No posts yet",
+                                message: "Share a photo, video, or thought to get your feed started.",
+                                actionTitle: "Create a post",
+                                action: { app.openComposer() }
+                            )
+                            .padding(.top, 40)
+                        }
                     } else {
                         ForEach(app.posts) { post in
                             VStack(spacing: 0) {
@@ -39,6 +49,7 @@ struct HomeView: View {
                                     .fill(GGColor.ink(0.08))
                                     .frame(height: 0.5)
                             }
+                            .onAppear { app.loadMoreFeedIfNeeded(after: post.id) }
                         }
                     }
 
@@ -52,6 +63,7 @@ struct HomeView: View {
             .environment(\.defaultMinListRowHeight, 0)
             .scrollContentBackground(.hidden)
             .scrollIndicators(.hidden)
+            .refreshable { await app.pullRefreshFeed() }
             .coordinateSpace(name: "homeFeed")
             .trackScrollChrome(hidden: $hideChrome)
 

@@ -18,6 +18,8 @@ public interface ProfileApi {
 
     Optional<ProfileDto> findById(UUID id);
 
+    Optional<ProfileDto> findByHandle(String handle);
+
     /**
      * Batch lookup for decorating content with author info. Missing ids are absent from the map.
      */

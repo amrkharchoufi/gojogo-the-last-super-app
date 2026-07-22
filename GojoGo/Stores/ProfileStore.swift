@@ -29,6 +29,11 @@ final class ProfileStore {
         try await APIClient.shared.get("/v1/profiles/\(id.uuidString.lowercased())")
     }
 
+    func view(handle: String) async throws -> ProfileViewDTO {
+        let encoded = handle.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? handle
+        return try await APIClient.shared.get("/v1/profiles/by-handle/\(encoded)")
+    }
+
     func posts(of id: UUID) async throws -> [PostDTO] {
         try await APIClient.shared.get("/v1/profiles/\(id.uuidString.lowercased())/posts")
     }

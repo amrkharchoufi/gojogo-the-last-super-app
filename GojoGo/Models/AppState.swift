@@ -17,6 +17,11 @@ final class AppState: ObservableObject {
     @Published var authError: String? = nil
     /// True once /v1/auth/session + profile succeeded against the live backend.
     var backendConnected: Bool = false
+    /// Initial live-feed load in flight (drives the Home loading state).
+    @Published var feedLoading: Bool = false
+    /// Keyset cursor for the next feed page; nil = no more pages.
+    var feedNextBefore: String? = nil
+    var feedLoadingMore: Bool = false
     /// Set on fresh signups so the onboarding flow runs before entering the app.
     var pendingOnboarding: Bool = false
 
@@ -1868,6 +1873,14 @@ final class AppState: ObservableObject {
     func openOwnProfile() {
         profileUser = .own(from: user, posts: myPosts.count)
         showProfile = true
+        if backendConnected {
+            Task {
+                await refreshOwnCounts()
+                if showProfile, profileUser?.isOwn == true {
+                    profileUser = .own(from: user, posts: user.postCount)
+                }
+            }
+        }
     }
 
     func openUserProfile(handle: String, name: String? = nil,
