@@ -4,25 +4,20 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as rds from 'aws-cdk-lib/aws-rds';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
 export interface GojoGoAppStackProps extends cdk.StackProps {
   userPool: cognito.UserPool;
   database: rds.DatabaseInstance;
   repository: ecr.Repository;
+  mediaBucket: s3.Bucket;
+  mediaCdnDomain: string;
 }
 
 export class GojoGoAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: GojoGoAppStackProps) {
     super(scope, id, props);
-
-    // Same value as GojoGoDataStack's DbPassword; passed to both at deploy time.
-    const dbPassword = new cdk.CfnParameter(this, 'DbPassword', {
-      type: 'String',
-      noEcho: true,
-      minLength: 16,
-      description: 'Password for the gojogo database user (matches GojoGoDataStack)',
-    });
 
     const ecrAccessRole = new iam.Role(this, 'EcrAccessRole', {
       roleName: 'GojoGoAppRunnerEcrAccess',
@@ -38,6 +33,11 @@ export class GojoGoAppStack extends cdk.Stack {
       roleName: 'GojoGoAppRunnerInstance',
       assumedBy: new iam.ServicePrincipal('tasks.apprunner.amazonaws.com'),
     });
+    // Lets the running container read the RDS-generated password at startup
+    // instead of it being passed as a plaintext runtime env var.
+    props.database.secret!.grantRead(instanceRole);
+    // Presigned PUT URLs are signed with the instance role's credentials.
+    props.mediaBucket.grantPut(instanceRole);
 
     const service = new apprunner.CfnService(this, 'Service', {
       serviceName: 'gojogo-backend',
@@ -54,11 +54,18 @@ export class GojoGoAppStack extends cdk.Stack {
               { name: 'DB_PORT', value: '5432' },
               { name: 'DB_NAME', value: 'gojogo' },
               { name: 'DB_USER', value: 'gojogo' },
-              { name: 'DB_PASSWORD', value: dbPassword.valueAsString },
               {
                 name: 'COGNITO_ISSUER_URI',
                 value: `https://cognito-idp.${this.region}.amazonaws.com/${props.userPool.userPoolId}`,
               },
+              { name: 'MEDIA_BUCKET', value: props.mediaBucket.bucketName },
+              { name: 'MEDIA_CDN_DOMAIN', value: props.mediaCdnDomain },
+            ],
+            runtimeEnvironmentSecrets: [
+              // ":password::" extracts just that JSON key from the RDS-generated
+              // secret - a bare secret ARN injects the whole {"username":...,
+              // "password":...,"host":...} blob as the value instead.
+              { name: 'DB_PASSWORD', value: `${props.database.secret!.secretArn}:password::` },
             ],
           },
         },

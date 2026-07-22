@@ -19,6 +19,11 @@ spring:
         jwt:
           issuer-uri: ${COGNITO_ISSUER_URI:https://cognito-idp.us-east-1.amazonaws.com/replace-me}
 
+gojogo:
+  media:
+    bucket: ${MEDIA_BUCKET:}
+    cdn-domain: ${MEDIA_CDN_DOMAIN:}
+
 server:
   port: 8080
 

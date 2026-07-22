@@ -176,6 +176,62 @@
       "Effect": "Allow",
       "Action": "cloudformation:ListStacks",
       "Resource": "*"
+    },
+    {
+      "Sid": "Ec2VpcNetworkingForPrivateRds",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateVpc",
+        "ec2:DeleteVpc",
+        "ec2:ModifyVpcAttribute",
+        "ec2:CreateSubnet",
+        "ec2:DeleteSubnet",
+        "ec2:ModifySubnetAttribute",
+        "ec2:CreateRouteTable",
+        "ec2:DeleteRouteTable",
+        "ec2:CreateRoute",
+        "ec2:DeleteRoute",
+        "ec2:AssociateRouteTable",
+        "ec2:DisassociateRouteTable",
+        "ec2:CreateNetworkInterface",
+        "ec2:DeleteNetworkInterface",
+        "ec2:CreateNetworkInterfacePermission"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Ec2DescribeVpcAttribute",
+      "Effect": "Allow",
+      "Action": "ec2:DescribeVpcAttribute",
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchLogsForAppRunnerDebugging",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/apprunner/*",
+        "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/apprunner/*:*"
+      ]
+    },
+    {
+      "Sid": "SecretsManagerForDbPassword",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:gojogo/*"
     }
   ]
 }

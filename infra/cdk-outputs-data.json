@@ -1,6 +1,8 @@
 {
   "GojoGoDataStack": {
-    "ExportsOutputFnGetAttPostgres9DC8BB04EndpointAddress36F9722A": "gojogodatastack-postgres9dc8bb04-eudbfwduhm5c.ccpumiyo88o1.us-east-1.rds.amazonaws.com",
-    "DbEndpoint": "gojogodatastack-postgres9dc8bb04-eudbfwduhm5c.ccpumiyo88o1.us-east-1.rds.amazonaws.com"
+    "DbEndpoint": "gojogodatastack-postgresv3115c0d74-saoihc0u0yjf.ccpumiyo88o1.us-east-1.rds.amazonaws.com",
+    "DbSecretArn": "arn:aws:secretsmanager:us-east-1:578109959809:secret:gojogo/db-credentials-v3-Aw3him",
+    "ExportsOutputFnGetAttPostgresV3115C0D74EndpointAddressB22CABE4": "gojogodatastack-postgresv3115c0d74-saoihc0u0yjf.ccpumiyo88o1.us-east-1.rds.amazonaws.com",
+    "ExportsOutputRefPostgresV3SecretAttachmentFE209D5830DF18A5": "arn:aws:secretsmanager:us-east-1:578109959809:secret:gojogo/db-credentials-v3-Aw3him"
   }
 }

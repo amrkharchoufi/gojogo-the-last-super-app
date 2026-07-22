@@ -23,6 +23,7 @@ class AuthController {
     @PostMapping("/v1/auth/session")
     SessionResponse establishSession(@AuthenticationPrincipal Jwt jwt) {
         ProfileDto profile = profiles.createOrFetch(jwt.getSubject(), jwt.getClaimAsString("email"));
-        return new SessionResponse(profile.id(), profile.cognitoSub(), profile.email(), profile.displayName());
+        return new SessionResponse(profile.id(), profile.cognitoSub(), profile.email(),
+            profile.displayName(), profile.handle());
     }
 }

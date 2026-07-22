@@ -4,25 +4,21 @@ import * as rds from 'aws-cdk-lib/aws-rds';
 import { Construct } from 'constructs';
 
 /**
- * Dev-tier RDS Postgres in the default VPC.
+ * Dev-tier RDS Postgres in the default VPC, publicly accessible behind a
+ * password-protected security group.
  *
- * The milestone-1 IAM policy cannot create VPCs, NAT gateways, or App Runner
- * VPC connectors, so the instance is publicly accessible with a security group
- * open on 5432 — acceptable for a dev database with a strong password, to be
- * revisited when the stack moves to ECS/private networking.
+ * A private-networking attempt (dedicated isolated VPC + App Runner VPC
+ * connector) was tried and reverted: App Runner's VPC egress mode routes
+ * *all* outbound traffic through the connector, not just VPC-bound traffic,
+ * so an internet-isolated VPC broke Cognito JWT validation. The real fix
+ * needs a NAT Gateway (~$32-35/mo) - deferred as not worth the recurring
+ * cost at this stage; revisit alongside the ECS/Fargate migration.
  */
 export class GojoGoDataStack extends cdk.Stack {
   readonly database: rds.DatabaseInstance;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
-
-    const dbPassword = new cdk.CfnParameter(this, 'DbPassword', {
-      type: 'String',
-      noEcho: true,
-      minLength: 16,
-      description: 'Master password for the gojogo database user',
-    });
 
     const vpc = ec2.Vpc.fromLookup(this, 'DefaultVpc', { isDefault: true });
 
@@ -33,7 +29,10 @@ export class GojoGoDataStack extends cdk.Stack {
     });
     dbSecurityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(5432), 'Postgres (dev)');
 
-    this.database = new rds.DatabaseInstance(this, 'Postgres', {
+    // Construct ID bumped again (V2 -> V3): any change to which VPC/subnets
+    // a DatabaseInstance lives in must force a full replace, since RDS
+    // subnet groups can't be updated in place across VPCs.
+    this.database = new rds.DatabaseInstance(this, 'PostgresV3', {
       engine: rds.DatabaseInstanceEngine.postgres({
         version: rds.PostgresEngineVersion.VER_16,
       }),
@@ -42,10 +41,13 @@ export class GojoGoDataStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       publiclyAccessible: true,
       securityGroups: [dbSecurityGroup],
-      credentials: rds.Credentials.fromPassword(
-        'gojogo',
-        cdk.SecretValue.cfnParameter(dbPassword),
-      ),
+      // Name bumped alongside the construct ID (V2 -> V3) - Secrets Manager
+      // treats the base name as the uniqueness key regardless of the random
+      // ARN suffix, so reusing the old name collides with the not-yet-
+      // -replaced PostgresV2 secret during this deploy.
+      credentials: rds.Credentials.fromGeneratedSecret('gojogo', {
+        secretName: 'gojogo/db-credentials-v3',
+      }),
       databaseName: 'gojogo',
       allocatedStorage: 20,
       maxAllocatedStorage: 20,
@@ -57,5 +59,6 @@ export class GojoGoDataStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'DbEndpoint', { value: this.database.dbInstanceEndpointAddress });
+    new cdk.CfnOutput(this, 'DbSecretArn', { value: this.database.secret!.secretArn });
   }
 }

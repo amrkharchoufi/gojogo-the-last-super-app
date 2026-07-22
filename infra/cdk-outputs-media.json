@@ -16,6 +16,13 @@
     "ExportsOutputRefBackendRepo7FFBAD06405267DF": "gojogo-backend",
     "RepositoryUri": "578109959809.dkr.ecr.us-east-1.amazonaws.com/gojogo-backend"
   },
+  "GojoGoMediaStack": {
+    "BucketName": "gojogo-user-media-578109959809",
+    "ExportsOutputFnGetAttUserMediaDEF05D60RegionalDomainName5DB07508": "gojogo-user-media-578109959809.s3.us-east-1.amazonaws.com",
+    "ExportsOutputRefUserMediaDEF05D603DF89C8E": "gojogo-user-media-578109959809",
+    "MediaPublicDomain": "gojogo-user-media-578109959809.s3.us-east-1.amazonaws.com",
+    "ExportsOutputFnGetAttUserMediaDEF05D60ArnEBCF4814": "arn:aws:s3:::gojogo-user-media-578109959809"
+  },
   "GojoGoAppStack": {
     "ServiceUrl": "https://f6kp8hx2j2.us-east-1.awsapprunner.com",
     "ServiceArn": "arn:aws:apprunner:us-east-1:578109959809:service/gojogo-backend/a33d8b2ac276407babdfdb27a5c2a940"
