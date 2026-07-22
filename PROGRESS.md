@@ -5,53 +5,81 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture and milestone p
 ## Environment — ready
 
 - **AWS account:** `578109959809`, region `us-east-1`
-- **IAM user:** `gojogo-builder`, policy `GojoGoMilestone1Policy` (now at **v4** — Milestone 1 added: SSM write on `/cdk-bootstrap/*`, `ec2:DescribeRouteTables`/`DescribeInternetGateways`/`DescribeVpnGateways` for CDK VPC lookup, `iam:CreateServiceLinkedRole` for App Runner. [iam-policy-milestone1.json](iam-policy-milestone1.json) matches the live v4.)
-- **Local tools:** Java 23, Maven 3.9.16, AWS CLI 2.36.5, CDK 2.1132.0 (`~/.npm-global/bin/cdk` — may need `export PATH="$HOME/.npm-global/bin:$PATH"` in non-login shells)
-- **CDK bootstrapped** in us-east-1 (CDKToolkit stack live)
+- **IAM user:** `gojogo-builder`, policy `GojoGoMilestone1Policy` at **v6** ([iam-policy-milestone1.json](iam-policy-milestone1.json) tracks it: v3–v4 added CDK bootstrap/lookup + App Runner SLR perms; v5–v6 added Secrets Manager on `gojogo/*`, CloudWatch Logs read on `/aws/apprunner/*`, VPC-creation perms from the reverted private-networking attempt)
+- **Local tools:** Java 23, Maven 3.9.16, AWS CLI 2.36.5, CDK 2.1132.0 (`~/.npm-global/bin/cdk` — may need `export PATH="$HOME/.npm-global/bin:$PATH"`)
+- **CDK bootstrapped** in us-east-1
 
 ## Milestone status
 
-- [x] **Milestone 1 — Backend skeleton + auth** ✅ done, deployed, verified end-to-end
-- [ ] **Milestone 2 — Profiles + social API** ← next
-- [ ] Milestone 3 — Media upload
-- [ ] Milestone 4 — iOS wiring
-- [ ] Milestone 5 — Buffer / hardening
+- [x] **Milestone 1 — Backend skeleton + auth** ✅
+- [x] **Milestone 2 — Profiles + social API** ✅
+- [x] **Milestone 3 — Media upload** ✅ (CloudFront deferred — see known issues)
+- [x] **Milestone 4 — iOS wiring** ✅ auth/feed/social/profile/media wired to the live backend; verified in simulator
+- [ ] **Milestone 5 — Buffer / hardening** ← next
 
-## What's deployed (Milestone 1)
+## What's deployed
 
 | Thing | Value |
 |---|---|
-| API base URL | `https://pmv3e2g3yv.us-east-1.awsapprunner.com` |
-| Health check | `GET /actuator/health` (public) |
-| Session endpoint | `POST /v1/auth/session` with `Authorization: Bearer <Cognito ID token>` → creates/fetches profile row |
-| Cognito user pool | `us-east-1_ImKOJoJaA` (`gojogo-users`), issuer `https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ImKOJoJaA` |
-| Cognito app client | `5gouehsu6bgaur82gcebiubvt0` (`gojogo-ios`, no secret, SRP + USER_PASSWORD_AUTH enabled) |
-| RDS Postgres 16 | `gojogodatastack-postgres9dc8bb04-eudbfwduhm5c.ccpumiyo88o1.us-east-1.rds.amazonaws.com:5432/gojogo`, user `gojogo`, db.t4g.micro, default VPC, public (dev-only) |
-| ECR repo | `578109959809.dkr.ecr.us-east-1.amazonaws.com/gojogo-backend` (`:latest` deployed) |
-| App Runner service | `gojogo-backend`, arn `...service/gojogo-backend/ff8ba66ef00142e3839deca19ec8285c`, 1 vCPU / 2 GB |
-| CloudFormation stacks | `GojoGoAuthStack`, `GojoGoDataStack`, `GojoGoEcrStack`, `GojoGoAppStack` (+ `CDKToolkit`) |
+| API base URL | `https://f6kp8hx2j2.us-east-1.awsapprunner.com` (**changed** when the service was recreated) |
+| Cognito user pool / client | `us-east-1_ImKOJoJaA` / `5gouehsu6bgaur82gcebiubvt0` (issuer `https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ImKOJoJaA`) |
+| RDS Postgres 16 | `gojogodatastack-postgresv3115c0d74-saoihc0u0yjf.ccpumiyo88o1.us-east-1.rds.amazonaws.com:5432/gojogo` — **replaced during the private-networking attempt; data reset was fine (test rows only)** |
+| DB credentials | Secrets Manager `gojogo/db-credentials-v3` (RDS-generated; App Runner injects `DB_PASSWORD` via `runtimeEnvironmentSecrets`; `infra/.env.deploy` is obsolete) |
+| ECR repo | `578109959809.dkr.ecr.us-east-1.amazonaws.com/gojogo-backend` |
+| App Runner service | `gojogo-backend`, arn `...service/gojogo-backend/a33d8b2ac276407babdfdb27a5c2a940` |
+| Stacks | `GojoGoAuthStack`, `GojoGoDataStack`, `GojoGoEcrStack`, `GojoGoMediaStack`, `GojoGoAppStack` — no deploy parameters needed (password comes from Secrets Manager) |
+| Media bucket | `gojogo-user-media-578109959809` — presigned PUT writes; `media/*` objects public-read from S3 (interim, until CloudFront) |
+| Media public domain | `gojogo-user-media-578109959809.s3.us-east-1.amazonaws.com` (App Runner env `MEDIA_BUCKET` / `MEDIA_CDN_DOMAIN`) |
 
-**DB password:** in gitignored `infra/.env.deploy` (also set as App Runner env var `DB_PASSWORD`). Needed as `--parameters <Stack>:DbPassword=...` when redeploying `GojoGoDataStack` or `GojoGoAppStack`.
+## API surface (all require `Authorization: Bearer <Cognito ID token>` except health)
 
-## Code layout
+- `GET /actuator/health` (public)
+- `POST /v1/auth/session` — create-or-fetch profile; returns profileId/handle
+- `GET|PATCH /v1/profiles/me` — own profile (displayName, handle, bio, category, birthYear, avatarUrl, interests; PATCH = null field means unchanged; 409 on taken handle)
+- `GET /v1/profiles/{id}` — profile view with postCount/followerCount/followingCount/isOwn/following
+- `GET /v1/profiles/{id}/posts` · `POST|DELETE /v1/profiles/{id}/follow`
+- `GET /v1/feed?before=<ISO8601>&limit=` — keyset-paginated; following+own, falls back to global recency when following no one; `nextBefore` cursor
+- `POST /v1/posts` (text and/or ≤10 mediaItems `{imageUrl,videoUrl}`, imageAspect) · `GET|DELETE /v1/posts/{id}`
+- `POST|DELETE /v1/posts/{id}/like` · `POST|DELETE /v1/posts/{id}/bookmark`
+- `GET|POST /v1/posts/{id}/comments` · `POST|DELETE /v1/comments/{id}/like`
+- `GET /v1/stories` (rings, own first, 24h expiry, per-viewer seen state) · `POST /v1/stories` (≤10 frameImageUrls) · `POST /v1/stories/frames/{id}/seen`
+- `POST /v1/media/presign` `{contentType}` → `{uploadUrl, key, publicUrl, expiresSeconds}` — client PUTs bytes to `uploadUrl` (S3-direct, 15-min expiry, content-type enforced: jpeg/png/webp/heic/gif/mp4/mov → else 415), then references `publicUrl` in posts/stories/avatarUrl
 
-- `backend/` — Spring Boot 3.5 + Spring Modulith 1.4, Java 21. Modules: `auth` (session endpoint), `profile` (owns `profile.user_profile`, public API `ProfileApi`), `social` + `media` (empty shells). `ModularityTests` enforces module boundaries in the build. Flyway migrations in `src/main/resources/db/migration` create the `profile`/`social`/`media` schemas.
-- `infra/` — CDK TypeScript app, four stacks (see table above). `cdk deploy` falls back to current credentials (the builder user can't assume the CDK roles — expected, fine).
-- `.github/workflows/deploy-backend.yml` — tests → Jib build/push to ECR → `apprunner start-deployment` on push to `main` touching `backend/`.
+Domain events `PostCreated` and `UserFollowed` are published in-process (`com.gojogo.social`); no consumers yet by design. When the first consumer arrives, switch `spring-modulith-starter-core` → `starter-jpa` for the event publication registry (needs an `event_publication` table migration).
 
 ## Verified end-to-end (2026-07-22)
 
-curl flow: `cognito-idp sign-up` → `admin-confirm-sign-up` → `initiate-auth` (USER_PASSWORD_AUTH) → `POST /v1/auth/session` with the ID token → `200` with profile row (repeat call returns same `profileId`; no token → `401`). Test user `gojogo-m1-test@example.com` exists in the pool.
+Two-user curl flow against prod: sign-up/sign-in both users → A updates profile → A posts (text + 2 media) → B follows A → B's feed shows A's post with author/following decoration → B likes + comments (counts bump) → B's profile view of A shows counts + following → A posts story, B sees ring, marks seen, seen-state sticks → B unfollows (fixed: was 500) → B's feed falls back to discovery. Test users: `gojogo-m1-test@example.com` (A), `gojogo-m2-bob@example.com` (B), password `TestPass123456!`, in the pool with real content rows in prod DB.
+
+## iOS wiring (Milestone 4)
+
+- **`GojoGo/CoreNetworking/`** — `BackendConfig` (deployed URLs/ids), `KeychainStore`, `CognitoAuthClient` (native sign-up/confirm/sign-in/refresh over Cognito's JSON API — no Amplify), `APIClient` (async/await, Bearer ID token, one retry on 401 via refresh token, presigned media upload), `APIModels` (typed DTOs; timestamps parsed via `BackendDate`, which trims the backend's nanosecond fractions).
+- **`GojoGo/Stores/`** — `SocialStore` (feed/posts/likes/bookmarks/comments/follows/stories + DTO→UI-model mapping; server UUIDs are reused as UI model ids) and `ProfileStore` (session/me/update/views). `AuthSession` actor owns tokens.
+- **AppState stays the façade** the views bind to; its social/profile/auth methods now sync to the API (optimistic UI, fire-and-forget with DEBUG logging) via [AppState+Backend.swift](GojoGo/Models/AppState+Backend.swift). On launch with keychain tokens: cached UI first, then live session + feed/stories replace the Home content (other tabs keep SampleData by design). A full @Published store split was deliberately deferred — views are too coupled to AppState to split cheaply; revisit when more domains go live.
+- **Email auth flow**: [EmailSignUpView](GojoGo/Auth/EmailSignUpView.swift) = email+password → (new users) emailed 6-digit code → onboarding pushes displayName/handle/birthYear/interests via PATCH. Existing users skip onboarding (routed by whether the profile has a displayName). Apple/Google buttons currently route to the email flow.
+- **DEBUG auto-login hook** for headless E2E: `SIMCTL_CHILD_GG_AUTOLOGIN_EMAIL` / `..._PASSWORD` env vars on `simctl launch` (DEBUG builds only).
+- **Verified in simulator (2026-07-22)**: bob signs in → routed to onboarding (no displayName); Alice signs in → straight to Home showing the real feed incl. the M3 S3-hosted photo; own posts show no Follow chip; identity/counts from the live profile.
+- **Gotchas learned**: simulator keychain survives app uninstall (`xcrun simctl keychain <udid> reset` between test identities); `URL.appendingPathComponent` percent-encodes `?` (feed query briefly 404'd — build URLs with `URL(string:relativeTo:)`).
+- **Not yet wired**: pull-to-refresh/pagination on the feed, avatar upload UI, Apple/Google (Sign in with Apple), push, other tabs (Watch/Shorts/Economy/Travel/Delivery — still SampleData per plan).
+
+## Incidents & fixes log
+
+- **M3 session:** CloudFront distribution creation is blocked — **the AWS account is unverified for CloudFront** (new-account restriction; only AWS Support can lift it). Interim: media served public-read directly from S3. When support verifies the account, flip `ENABLE_CLOUDFRONT = true` in [media-stack.ts](infra/lib/media-stack.ts) and redeploy `GojoGoMediaStack` + `GojoGoAppStack` — URLs keep their paths, only the domain changes. Also: a CDK env-var update to the App Runner service did **not** re-pull `:latest` — after pushing a new image, always run `aws apprunner start-deployment` even if a CFN update just deployed.
+
+- **M2 session:** an interrupted `cdk deploy` had left `GojoGoAppStack` as a `REVIEW_IN_PROGRESS` shell with the App Runner service deleted — fixed by deleting the stack shell and redeploying (service URL changed as a result). Spring Data derived `deleteBy…` methods on `@IdClass` entities threw `ClassCastException` in prod — replaced with explicit `@Modifying @Query` deletes ([Repositories.java](backend/src/main/java/com/gojogo/social/internal/Repositories.java)).
+- **Private networking attempt (user, reverted):** App Runner VPC egress routes *all* outbound traffic through the VPC, so an isolated VPC broke Cognito JWT validation. Real fix needs a NAT Gateway (~$32–35/mo) — deferred to the ECS/Fargate migration.
 
 ## Known issues / dev shortcuts to revisit
 
-- **RDS is publicly accessible** with 5432 open to the world (password-protected). Forced by the scoped IAM policy (no VPC/NAT/VPC-connector permissions). Fix when moving to ECS/private networking.
-- **DB password is a plaintext App Runner env var + local file** — no Secrets Manager permissions in the policy. Migrate to Secrets Manager when the policy allows.
-- **GitHub Actions workflow is written but untested** — needs repo secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (gojogo-builder's keys) added on GitHub, then a push to `main` to prove it. Until then, manual deploy: `cd backend && mvn -B -DskipTests compile jib:build -Djib.image=578109959809.dkr.ecr.us-east-1.amazonaws.com/gojogo-backend:latest -Djib.to.auth.username=AWS -Djib.to.auth.password="$(aws ecr get-login-password --region us-east-1)"` then `aws apprunner start-deployment --service-arn <arn above>`.
-- **Signup requires `admin-confirm-sign-up`** (or the emailed code) — fine for dev; decide verified-email UX before launch.
-- App Runner min instance count is 1 → the service bills ~24/7 at this size (~$25/mo with RDS). `aws apprunner pause-service` when idle to save money.
-- Milestone 1 work is **not yet committed to git**.
+- **RDS publicly accessible** (5432 open, password-protected) — see NAT note above.
+- **GitHub Actions workflow untested** — needs repo secrets `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Manual deploy: `cd backend && mvn -B -DskipTests compile jib:build -Djib.image=578109959809.dkr.ecr.us-east-1.amazonaws.com/gojogo-backend:latest -Djib.to.auth.username=AWS -Djib.to.auth.password="$(aws ecr get-login-password --region us-east-1)"` then `aws apprunner start-deployment --service-arn <arn above>`.
+- **Signup requires `admin-confirm-sign-up`** or emailed code — decide UX before launch.
+- Feed `following` decoration loads the full followee id set per request — fine now, cache/join later.
+- App Runner bills ~24/7 (~$25/mo with RDS); `aws apprunner pause-service` when idle.
+- **Media is served straight from S3** (public-read on `media/*`) until AWS Support verifies the account for CloudFront — see incidents log. Uploaded objects are never listed or deleted yet (no cleanup of orphaned uploads).
+- **Simulator MCP panel blocked**: `xcode-select` doesn't point at Xcode — fix with `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` (needs user password).
+- Milestones 1–4 are **not yet committed to git**.
 
 ## To resume in a new session
 
-Say: *"Read PROGRESS.md and ARCHITECTURE.md, start Milestone 2."* Everything needed is in those two files.
+Say: *"Read PROGRESS.md and ARCHITECTURE.md, start Milestone 5."* Everything needed is in those two files.

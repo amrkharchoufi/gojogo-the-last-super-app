@@ -29,8 +29,9 @@ struct WelcomeView: View {
                                 .font(.system(size: 22, weight: .medium))
                                 .foregroundStyle(.white)
                         } action: {
+                            // Social sign-in isn't wired yet — email is the real flow.
                             withAnimation(.easeInOut(duration: 0.3)) {
-                                app.phase = .onboarding
+                                app.phase = .email
                             }
                         }
 
@@ -38,8 +39,9 @@ struct WelcomeView: View {
                             GoogleMark()
                                 .frame(width: 22, height: 22)
                         } action: {
+                            // Social sign-in isn't wired yet — email is the real flow.
                             withAnimation(.easeInOut(duration: 0.3)) {
-                                app.phase = .onboarding
+                                app.phase = .email
                             }
                         }
 

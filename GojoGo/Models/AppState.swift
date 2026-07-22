@@ -9,6 +9,17 @@ final class AppState: ObservableObject {
     @Published var onboardingStep: Int = 1
     @Published var email: String = ""
 
+    // Backend auth/session (Milestone 4 — see AppState+Backend.swift)
+    @Published var authPassword: String = ""
+    @Published var authCode: String = ""
+    @Published var emailAuthStep: EmailAuthStep = .credentials
+    @Published var authBusy: Bool = false
+    @Published var authError: String? = nil
+    /// True once /v1/auth/session + profile succeeded against the live backend.
+    var backendConnected: Bool = false
+    /// Set on fresh signups so the onboarding flow runs before entering the app.
+    var pendingOnboarding: Bool = false
+
     // Appearance
     @Published var appTheme: AppTheme = .dark
 
@@ -215,11 +226,31 @@ final class AppState: ObservableObject {
 
     init() {
         Self.purgeLegacyMockContentIfNeeded()
-        if let cached = SessionStore.load() {
-            applyCachedSession(cached)
+        guard AuthSession.shared.isAuthenticated else {
+            // No real account tokens — any cached prototype session is obsolete.
+            SessionStore.clear()
+            bootstrapFreshSession()
+            #if DEBUG
+            // Headless E2E hook: `simctl launch` with SIMCTL_CHILD_GG_AUTOLOGIN_*.
+            let env = ProcessInfo.processInfo.environment
+            if let mail = env["GG_AUTOLOGIN_EMAIL"], let pass = env["GG_AUTOLOGIN_PASSWORD"] {
+                email = mail
+                authPassword = pass
+                phase = .email
+                submitEmailCredentials()
+            }
+            #endif
             return
         }
-        bootstrapFreshSession()
+        if let cached = SessionStore.load() {
+            applyCachedSession(cached)
+        } else {
+            phase = .app
+            onboardingStep = 3
+            bootstrapFreshSession()
+        }
+        email = AuthSession.shared.accountEmail ?? email
+        Task { await connectBackend() }
     }
 
     /// One-time wipe so devices that still have cached mock feeds start clean.
@@ -1278,6 +1309,15 @@ final class AppState: ObservableObject {
         partnerOfferTask?.cancel()
         partnerJobTask?.cancel()
         SessionStore.clear()
+        AuthSession.shared.clear()
+        SocialStore.shared.reset()
+        ProfileStore.shared.reset()
+        backendConnected = false
+        pendingOnboarding = false
+        authPassword = ""
+        authCode = ""
+        authError = nil
+        emailAuthStep = .credentials
 
         partnerRoles = []
         partnerOnboardingRole = nil
@@ -1355,6 +1395,8 @@ final class AppState: ObservableObject {
         remapOwnContentToCurrentHandle()
         user.postCount = myPosts.count
         withAnimation(.easeInOut(duration: 0.5)) { phase = .app }
+        pendingOnboarding = false
+        syncOnboardingProfile()
         persistSession()
     }
 
@@ -1399,6 +1441,7 @@ final class AppState: ObservableObject {
         guard let i = posts.firstIndex(where: { $0.id == id }) else { return }
         posts[i].liked.toggle()
         posts[i].likeCount += posts[i].liked ? 1 : -1
+        syncLike(postID: id, liked: posts[i].liked)
         schedulePersist()
     }
 
@@ -1409,6 +1452,7 @@ final class AppState: ObservableObject {
         guard !posts[i].liked else { return false }
         posts[i].liked = true
         posts[i].likeCount += 1
+        syncLike(postID: id, liked: true)
         schedulePersist()
         return true
     }
@@ -1427,6 +1471,7 @@ final class AppState: ObservableObject {
         posts[i].bookmarked.toggle()
         if posts[i].bookmarked { savedPostIDs.insert(id) }
         else { savedPostIDs.remove(id) }
+        syncBookmark(postID: id, bookmarked: posts[i].bookmarked)
         schedulePersist()
     }
 
@@ -1434,6 +1479,14 @@ final class AppState: ObservableObject {
         guard let i = posts.firstIndex(where: { $0.id == postID }) else { return }
         posts[i].following.toggle()
         user.followingCount += posts[i].following ? 1 : -1
+        let following = posts[i].following
+        let author = posts[i].author
+        // Mirror across every post by the same author.
+        for j in posts.indices where posts[j].author == author {
+            posts[j].following = following
+            posts[j].showFollow = !following
+        }
+        syncFollow(postID: postID, following: following)
         schedulePersist()
     }
 
@@ -1450,7 +1503,10 @@ final class AppState: ObservableObject {
     func openComments(for postID: UUID) {
         commentingPostID = postID
         draftComment = ""
-        if commentsByPost[postID] == nil {
+        if SocialStore.shared.remotePostIds.contains(postID) {
+            if commentsByPost[postID] == nil { commentsByPost[postID] = [] }
+            refreshComments(for: postID)
+        } else if commentsByPost[postID] == nil {
             commentsByPost[postID] = SampleData.defaultComments
         }
     }
@@ -1473,6 +1529,7 @@ final class AppState: ObservableObject {
             posts[i].commentCount = list.count
         }
         draftComment = ""
+        syncNewComment(text: text, postID: id, optimisticID: comment.id)
         schedulePersist()
     }
 
@@ -1482,6 +1539,7 @@ final class AppState: ObservableObject {
         list[i].liked.toggle()
         list[i].likeCount += list[i].liked ? 1 : -1
         commentsByPost[postID] = list
+        syncCommentLike(commentID: commentID, liked: list[i].liked)
         schedulePersist()
     }
 
@@ -1603,7 +1661,12 @@ final class AppState: ObservableObject {
             user.postCount += 1
         }
         schedulePersist()
-        simulateEngagement(on: post.id)
+        if backendConnected {
+            syncPublishPost(localID: post.id, text: body, imageData: resolvedImage,
+                            videoURL: resolvedVideo, slides: slides)
+        } else {
+            simulateEngagement(on: post.id)
+        }
     }
 
     /// Prototype delight: a fresh post starts collecting likes/comments after a beat.
@@ -1796,6 +1859,9 @@ final class AppState: ObservableObject {
                       isYou: true),
                 at: 0)
         }
+        if backendConnected {
+            syncNewStory(imageData: imageData, localFrameID: frame.id)
+        }
         schedulePersist()
     }
 
@@ -1829,6 +1895,7 @@ final class AppState: ObservableObject {
             following: sample?.following ?? false
         )
         showProfile = true
+        refreshRemoteProfile(handle: cleaned)
     }
 
     func closeProfile() {
@@ -1844,7 +1911,9 @@ final class AppState: ObservableObject {
         // Mirror onto feed posts with same author when present.
         for i in posts.indices where posts[i].author == p.handle || posts[i].author == "@\(p.handle)" {
             posts[i].following = p.following
+            posts[i].showFollow = !p.following
         }
+        syncProfileFollow(handle: p.handle, following: p.following)
         schedulePersist()
     }
 
@@ -1874,10 +1943,12 @@ final class AppState: ObservableObject {
     func markFrameSeen(storyID: UUID, frameID: UUID) {
         guard let si = stories.firstIndex(where: { $0.id == storyID }),
               let fi = stories[si].frames.firstIndex(where: { $0.id == frameID }) else { return }
+        guard !stories[si].frames[fi].seen else { return }
         stories[si].frames[fi].seen = true
         if viewingStory?.id == storyID {
             viewingStory = stories[si]
         }
+        syncFrameSeen(frameID: frameID)
         schedulePersist()
     }
 
