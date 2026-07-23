@@ -26,7 +26,9 @@ class PresignService {
         "image/heic", "heic",
         "image/gif", "gif",
         "video/mp4", "mp4",
-        "video/quicktime", "mov");
+        "video/quicktime", "mov",
+        // Voice notes recorded in My World (AAC in an MPEG-4 container).
+        "audio/m4a", "m4a");
 
     private final MediaProperties properties;
     private final MediaReferenceService references;

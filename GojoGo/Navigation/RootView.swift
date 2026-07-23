@@ -198,8 +198,15 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .inactive || phase == .background {
+            switch phase {
+            case .inactive, .background:
                 app.persistSession()
+            case .active:
+                // A backgrounded socket is dropped by API Gateway well before the
+                // user notices — re-dial and re-sync the moment we're back.
+                app.worldEnterForeground()
+            @unknown default:
+                break
             }
         }
     }

@@ -53,7 +53,7 @@ struct CommentsSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { app.closeComments() }
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(GGColor.textPrimary)
                 }
             }
         }
@@ -91,7 +91,7 @@ struct CommentsSheet: View {
                             if c.likeCount > 0 { Text("\(c.likeCount)") }
                         }
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(c.liked ? Color.white : GGColor.textTertiary)
+                        .foregroundStyle(c.liked ? GGColor.white : GGColor.textTertiary)
                     }
                     .buttonStyle(.plain)
                 }

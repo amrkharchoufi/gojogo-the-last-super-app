@@ -32,6 +32,12 @@ final class NotificationStore {
             "/v1/push/register", body: RegisterPushBody(token: token, platform: "ios"))
     }
 
+    /// Drops this device from push fan-out — how "turn notifications off" is honoured.
+    func unregisterDevice(_ token: String) async throws {
+        try await APIClient.shared.postNoContent(
+            "/v1/push/unregister", body: UnregisterPushBody(token: token))
+    }
+
     func map(_ dto: NotificationDTO) -> ActivityItem {
         ActivityItem(
             id: dto.id,

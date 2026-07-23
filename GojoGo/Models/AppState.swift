@@ -47,7 +47,6 @@ final class AppState: ObservableObject {
     @Published var showWorldAppsMenu: Bool = false
     @Published var showWorldContact: Bool = false
     @Published var worldIsEditing: Bool = false
-    @Published var worldSharingLocation: Bool = true
     @Published var showWorldFilters: Bool = false
     /// Single modal-sheet slot for My World (new message / poll / send-later).
     @Published var worldSheet: WorldSheetKind? = nil
@@ -65,11 +64,52 @@ final class AppState: ObservableObject {
     @Published var showWorldPollOverlay: Bool = false
     @Published var showWorldSendLaterOverlay: Bool = false
     /// Chosen date for a Send-Later message.
-    @Published var worldSendLaterDate: Date = Calendar.current.date(
-        byAdding: .day, value: 1, to: Date()) ?? Date()
+    @Published var worldSendLaterDate: Date = {
+        let cal = Calendar.current
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        return cal.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
+    }()
     /// When set, the next send is scheduled for this label instead of sent now.
     @Published var worldSendLaterLabel: String? = nil
     private var worldScheduledTasks: [UUID: Task<Void, Never>] = [:]
+    /// Transient status line above the composer ("Getting your location…").
+    @Published var worldNotice: String? = nil
+    private var worldNoticeTask: Task<Void, Never>? = nil
+    /// True while the live socket is up — the chat header shows "Connecting…" otherwise.
+    @Published var worldRealtimeConnected: Bool = false
+    /// The person (or group) behind the open thread, for the contact page.
+    @Published var worldContactProfile: WorldContactProfile? = nil
+    /// Threads muted on this device (no local alert; server push is a global toggle).
+    @Published var worldMutedConversations: Set<UUID> = WorldPreference.mutedConversations
+
+    // MARK: My World settings (device preferences — see `WorldPreference`)
+
+    /// Push notifications for GojoGo on this device.
+    @Published var worldPushEnabled: Bool = WorldPreference.pushEnabled {
+        didSet {
+            guard oldValue != worldPushEnabled else { return }
+            WorldPreference.pushEnabled = worldPushEnabled
+            PushRegistrar.shared.setMuted(!worldPushEnabled)
+        }
+    }
+    /// Whether the composer tells the other side you're typing.
+    @Published var worldTypingIndicatorsEnabled: Bool = WorldPreference.typingIndicators {
+        didSet { WorldPreference.typingIndicators = worldTypingIndicatorsEnabled }
+    }
+    /// Whether "Location" is offered in the chat apps drawer.
+    @Published var worldLocationSharingEnabled: Bool = WorldPreference.locationSharing {
+        didSet { WorldPreference.locationSharing = worldLocationSharingEnabled }
+    }
+    /// Wallpaper applied to conversations you start.
+    @Published var worldDefaultBackground: WorldChatBackground = WorldPreference.defaultBackground {
+        didSet { WorldPreference.defaultBackground = worldDefaultBackground }
+    }
+    /// Draft state for the settings screen's profile card.
+    @Published var worldSettingsName: String = ""
+    @Published var worldSettingsAvatarData: Data? = nil
+    @Published var worldSettingsBusy: Bool = false
+    @Published var worldSettingsError: String? = nil
+    @Published var worldSettingsSaved: Bool = false
 
     // MARK: My World setup (WhatsApp-style: own phone-verified identity)
     /// Backend `GET /v1/world/me` — true once phone verified + World name set.
@@ -523,6 +563,8 @@ final class AppState: ObservableObject {
     }
 
     func closeWorldConversation() {
+        ChatAudioPlayer.shared.stop()
+        clearWorldNotice()
         selectedWorldConversationID = nil
         worldDraft = ""
         worldPendingAttachments = []
@@ -536,8 +578,12 @@ final class AppState: ObservableObject {
         showWorldSendLaterOverlay = false
     }
 
+    /// Badge count — muted threads still show their own unread dot, but they
+    /// don't drive the badge, which is the point of muting them.
     var worldUnreadCount: Int {
-        worldConversations.reduce(0) { $0 + $1.unread }
+        worldConversations
+            .filter { !worldMutedConversations.contains($0.id) }
+            .reduce(0) { $0 + $1.unread }
     }
 
     var selectedWorldConversation: WorldConversation? {
@@ -594,6 +640,10 @@ final class AppState: ObservableObject {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
             worldConversations[i].pinned.toggle()
         }
+        // Persist it, or the next list refresh undoes the pin.
+        let pinned = worldConversations[i].pinned
+        guard MessagingStore.shared.isLive(id) else { return }
+        Task { try? await MessagingStore.shared.setPinned(id, pinned: pinned) }
     }
 
     func toggleUnreadWorldConversation(_ id: UUID) {
@@ -606,8 +656,22 @@ final class AppState: ObservableObject {
         worldReplyTasks[id] = nil
         if worldTypingConversationID == id { worldTypingConversationID = nil }
         if selectedWorldConversationID == id { closeWorldConversation() }
+        showWorldContact = false
+        let wasLive = MessagingStore.shared.isLive(id)
         withAnimation(.easeOut(duration: 0.25)) {
             worldConversations.removeAll { $0.id == id }
+        }
+        worldMutedConversations.remove(id)
+        WorldPreference.mutedConversations = worldMutedConversations
+        // A live thread deleted only on-device reappears on the next refresh.
+        guard wasLive else { return }
+        Task { [weak self] in
+            do {
+                try await MessagingStore.shared.leave(id)
+            } catch {
+                self?.showWorldNotice("Couldn't delete that conversation.")
+                await self?.refreshWorldConversations()
+            }
         }
     }
 
@@ -815,6 +879,14 @@ final class AppState: ObservableObject {
             preview: "You: \(emoji)")
     }
 
+    /// A real iOS sticker picked from the system keyboard (PNG with alpha).
+    func sendWorldSticker(imageData: Data) {
+        deliverWorldMessage(
+            WorldMessage(kind: .sticker, text: "", fromUser: true,
+                         readLabel: "Delivered", imageData: imageData),
+            preview: "You: 🩷 Sticker")
+    }
+
     func sendWorldPhoto(_ data: Data) {
         deliverWorldMessage(
             WorldMessage(kind: .photo, text: "", fromUser: true,
@@ -822,26 +894,65 @@ final class AppState: ObservableObject {
             preview: "You: 📷 Photo")
     }
 
-    func sendWorldAudio(durationLabel: String) {
+    /// Voice note recorded by holding the composer mic. The bubble plays from the
+    /// local file straight away; the upload swaps in the CDN copy when it lands.
+    func sendWorldAudio(url: URL, durationLabel: String) {
         deliverWorldMessage(
             WorldMessage(kind: .audio, text: "", fromUser: true,
-                         readLabel: "Delivered", durationLabel: durationLabel),
+                         readLabel: "Delivered", durationLabel: durationLabel,
+                         localAudioURL: url),
             preview: "You: 🎤 Audio message")
     }
 
+    /// Asks the device for a real fix (and a place name) before sending.
     func sendWorldLocation() {
-        deliverWorldMessage(
-            WorldMessage(kind: .location, text: "Current Location",
-                         fromUser: true, readLabel: "Delivered"),
-            preview: "You: 📍 Location")
+        guard let target = selectedWorldConversationID else { return }
+        showWorldAppsMenu = false
+        showWorldNotice("Getting your location…", duration: 45)
+        Task {
+            do {
+                let place = try await LiveLocationProvider.shared.currentPlace()
+                clearWorldNotice()
+                // The fix can take a moment — send it to the thread it was asked
+                // for, even if the user has moved on to another one since.
+                deliverWorldMessage(
+                    WorldMessage(kind: .location, text: place.name,
+                                 fromUser: true, readLabel: "Delivered",
+                                 latitude: place.coordinate.latitude,
+                                 longitude: place.coordinate.longitude),
+                    preview: "You: 📍 \(place.name)", in: target)
+            } catch LiveLocationProvider.LocationError.denied {
+                showWorldNotice("Location is off for GojoGo — turn it on in Settings.")
+            } catch {
+                showWorldNotice("Couldn't get your location. Try again.")
+            }
+        }
+    }
+
+    /// Shows a transient line above the composer; auto-clears.
+    func showWorldNotice(_ text: String, duration: TimeInterval = 3.5) {
+        worldNoticeTask?.cancel()
+        withAnimation(.ggSnappy) { worldNotice = text }
+        worldNoticeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            withAnimation(.ggSnappy) { self?.worldNotice = nil }
+        }
+    }
+
+    func clearWorldNotice() {
+        worldNoticeTask?.cancel()
+        worldNoticeTask = nil
+        withAnimation(.ggSnappy) { worldNotice = nil }
     }
 
     /// Appends an outgoing message to the open thread and schedules the canned reply.
     /// When `scheduled` is true the bubble first appears in a pending state and is
     /// "sent" a few seconds later (demo stand-in for Send Later).
     private func deliverWorldMessage(_ msg: WorldMessage, preview: String, scheduled: Bool = false,
-                                     replyToId: UUID? = nil, scheduledAt: Date? = nil) {
-        guard let id = selectedWorldConversationID,
+                                     replyToId: UUID? = nil, scheduledAt: Date? = nil,
+                                     in conversationID: UUID? = nil) {
+        guard let id = conversationID ?? selectedWorldConversationID,
               let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
         // Only the newest outgoing message carries a receipt label.
         if !scheduled {
@@ -1079,14 +1190,43 @@ final class AppState: ObservableObject {
         return circle.memberIDs
     }
 
-    /// Photos exchanged in a conversation (for the contact info Photos tab).
-    func worldChatPhotos(for convo: WorldConversation?) -> [Data] {
-        convo?.messages.compactMap { $0.kind == .photo ? $0.imageData : nil } ?? []
+    /// Every image in a conversation — staged bytes *and* the ones that came down
+    /// from the CDN, single photos, stickers and carousel slides alike.
+    func worldChatPhotos(for convo: WorldConversation?) -> [WorldChatPhoto] {
+        guard let convo else { return [] }
+        var out: [WorldChatPhoto] = []
+        for msg in convo.messages {
+            switch msg.kind {
+            case .photo, .video, .sticker:
+                if msg.imageData != nil || msg.imageURL != nil {
+                    out.append(WorldChatPhoto(messageID: msg.id, index: 0,
+                                              data: msg.imageData, url: msg.imageURL,
+                                              isVideo: msg.kind == .video))
+                }
+            case .carousel:
+                for (i, item) in msg.carouselItems.enumerated() {
+                    out.append(WorldChatPhoto(messageID: msg.id, index: i,
+                                              data: item.imageData.isEmpty ? nil : item.imageData,
+                                              url: item.imageURL, isVideo: item.isVideo))
+                }
+            default:
+                break
+            }
+        }
+        return out
+    }
+
+    /// Locations shared in a conversation, newest first.
+    func worldChatLocations(for convo: WorldConversation?) -> [WorldMessage] {
+        (convo?.messages ?? [])
+            .filter { $0.kind == .location && $0.latitude != nil }
+            .reversed()
     }
 
     func openWorldContact() {
         showWorldAppsMenu = false
         withAnimation(.easeInOut(duration: 0.28)) { showWorldContact = true }
+        if let id = selectedWorldConversationID { loadWorldContactProfile(for: id) }
     }
 
     func closeWorldContact() {

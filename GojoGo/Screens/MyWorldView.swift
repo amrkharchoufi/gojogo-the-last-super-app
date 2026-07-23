@@ -45,6 +45,12 @@ struct WorldSheetHost: ViewModifier {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                     .presentationBackground(IMColor.sheetBG)
+            case .settings:
+                WorldSettingsView()
+                    .environmentObject(app)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(IMColor.sheetBG)
             }
         }
     }
@@ -54,11 +60,21 @@ struct WorldSheetHost: ViewModifier {
 
 private struct WorldMessagesList: View {
     @EnvironmentObject var app: AppState
+    /// Drives the relative timestamps ("2m", "1h") without a per-row timer, and
+    /// doubles as a safety-net poll behind the socket.
+    @State private var clock = Date()
+
+    private let tick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
             topBar
             listContent
+        }
+        .task { await app.refreshWorldConversations() }
+        .onReceive(tick) { now in
+            clock = now
+            Task { await app.refreshWorldConversations() }
         }
         .overlay(alignment: .topTrailing) {
             if app.showWorldFilters {
@@ -72,6 +88,24 @@ private struct WorldMessagesList: View {
 
     private var topBar: some View {
         HStack(spacing: 10) {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                app.openWorldSettings()
+            } label: {
+                UserAvatar(
+                    size: 34,
+                    gradient: app.user.avatarGradient,
+                    letter: String((app.worldSetupName.isEmpty ? app.user.name : app.worldSetupName)
+                        .prefix(1)),
+                    imageURL: app.worldSetupAvatarURL ?? app.user.avatarURL
+                )
+                .overlay(
+                    Circle().strokeBorder(IMColor.separator.opacity(0.6), lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("My World settings")
+
             Button {
                 withAnimation(.ggSnappy) { app.worldIsEditing.toggle() }
             } label: {
@@ -131,6 +165,11 @@ private struct WorldMessagesList: View {
             filterRow("Add by Username", "at") {
                 app.showWorldFilters = false
                 app.worldSheet = .newMessage
+            }
+            Divider().background(IMColor.label.opacity(0.1))
+            filterRow("My World Settings", "gearshape") {
+                app.showWorldFilters = false
+                app.openWorldSettings()
             }
         }
         .padding(.vertical, 6)
@@ -387,10 +426,32 @@ private struct WorldMessagesList: View {
             Label(convo.unread > 0 ? "Mark as Read" : "Mark as Unread",
                   systemImage: convo.unread > 0 ? "message.badge.filled.fill" : "message.badge")
         }
+        Button {
+            app.toggleWorldMute(convo.id)
+        } label: {
+            Label(app.isWorldMuted(convo.id) ? "Unmute" : "Mute",
+                  systemImage: app.isWorldMuted(convo.id) ? "bell" : "bell.slash")
+        }
         Button(role: .destructive) {
             app.deleteWorldConversation(convo.id)
         } label: {
             Label("Delete", systemImage: "trash")
+        }
+    }
+
+    /// Derived from `lastActivityAt` rather than the server's snapshot string, so
+    /// a row that just received a message reads "now" instead of its stale label.
+    private static func timeLabel(_ date: Date, now: Date) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        switch seconds {
+        case ..<60: return "now"
+        case ..<3600: return "\(Int(seconds / 60))m"
+        case ..<86_400:
+            return Calendar.current.isDateInToday(date)
+                ? date.formatted(date: .omitted, time: .shortened)
+                : "Yesterday"
+        case ..<604_800: return date.formatted(.dateTime.weekday(.abbreviated))
+        default: return date.formatted(.dateTime.day().month(.abbreviated))
         }
     }
 
@@ -429,8 +490,13 @@ private struct WorldMessagesList: View {
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(IMColor.label)
                         .lineLimit(1)
+                    if app.isWorldMuted(convo.id) {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(IMColor.secondary)
+                    }
                     Spacer(minLength: 6)
-                    Text(convo.timeAgo)
+                    Text(Self.timeLabel(convo.lastActivityAt, now: clock))
                         .font(.system(size: 15))
                         .foregroundStyle(IMColor.secondary)
                     Image(systemName: "chevron.right")

@@ -594,6 +594,8 @@ enum WorldMessageKind {
     case poll
     case system
     case timestamp
+    /// An image sticker (from the system sticker keyboard) — renders bare, no bubble.
+    case sticker
 }
 
 /// The six iMessage tapbacks (+ their SF Symbol overlay glyph).
@@ -725,6 +727,13 @@ struct WorldMessage: Identifiable {
     var poll: WorldPoll?
     /// Set while a Send-Later message is waiting to be delivered.
     var scheduledLabel: String?
+    /// Remote audio file for `.audio` messages (uploaded m4a).
+    var audioURL: String?
+    /// On-device recording, playable before/while the upload finishes.
+    var localAudioURL: URL?
+    /// Coordinates for `.location` messages — real fix, openable in Maps.
+    var latitude: Double?
+    var longitude: Double?
 
     init(id: UUID = UUID(), kind: WorldMessageKind = .text, text: String,
          fromUser: Bool = false, fileName: String? = nil, fileMeta: String? = nil,
@@ -732,13 +741,26 @@ struct WorldMessage: Identifiable {
          durationLabel: String? = nil,
          senderName: String? = nil, carouselItems: [WorldCarouselItem] = [],
          reactions: [WorldReaction] = [], replyTo: WorldReplySnippet? = nil,
-         poll: WorldPoll? = nil, scheduledLabel: String? = nil) {
+         poll: WorldPoll? = nil, scheduledLabel: String? = nil,
+         audioURL: String? = nil, localAudioURL: URL? = nil,
+         latitude: Double? = nil, longitude: Double? = nil) {
         self.id = id; self.kind = kind; self.text = text; self.fromUser = fromUser
         self.fileName = fileName; self.fileMeta = fileMeta; self.readLabel = readLabel
         self.imageData = imageData; self.imageURL = imageURL; self.durationLabel = durationLabel
         self.senderName = senderName; self.carouselItems = carouselItems
         self.reactions = reactions; self.replyTo = replyTo
         self.poll = poll; self.scheduledLabel = scheduledLabel
+        self.audioURL = audioURL; self.localAudioURL = localAudioURL
+        self.latitude = latitude; self.longitude = longitude
+    }
+
+    /// Playable source for an `.audio` bubble — the local recording wins so the
+    /// sender hears it instantly, the CDN copy is what the recipient gets.
+    var playableAudioURL: URL? {
+        if let localAudioURL, FileManager.default.fileExists(atPath: localAudioURL.path) {
+            return localAudioURL
+        }
+        return audioURL.flatMap(URL.init(string:))
     }
 
     /// One-line description used for reply snippets & list previews.
@@ -750,7 +772,8 @@ struct WorldMessage: Identifiable {
         case .video:        return "📹 Video"
         case .carousel:     return "🖼 \(carouselItems.count) items"
         case .audio:        return "🎤 Audio message"
-        case .location:     return "📍 Location"
+        case .sticker:      return "🩷 Sticker"
+        case .location:     return "📍 \(text.isEmpty ? "Location" : text)"
         case .poll:         return "📊 \(poll?.question ?? "Poll")"
         case .system, .timestamp: return text
         }
@@ -846,7 +869,51 @@ enum WorldSetupStep: Int, Comparable {
 /// over the immersive chat.
 enum WorldSheetKind: Int, Identifiable {
     case newMessage
+    case settings
     var id: Int { rawValue }
+}
+
+extension String {
+    /// Nil for empty / whitespace-only strings, so optional chaining can skip them.
+    var nilIfBlank: String? {
+        trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
+    }
+}
+
+/// One image shared in a thread, wherever its bytes live.
+struct WorldChatPhoto: Identifiable {
+    /// Stable across reloads: the message it came from plus its slot in a carousel.
+    var id: String { "\(messageID)-\(index)" }
+    let messageID: UUID
+    let index: Int
+    var data: Data?
+    var url: String?
+    var isVideo: Bool
+}
+
+/// Who you're talking to, assembled from the live conversation's participant, the
+/// person's public GojoGo profile, and what the thread itself contains. Nil-safe:
+/// each part fills in as it resolves, so the view never waits on all of them.
+struct WorldContactProfile {
+    var conversationID: UUID
+    var name: String
+    var handle: String?
+    var avatarURL: String?
+    var phone: String?
+    var bio: String = ""
+    var postCount: Int = 0
+    var followerCount: Int = 0
+    /// Members of a group thread (empty for 1:1).
+    var members: [WorldContactMember] = []
+    var isGroup: Bool = false
+}
+
+struct WorldContactMember: Identifiable {
+    let id: UUID
+    var name: String
+    var handle: String?
+    var avatarURL: String?
+    var isYou: Bool
 }
 
 /// Selectable chat wallpaper for a My World conversation (mirrors iMessage Backgrounds).

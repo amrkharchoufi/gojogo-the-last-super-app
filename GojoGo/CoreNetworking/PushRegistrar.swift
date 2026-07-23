@@ -14,6 +14,7 @@ final class PushRegistrar {
     private var deviceToken: String?
     private var authenticated = false
     private var lastSent: String?
+    private var muted = false
 
     /// APNs delivered a device token (hex).
     func updateToken(_ hexToken: String) {
@@ -30,8 +31,26 @@ final class PushRegistrar {
         queue.async { self.authenticated = false; self.lastSent = nil }
     }
 
+    /// Notifications toggle: muting drops this device from the backend's push
+    /// fan-out (rather than pretending locally), unmuting re-registers it.
+    func setMuted(_ muted: Bool) {
+        queue.async {
+            guard self.muted != muted else { return }
+            self.muted = muted
+            if muted {
+                guard let token = self.deviceToken else { return }
+                self.lastSent = nil
+                Task { @MainActor in
+                    try? await NotificationStore.shared.unregisterDevice(token)
+                }
+            } else {
+                self.trySend()
+            }
+        }
+    }
+
     private func trySend() {
-        guard authenticated, let token = deviceToken, token != lastSent else { return }
+        guard !muted, authenticated, let token = deviceToken, token != lastSent else { return }
         lastSent = token
         Task { @MainActor in
             do {

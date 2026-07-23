@@ -29,7 +29,7 @@ struct MediaImage: View {
 
     @ViewBuilder
     private var media: some View {
-        if let data, let ui = UIImage(data: data) {
+        if let data, let ui = Self.decoded(data) {
             Image(uiImage: ui)
                 .resizable()
                 .aspectRatio(contentMode: contentMode)
@@ -54,6 +54,24 @@ struct MediaImage: View {
         } else {
             MediaPlaceholder(cornerRadius: 0)
         }
+    }
+
+    /// Decoded-image cache keyed by the bytes' identity.
+    ///
+    /// `body` runs on every render pass, so decoding inline meant re-decoding
+    /// every inline photo on each scroll tick — very visible in a chat thread.
+    private static let decodedCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 120
+        return cache
+    }()
+
+    static func decoded(_ data: Data) -> UIImage? {
+        let key = "\(data.count)-\(data.hashValue)" as NSString
+        if let cached = decodedCache.object(forKey: key) { return cached }
+        guard let image = UIImage(data: data) else { return nil }
+        decodedCache.setObject(image, forKey: key)
+        return image
     }
 
     /// Asset catalog name, or `asset:Name` / `asset://Name` from older session strings.

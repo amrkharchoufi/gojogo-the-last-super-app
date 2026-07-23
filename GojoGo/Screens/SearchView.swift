@@ -237,9 +237,9 @@ struct SearchView: View {
             } label: {
                 Text(p.following ? "Following" : "Follow")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(p.following ? GGColor.textSecondary : .black)
+                    .foregroundStyle(p.following ? GGColor.textSecondary : GGColor.onAccent)
                     .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(Capsule().fill(p.following ? GGColor.ink(0.1) : Color.white))
+                    .background(Capsule().fill(p.following ? GGColor.ink(0.1) : GGColor.white))
             }
             .buttonStyle(PressableStyle())
         }

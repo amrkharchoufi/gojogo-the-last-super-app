@@ -65,11 +65,19 @@ class MessagingService {
         boolean isDirect = ordered.size() == 2 && req.circleId() == null;
 
         if (isDirect) {
-            Optional<UUID> existing = repo.findDirectConversation(ordered.get(0), ordered.get(1));
-            if (existing.isPresent()) {
-                ConversationMeta meta = repo.getConversation(existing.get()).orElseThrow();
-                Membership m = repo.getMembership(userId, existing.get())
-                    .orElseThrow(() -> gone(existing.get()));
+            // The DIRECT#a#b pointer outlives the conversation it names: leaving a
+            // 1:1 drops the membership row but nothing rewrites the pointer. Only
+            // reuse it when the thread is really still there and still ours —
+            // otherwise fall through and create a fresh one, which overwrites it.
+            Optional<ConversationMeta> reusable = repo
+                .findDirectConversation(ordered.get(0), ordered.get(1))
+                .flatMap(repo::getConversation)
+                .filter(meta -> meta.participants().contains(userId));
+            if (reusable.isPresent()) {
+                ConversationMeta meta = reusable.get();
+                // Re-opening a thread you left puts it back in your list.
+                Membership m = repo.getMembership(userId, meta.id())
+                    .orElseGet(() -> repo.rejoin(userId, meta));
                 return toConversationDto(meta, m);
             }
         }
@@ -320,6 +328,8 @@ class MessagingService {
             case "photo" -> "Photo";
             case "video" -> "Video";
             case "audio" -> "Audio message";
+            case "sticker" -> "Sticker";
+            case "location" -> "Location";
             case "poll" -> m.poll() != null ? m.poll().question() : "Poll";
             default -> "Attachment";
         };

@@ -15,15 +15,30 @@ final class MessagingStore {
     private(set) var liveConversationIds: Set<UUID> = []
     /// Cached participants per conversation — used to name poll voters / senders.
     private var participantsByConversation: [UUID: [ParticipantDTO]] = [:]
+    /// Phone numbers learned from `by-phone` lookups. There's no profileId→phone
+    /// endpoint, so this is the only way the contact page can offer a call.
+    private var phoneByProfile: [UUID: String] = [:]
 
     func isLive(_ conversationId: UUID) -> Bool {
         liveConversationIds.contains(conversationId)
+    }
+
+    /// Everyone in a live thread, as the server last described them.
+    func participants(in conversationId: UUID) -> [ParticipantDTO] {
+        participantsByConversation[conversationId] ?? []
+    }
+
+    /// The other side of a 1:1 thread (nil for groups or unknown threads).
+    func otherParticipant(in conversationId: UUID) -> ParticipantDTO? {
+        let others = participants(in: conversationId).filter { $0.id != myProfileId }
+        return others.count == 1 ? others.first : nil
     }
 
     func reset() {
         myProfileId = nil
         liveConversationIds = []
         participantsByConversation = [:]
+        phoneByProfile = [:]
     }
 
     // MARK: REST
@@ -34,9 +49,11 @@ final class MessagingStore {
     }
 
     func createConversation(participantIds: [UUID], title: String?,
-                            circleId: UUID? = nil) async throws -> WorldConversation {
+                            circleId: UUID? = nil,
+                            background: WorldChatBackground = .none) async throws -> WorldConversation {
         let body = CreateConversationBody(
-            participantIds: participantIds, title: title, circleId: circleId, background: nil)
+            participantIds: participantIds, title: title, circleId: circleId,
+            background: background == .none ? nil : background.rawValue)
         let dto: ConversationDTO = try await APIClient.shared.post("/v1/conversations", body: body)
         return map(dto)
     }
@@ -91,6 +108,18 @@ final class MessagingStore {
             "/v1/conversations/\(conversationId.uuidString.lowercased())/typing")
     }
 
+    func setPinned(_ conversationId: UUID, pinned: Bool) async throws {
+        try await APIClient.shared.post(
+            "/v1/conversations/\(conversationId.uuidString.lowercased())/pin?pinned=\(pinned)")
+    }
+
+    /// Leaves (and for a 1:1, removes) the conversation server-side.
+    func leave(_ conversationId: UUID) async throws {
+        try await APIClient.shared.delete("/v1/conversations/\(conversationId.uuidString.lowercased())")
+        liveConversationIds.remove(conversationId)
+        participantsByConversation[conversationId] = nil
+    }
+
     // MARK: World identity / setup
 
     func worldMe() async throws -> WorldProfileDTO {
@@ -116,8 +145,13 @@ final class MessagingStore {
 
     func worldByPhone(_ phone: String) async throws -> WorldUserDTO {
         let encoded = phone.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? phone
-        return try await APIClient.shared.get("/v1/world/by-phone/\(encoded)")
+        let user: WorldUserDTO = try await APIClient.shared.get("/v1/world/by-phone/\(encoded)")
+        phoneByProfile[user.profileId] = user.phone ?? phone
+        return user
     }
+
+    /// Known phone number for a World user, if we've ever resolved one.
+    func phone(of profileId: UUID) -> String? { phoneByProfile[profileId] }
 
     // MARK: Mapping
 
@@ -148,8 +182,12 @@ final class MessagingStore {
 
     func map(_ dto: MessageDTO) -> WorldMessage {
         let mine = dto.senderId == myProfileId
+        let kind = kind(from: dto.kind)
         let firstImage = dto.mediaItems?.first { !$0.isVideo }
         let firstVideo = dto.mediaItems?.first { $0.isVideo }
+        // Audio rides in the media item's file slot; a pin rides there as a geo: URI.
+        let audioURL = kind == .audio ? dto.mediaItems?.first?.videoUrl : nil
+        let place = kind == .location ? WorldLocationPayload(dto.mediaItems?.first) : nil
         let carousel = (dto.mediaItems ?? []).map {
             // Poster (imageUrl) is what renders in the bubble for both photo and
             // video items; the video file (videoUrl) is for future playback.
@@ -166,17 +204,20 @@ final class MessagingStore {
         }
         return WorldMessage(
             id: dto.id,
-            kind: kind(from: dto.kind),
-            text: dto.text ?? "",
+            kind: kind,
+            text: place?.name ?? dto.text ?? "",
             fromUser: mine,
             readLabel: mine ? "Delivered" : nil,
             imageURL: firstImage?.imageUrl ?? firstVideo?.imageUrl,
-            durationLabel: (firstImage ?? firstVideo)?.durationLabel,
+            durationLabel: kind == .location ? nil : (firstImage ?? firstVideo)?.durationLabel,
             senderName: mine ? nil : dto.senderName,
             carouselItems: carousel.count >= 2 ? carousel : [],
             reactions: reactions,
             replyTo: reply,
-            poll: dto.poll.map { poll(from: $0, in: dto.conversationId) })
+            poll: dto.poll.map { poll(from: $0, in: dto.conversationId) },
+            audioURL: audioURL,
+            latitude: place?.latitude,
+            longitude: place?.longitude)
     }
 
     private func kind(from raw: String) -> WorldMessageKind {
@@ -185,6 +226,7 @@ final class MessagingStore {
         case "photo": return .photo
         case "video": return .video
         case "carousel": return .carousel
+        case "sticker": return .sticker
         case "audio": return .audio
         case "location": return .location
         case "poll": return .poll

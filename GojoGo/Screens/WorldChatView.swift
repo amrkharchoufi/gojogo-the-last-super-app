@@ -11,7 +11,10 @@ struct WorldChatView: View {
     @FocusState private var focused: Bool
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotoPicker = false
-    @State private var showRecorder = false
+    @State private var showCamera = false
+    @State private var showStickers = false
+    /// Hold-to-talk recording state for the composer mic.
+    @StateObject private var hold = HoldToRecordModel()
     /// Interactive swipe-to-dismiss (finger moves left → chat slides off).
     @State private var dismissDrag: CGFloat = 0
     /// Frame of each bubble in the chat coordinate space (for the tapback overlay).
@@ -29,6 +32,12 @@ struct WorldChatView: View {
     private var canSend: Bool {
         !app.worldDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !app.worldPendingAttachments.isEmpty
+    }
+
+    /// Only worth showing on a thread that actually depends on the socket.
+    private var showsConnecting: Bool {
+        app.backendConnected && !app.worldRealtimeConnected
+            && MessagingStore.shared.isLive(conversationID)
     }
 
     var body: some View {
@@ -53,7 +62,7 @@ struct WorldChatView: View {
                             app.showWorldAppsMenu = false
                         }
                     }
-                WorldAppsDrawer { action in
+                WorldAppsDrawer(showsLocation: app.worldLocationSharingEnabled) { action in
                     handleDrawer(action)
                 }
                 .padding(.leading, 12)
@@ -91,11 +100,40 @@ struct WorldChatView: View {
             guard !items.isEmpty else { return }
             Task { await stagePickedMedia(items); photoItems = [] }
         }
-        .sheet(isPresented: $showRecorder) {
-            AudioRecorderSheet { _, label, _ in
-                app.sendWorldAudio(durationLabel: label)
-            }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraCaptureView(
+                onCapture: { capture in
+                    showCamera = false
+                    switch capture {
+                    case .photo(let data):
+                        app.stageWorldAttachment(WorldPendingAttachment(imageData: data))
+                    case .video(let poster, let label, _):
+                        app.stageWorldAttachment(
+                            WorldPendingAttachment(imageData: poster, isVideo: true,
+                                                   durationLabel: label))
+                    }
+                },
+                onCancel: { showCamera = false }
+            )
+            .ignoresSafeArea()
         }
+        .sheet(isPresented: $showStickers) {
+            WorldStickerSheet(
+                onSticker: { data in
+                    showStickers = false
+                    app.sendWorldSticker(imageData: data)
+                },
+                onEmoji: { emoji in
+                    showStickers = false
+                    app.sendWorldSticker(emoji)
+                },
+                onDismiss: { showStickers = false }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(IMColor.sheetBG)
+        }
+        .onDisappear { hold.abort() }
     }
 
     // MARK: Drawer actions
@@ -105,12 +143,19 @@ struct WorldChatView: View {
             app.showWorldAppsMenu = false
         }
         switch action {
-        case .camera, .photos:
+        case .camera:
+            // No camera in the Simulator — fall back rather than showing a black sheet.
+            if CameraCaptureView.isAvailable {
+                showCamera = true
+            } else {
+                app.showWorldNotice("No camera on this device.")
+                showPhotoPicker = true
+            }
+        case .photos:
             showPhotoPicker = true
-        case .audio:
-            showRecorder = true
         case .stickers:
-            app.sendWorldSticker(["😂", "🔥", "❤️", "👀", "🥳", "😮", "😎"].randomElement() ?? "❤️")
+            focused = false
+            showStickers = true
         case .location:
             app.sendWorldLocation()
         case .polls:
@@ -118,9 +163,19 @@ struct WorldChatView: View {
                 app.showWorldPollOverlay = true
             }
         case .sendLater:
-            app.worldSendLaterDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+            app.worldSendLaterDate = Self.defaultSendLaterDate()
             app.setWorldSendLater(Self.sendLaterLabel(for: app.worldSendLaterDate))
+            withAnimation(.ggNav) {
+                app.showWorldSendLaterOverlay = true
+            }
         }
+    }
+
+    /// Tomorrow morning at 9:00 — a clear future slot, not "now" stamped onto tomorrow.
+    static func defaultSendLaterDate() -> Date {
+        let cal = Calendar.current
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        return cal.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
     }
 
     static func sendLaterLabel(for date: Date) -> String {
@@ -191,11 +246,11 @@ struct WorldChatView: View {
 
     @ViewBuilder
     private var reactionOverlay: some View {
+        // The frame lands one layout pass after the long press — waiting for it
+        // beats flashing the lifted bubble in the middle of the screen first.
         if let target = app.worldReactionTarget,
-           let msg = live.messages.first(where: { $0.id == target }) {
-            let frame = bubbleFrames[target]
-                ?? CGRect(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height / 2,
-                          width: 180, height: 44)
+           let msg = live.messages.first(where: { $0.id == target }),
+           let frame = bubbleFrames[target] {
             WorldReactionOverlay(
                 message: msg,
                 bubbleFrame: frame,
@@ -249,37 +304,51 @@ struct WorldChatView: View {
                     }
                 }
             ) {
-                VStack(spacing: 16) {
-                    Text("Send Later")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(IMColor.label)
-                        .padding(.top, 18)
-                    DatePicker("", selection: $app.worldSendLaterDate, in: Date()...,
-                               displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(.graphical)
-                        .tint(IMColor.blue)
-                        .padding(.horizontal, 16)
-                        .onChange(of: app.worldSendLaterDate) { _, newValue in
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Send Later")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(IMColor.label)
+                        Spacer()
+                        Button {
+                            let clamped = max(app.worldSendLaterDate, Date().addingTimeInterval(60))
+                            app.worldSendLaterDate = clamped
+                            app.setWorldSendLater(Self.sendLaterLabel(for: clamped))
+                            withAnimation(.ggNav) {
+                                app.showWorldSendLaterOverlay = false
+                            }
+                        } label: {
+                            Text("Done")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(IMColor.blue)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 22)
+                    .padding(.bottom, 4)
+
+                    DatePicker(
+                        "Send Later",
+                        selection: $app.worldSendLaterDate,
+                        in: Date()...,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                    .tint(IMColor.blue)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 12)
+                    .onChange(of: app.worldSendLaterDate) { _, newValue in
+                        let minDate = Date().addingTimeInterval(60)
+                        if newValue < minDate {
+                            app.worldSendLaterDate = minDate
+                            app.setWorldSendLater(Self.sendLaterLabel(for: minDate))
+                        } else {
                             app.setWorldSendLater(Self.sendLaterLabel(for: newValue))
                         }
-                    Button {
-                        app.setWorldSendLater(Self.sendLaterLabel(for: app.worldSendLaterDate))
-                        withAnimation(.ggNav) {
-                            app.showWorldSendLaterOverlay = false
-                        }
-                    } label: {
-                        Text("Done")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 13)
-                            .background(Capsule().fill(IMColor.blue))
                     }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
                 }
-                .frame(height: 420)
             }
             .zIndex(60)
         }
@@ -325,8 +394,15 @@ struct WorldChatView: View {
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(IMColor.secondary)
                     }
+                    if showsConnecting {
+                        Text("Connecting…")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(IMColor.secondary)
+                            .transition(.opacity)
+                    }
                 }
                 .frame(maxWidth: 180)
+                .animation(.ggSnappy, value: showsConnecting)
             }
             .buttonStyle(.plain)
 
@@ -454,7 +530,8 @@ struct WorldChatView: View {
                 .padding(.vertical, 2)
 
         default:
-            bubbleLine(msg, spacing: msg.kind == .emoji ? 60 : 48, tailed: isLastInCluster)
+            let wide = msg.kind == .emoji || msg.kind == .sticker
+            bubbleLine(msg, spacing: wide ? 60 : 48, tailed: isLastInCluster)
         }
     }
 
@@ -470,8 +547,10 @@ struct WorldChatView: View {
             photoBubble(msg)
         case .carousel:
             carouselBubble(msg)
+        case .sticker:
+            stickerBubble(msg)
         case .audio:
-            audioBubble(msg, tailed: tailed)
+            VoiceNoteBubble(message: msg, tailed: tailed)
         case .location:
             locationBubble(msg)
         case .poll:
@@ -504,10 +583,15 @@ struct WorldChatView: View {
                 bubbleContent(msg, tailed: tailed)
                     .opacity(app.worldReactionTarget == msg.id ? 0 : 1)
                     .background(
+                        // Only the long-pressed bubble reports its frame. Publishing
+                        // every bubble's rect re-rendered the whole thread on every
+                        // scroll frame, which is what made the chat feel heavy.
                         GeometryReader { proxy in
                             Color.clear.preference(
                                 key: BubbleFrameKey.self,
-                                value: [msg.id: proxy.frame(in: .named("worldChat"))])
+                                value: app.worldReactionTarget == msg.id
+                                    ? [msg.id: proxy.frame(in: .named("worldChat"))]
+                                    : [:])
                         }
                     )
                     .overlay(alignment: msg.fromUser ? .topLeading : .topTrailing) {
@@ -627,66 +711,68 @@ struct WorldChatView: View {
         ChatCarouselBubble(items: msg.carouselItems)
     }
 
-    private func audioBubble(_ msg: WorldMessage, tailed: Bool) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "play.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(msg.fromUser ? Color.white : IMColor.label)
-            Image(systemName: "waveform")
-                .font(.system(size: 22))
-                .foregroundStyle((msg.fromUser ? Color.white : IMColor.label).opacity(0.9))
-            Text(msg.durationLabel ?? "0:03")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle((msg.fromUser ? Color.white : IMColor.label).opacity(0.9))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            BubbleShape(fromUser: msg.fromUser, tailed: tailed)
-                .fill(msg.fromUser ? IMColor.blue : IMColor.bubbleGray)
-        )
+    /// Stickers render bare, like iMessage — no bubble, no tail.
+    private func stickerBubble(_ msg: WorldMessage) -> some View {
+        MediaImage(url: msg.imageURL, data: msg.imageData, cornerRadius: 0, contentMode: .fit)
+            .frame(width: 132, height: 132)
     }
 
+    /// A shared pin: real coordinates, tappable straight through to Maps.
+    @ViewBuilder
     private func locationBubble(_ msg: WorldMessage) -> some View {
-        let lat = app.selectedWorldContact?.latitude ?? 33.5731
-        let lon = app.selectedWorldContact?.longitude ?? -7.5898
-        let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-        let region = MKCoordinateRegion(
-            center: coord,
-            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-        )
+        let coord = CLLocationCoordinate2D(
+            latitude: msg.latitude ?? app.selectedWorldContact?.latitude ?? 33.5731,
+            longitude: msg.longitude ?? app.selectedWorldContact?.longitude ?? -7.5898)
+        let title = msg.text.isEmpty ? "Shared Location" : msg.text
 
-        return VStack(alignment: .leading, spacing: 0) {
-            Map(initialPosition: .region(region)) {
-                Annotation("", coordinate: coord) {
-                    Image(systemName: "mappin.circle.fill")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, IMColor.blue)
-                        .font(.system(size: 26))
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            openInMaps(coord, name: title)
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                StaticLocationMap(coordinate: coord)
+                    .frame(width: 230, height: 130)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(IMColor.blue)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(IMColor.label)
+                            .lineLimit(1)
+                        Text("Open in Maps")
+                            .font(.system(size: 11))
+                            .foregroundStyle(IMColor.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(IMColor.secondary)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(width: 230, alignment: .leading)
+                .background(IMColor.bubbleGray)
             }
-            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
-            .frame(width: 230, height: 130)
-            .disabled(true)
-
-            HStack(spacing: 6) {
-                Image(systemName: "location.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(IMColor.blue)
-                Text(msg.text)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(IMColor.label)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(width: 230, alignment: .leading)
-            .background(IMColor.bubbleGray)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(IMColor.label.opacity(0.08), lineWidth: 0.5)
+            )
         }
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(IMColor.label.opacity(0.08), lineWidth: 0.5)
-        )
+        .buttonStyle(.plain)
+    }
+
+    private func openInMaps(_ coordinate: CLLocationCoordinate2D, name: String) {
+        let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+        item.name = name
+        item.openInMaps(launchOptions: [
+            MKLaunchOptionsMapCenterKey: NSValue(mkCoordinate: coordinate),
+            MKLaunchOptionsMapSpanKey: NSValue(mkCoordinateSpan:
+                MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))
+        ])
     }
 
     private func fileBubble(_ msg: WorldMessage, tailed: Bool) -> some View {
@@ -729,6 +815,7 @@ struct WorldChatView: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
+            if let notice = app.worldNotice { noticeBar(notice) }
             if app.worldReplyingTo != nil { replyBar }
             if let label = app.worldSendLaterLabel { sendLaterBar(label) }
             composerRow
@@ -740,6 +827,24 @@ struct WorldChatView: View {
         .safeAreaPadding(.bottom, 0)
         .animation(.ggNav, value: app.worldReplyingTo)
         .animation(.ggNav, value: app.worldSendLaterLabel)
+        .animation(.ggSnappy, value: app.worldNotice)
+    }
+
+    /// Transient status line ("Getting your location…", "Hold to record").
+    private func noticeBar(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12, weight: .semibold))
+            Text(text)
+                .font(.system(size: 13))
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(IMColor.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(IMColor.inputFill))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     /// Quoted-message bar shown above the composer when replying.
@@ -823,25 +928,28 @@ struct WorldChatView: View {
 
     private var composerRow: some View {
         HStack(alignment: .bottom, spacing: 12) {
-            Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                focused = false
-                withAnimation(.ggNav) {
-                    app.showWorldAppsMenu.toggle()
+            if !hold.isRecording {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    focused = false
+                    withAnimation(.ggNav) {
+                        app.showWorldAppsMenu.toggle()
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 21, weight: .regular))
+                        .foregroundStyle(IMColor.label)
+                        .frame(width: 42, height: 42)
+                        .background(Circle().fill(IMColor.chrome))
+                        .rotationEffect(.degrees(app.showWorldAppsMenu ? 45 : 0))
                 }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 21, weight: .regular))
-                    .foregroundStyle(IMColor.label)
-                    .frame(width: 42, height: 42)
-                    .background(Circle().fill(IMColor.chrome))
-                    .rotationEffect(.degrees(app.showWorldAppsMenu ? 45 : 0))
+                .buttonStyle(.plain)
+                .accessibilityLabel("Apps")
+                .transition(.scale.combined(with: .opacity))
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Apps")
 
             VStack(alignment: .leading, spacing: 0) {
-                if !app.worldPendingAttachments.isEmpty {
+                if !app.worldPendingAttachments.isEmpty, !hold.isRecording {
                     attachmentTray
 
                     Rectangle()
@@ -849,66 +957,119 @@ struct WorldChatView: View {
                         .frame(height: 0.66)
                 }
 
-                HStack(alignment: .bottom, spacing: 6) {
-                    TextField(app.worldSendLaterLabel == nil ? "iMessage" : "Send Later",
-                              text: $app.worldDraft, axis: .vertical)
-                        .font(.system(size: 17))
-                        .foregroundStyle(IMColor.label)
-                        .lineLimit(1...5)
-                        .focused($focused)
-                        .tint(IMColor.blue)
-                        .padding(.leading, 16)
-                        .padding(.vertical, 10)
-                        .onChange(of: app.worldDraft) { _, _ in app.worldTypingChanged() }
+                if hold.isRecording {
+                    RecordingComposerBar(model: hold)
+                        .transition(.opacity)
+                } else {
+                    HStack(alignment: .bottom, spacing: 6) {
+                        TextField(app.worldSendLaterLabel == nil ? "iMessage" : "Send Later",
+                                  text: $app.worldDraft, axis: .vertical)
+                            .font(.system(size: 17))
+                            .foregroundStyle(IMColor.label)
+                            .lineLimit(1...5)
+                            .focused($focused)
+                            .tint(IMColor.blue)
+                            .padding(.leading, 16)
+                            .padding(.vertical, 10)
+                            .onChange(of: app.worldDraft) { _, _ in app.worldTypingChanged() }
 
-                    if canSend {
-                        Button {
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            app.sendWorldMessage()
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 17, weight: .bold))
-                                .foregroundStyle(Color.white)
-                                .frame(width: 50, height: 34)
-                                .background(Capsule().fill(IMColor.blue))
+                        if canSend {
+                            Button {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                app.sendWorldMessage()
+                            } label: {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 17, weight: .bold))
+                                    .foregroundStyle(Color.white)
+                                    .frame(width: 50, height: 34)
+                                    .background(Capsule().fill(IMColor.blue))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 4)
+                            .padding(.bottom, 4)
+                            .transition(.scale.combined(with: .opacity))
+                            .accessibilityLabel("Send")
                         }
-                        .buttonStyle(.plain)
-                        .padding(.trailing, 4)
-                        .padding(.bottom, 4)
-                        .transition(.scale.combined(with: .opacity))
-                        .accessibilityLabel("Send")
-                    } else {
-                        Button {
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            showRecorder = true
-                        } label: {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 19, weight: .medium))
-                                .foregroundStyle(IMColor.label.opacity(0.6))
-                                .frame(width: 34, height: 34)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 4)
-                        .transition(.scale.combined(with: .opacity))
-                        .accessibilityLabel("Record audio message")
                     }
+                    .frame(minHeight: 42)
+                    .transition(.opacity)
                 }
-                .frame(minHeight: 42)
             }
             .background(
-                RoundedRectangle(cornerRadius: app.worldPendingAttachments.isEmpty ? 21 : 26,
-                                 style: .continuous)
+                RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
                     .fill(IMColor.inputFill)
                     .overlay(
-                        RoundedRectangle(cornerRadius: app.worldPendingAttachments.isEmpty ? 21 : 26,
-                                         style: .continuous)
-                            .strokeBorder(IMColor.label.opacity(0.09), lineWidth: 0.66)
+                        RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
+                            .strokeBorder(hold.isRecording
+                                          ? IMColor.blue.opacity(0.5)
+                                          : IMColor.label.opacity(0.09),
+                                          lineWidth: hold.isRecording ? 1 : 0.66)
                     )
             )
             .animation(.ggSnappy, value: canSend)
-            .animation(.ggNav,
-                       value: app.worldPendingAttachments.count)
+            .animation(.ggNav, value: app.worldPendingAttachments.count)
+
+            if !canSend { micButton }
+        }
+        .animation(.ggSnappy, value: hold.isRecording)
+    }
+
+    private var composerCornerRadius: CGFloat {
+        app.worldPendingAttachments.isEmpty || hold.isRecording ? 21 : 26
+    }
+
+    /// Hold to record, slide left to cancel, release to send — no modal.
+    private var micButton: some View {
+        Image(systemName: hold.isRecording ? "mic.fill" : "mic")
+            .font(.system(size: 19, weight: .medium))
+            .foregroundStyle(hold.isRecording
+                             ? Color.white
+                             : IMColor.label.opacity(0.75))
+            .frame(width: 42, height: 42)
+            .background(
+                Circle().fill(hold.isRecording
+                              ? (hold.cancelling
+                                 ? Color(red: 1, green: 0.27, blue: 0.23)
+                                 : IMColor.blue)
+                              : IMColor.chrome)
+            )
+            .scaleEffect(hold.isRecording ? 1.18 : 1)
+            .overlay {
+                if hold.isRecording {
+                    Circle()
+                        .stroke(IMColor.blue.opacity(0.35), lineWidth: 2)
+                        .scaleEffect(1.18 + hold.recorder.level * 0.5)
+                        .opacity(0.8)
+                        .animation(.easeOut(duration: 0.12), value: hold.recorder.level)
+                }
+            }
+            .contentShape(Circle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !hold.isRecording {
+                            focused = false
+                            app.showWorldAppsMenu = false
+                            hold.begin()
+                        }
+                        hold.update(translation: value.translation.width)
+                    }
+                    .onEnded { _ in finishRecording() }
+            )
+            .transition(.scale.combined(with: .opacity))
+            .accessibilityLabel("Hold to record a voice message")
+    }
+
+    private func finishRecording() {
+        switch hold.end() {
+        case .recorded(let url, let label):
+            app.sendWorldAudio(url: url, durationLabel: label)
+        case .tooShort:
+            app.showWorldNotice("Hold the mic to record a voice message.")
+        case .denied:
+            app.showWorldNotice("Microphone access is off — turn it on in Settings.")
+        case .cancelled:
+            break
         }
     }
 
@@ -973,7 +1134,8 @@ private extension WorldMessageKind {
     /// Kinds that render as chat bubbles and participate in tail clustering.
     var isBubble: Bool {
         switch self {
-        case .text, .file, .emoji, .photo, .video, .carousel, .audio, .location, .poll: return true
+        case .text, .file, .emoji, .sticker, .photo, .video,
+             .carousel, .audio, .location, .poll: return true
         case .system, .timestamp: return false
         }
     }
@@ -1131,6 +1293,8 @@ private struct SwipeLeftDismissBridge: UIViewRepresentable {
         }
 
         func attach(from anchor: UIView) {
+            // The recognizer is installed once; skip the hop on every body update.
+            if edgePan != nil, host != nil { return }
             DispatchQueue.main.async { [weak self, weak anchor] in
                 guard let self, let anchor else { return }
                 guard let host = anchor.window ?? Self.nearestHost(from: anchor) else { return }
@@ -1247,21 +1411,27 @@ private extension AnyTransition {
 // MARK: - Apps drawer (+ menu)
 
 enum WorldAppAction {
-    case camera, photos, stickers, polls, audio, sendLater, location
+    case camera, photos, stickers, polls, sendLater, location
 }
 
 struct WorldAppsDrawer: View {
+    /// Hidden when location sharing is switched off in My World settings.
+    var showsLocation: Bool = true
     var onSelect: (WorldAppAction) -> Void = { _ in }
 
-    private let rows: [(title: String, icon: String, color: Color, action: WorldAppAction)] = [
-        ("Camera", "camera.fill", Color(white: 0.35), .camera),
-        ("Photos", "photo.on.rectangle.angled", Color(red: 0.95, green: 0.35, blue: 0.55), .photos),
-        ("Stickers", "face.smiling.inverse", IMColor.blue, .stickers),
-        ("Polls", "chart.bar.fill", Color(red: 1, green: 0.8, blue: 0.2), .polls),
-        ("Audio", "waveform", Color(red: 1, green: 0.27, blue: 0.23), .audio),
-        ("Send Later", "clock.badge", Color(red: 0.4, green: 0.75, blue: 1), .sendLater),
-        ("Location", "location.fill", Color(red: 0.2, green: 0.78, blue: 0.35), .location),
-    ]
+    private var rows: [(title: String, icon: String, color: Color, action: WorldAppAction)] {
+        var rows: [(String, String, Color, WorldAppAction)] = [
+            ("Camera", "camera.fill", Color(white: 0.35), .camera),
+            ("Photos", "photo.on.rectangle.angled", Color(red: 0.95, green: 0.35, blue: 0.55), .photos),
+            ("Stickers", "face.smiling.inverse", IMColor.blue, .stickers),
+            ("Polls", "chart.bar.fill", Color(red: 1, green: 0.8, blue: 0.2), .polls),
+            ("Send Later", "clock.badge", Color(red: 0.4, green: 0.75, blue: 1), .sendLater),
+        ]
+        if showsLocation {
+            rows.append(("Location", "location.fill", Color(red: 0.2, green: 0.78, blue: 0.35), .location))
+        }
+        return rows
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

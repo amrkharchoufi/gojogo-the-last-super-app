@@ -19,6 +19,42 @@ struct WorldMediaItemDTO: Codable {
     var durationLabel: String?
 }
 
+/// A shared pin, carried inside the message's single media slot as a `geo:` URI
+/// (`geo:33.5731,-7.5898`). The wire format has no coordinate fields and the
+/// media item is passed through the backend untouched, so this keeps a real
+/// location openable in Maps on the other side without a schema change.
+struct WorldLocationPayload {
+    var latitude: Double
+    var longitude: Double
+    var name: String
+
+    private static let scheme = "geo:"
+
+    var mediaItem: WorldMediaItemDTO {
+        WorldMediaItemDTO(imageUrl: nil,
+                          videoUrl: "\(Self.scheme)\(latitude),\(longitude)",
+                          isVideo: false,
+                          durationLabel: name.isEmpty ? nil : name)
+    }
+
+    init(latitude: Double, longitude: Double, name: String) {
+        self.latitude = latitude
+        self.longitude = longitude
+        self.name = name
+    }
+
+    init?(_ item: WorldMediaItemDTO?) {
+        guard let raw = item?.videoUrl, raw.hasPrefix(Self.scheme) else { return nil }
+        let parts = raw.dropFirst(Self.scheme.count).split(separator: ",")
+        guard parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]) else {
+            return nil
+        }
+        latitude = lat
+        longitude = lon
+        name = item?.durationLabel ?? "Location"
+    }
+}
+
 struct ReplySnippetDTO: Codable {
     var messageId: UUID
     var authorName: String?

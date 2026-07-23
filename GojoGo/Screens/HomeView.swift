@@ -394,11 +394,11 @@ struct InstagramPostCard: View {
                 } label: {
                     Text(live.following ? "Following" : "Follow")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(live.following ? GGColor.textSecondary : .white)
+                        .foregroundStyle(live.following ? GGColor.textSecondary : GGColor.onAccent)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(
-                            Capsule().fill(live.following ? GGColor.ink(0.08) : GGColor.ink(0.16))
+                            Capsule().fill(live.following ? GGColor.ink(0.08) : GGColor.white)
                         )
                 }
                 .buttonStyle(.plain)

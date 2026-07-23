@@ -1,10 +1,18 @@
 import SwiftUI
 import MapKit
+import UIKit
 
-/// iMessage-style contact / info sheet for a My World conversation.
+/// Contact / conversation info page for a My World thread.
+///
+/// Everything here reads from the real thread: the person comes from the live
+/// conversation's participant record (plus their public GojoGo profile when they
+/// have a handle), and every tab is built from the messages that were actually
+/// exchanged. The settings rows write through to the backend where the backend
+/// owns them (pin, delete) and to device preferences where it doesn't (mute).
 struct WorldContactView: View {
     @EnvironmentObject var app: AppState
     @State private var tab: ContactTab = .info
+    @State private var confirmingDelete = false
 
     enum ContactTab: String, CaseIterable, Identifiable {
         case info = "Info"
@@ -16,20 +24,30 @@ struct WorldContactView: View {
         var id: String { rawValue }
     }
 
-    private var contact: WorldContact? { app.selectedWorldContact }
     private var convo: WorldConversation? { app.selectedWorldConversation }
+    private var contact: WorldContact? { app.selectedWorldContact }
+
+    /// The resolved person/group; nil until `openWorldContact` has assembled it.
+    private var profile: WorldContactProfile? {
+        guard let convo, app.worldContactProfile?.conversationID == convo.id else { return nil }
+        return app.worldContactProfile
+    }
 
     private var displayName: String {
-        contact?.name ?? convo?.title ?? "Contact"
+        profile?.name ?? contact?.name ?? convo?.title ?? "Contact"
     }
 
     private var avatarURL: String? {
-        contact?.avatarURL ?? convo?.avatarURL
+        profile?.avatarURL ?? contact?.avatarURL ?? convo?.avatarURL
     }
 
     private var gradient: [Color] {
         contact?.avatarGradient ?? convo?.avatarGradient ?? []
     }
+
+    private var handle: String? { profile?.handle ?? contact?.username.nilIfBlank }
+    private var phone: String? { profile?.phone ?? contact?.phone.nilIfBlank }
+    private var isGroup: Bool { convo?.isGroup ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,6 +63,17 @@ struct WorldContactView: View {
             }
         }
         .background(IMColor.bg.ignoresSafeArea())
+        .confirmationDialog("Delete this conversation?",
+                            isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button(isGroup ? "Leave Conversation" : "Delete Conversation", role: .destructive) {
+                if let id = convo?.id { app.deleteWorldConversation(id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(isGroup
+                 ? "You'll stop receiving messages from this group."
+                 : "The conversation and its messages are removed from your My World.")
+        }
     }
 
     private var navBar: some View {
@@ -60,15 +89,21 @@ struct WorldContactView: View {
 
             Spacer()
 
-            Button { } label: {
-                Text("Edit")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(IMColor.label)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(Capsule().fill(IMColor.chrome))
+            if let handle {
+                Button {
+                    app.closeWorldContact()
+                    app.openUserProfile(handle: handle, name: displayName,
+                                        avatarURL: avatarURL, avatarGradient: gradient)
+                } label: {
+                    Text("Profile")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(IMColor.label)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(IMColor.chrome))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.top, 4)
@@ -76,44 +111,123 @@ struct WorldContactView: View {
 
     private var hero: some View {
         VStack(spacing: 10) {
-            UserAvatar(
-                size: 92,
-                gradient: gradient,
-                letter: String(displayName.prefix(1)),
-                imageURL: avatarURL
-            )
+            Group {
+                if isGroup {
+                    Circle()
+                        .fill(IMColor.chrome)
+                        .frame(width: 92, height: 92)
+                        .overlay(
+                            Image(systemName: "person.2.fill")
+                                .font(.system(size: 34))
+                                .foregroundStyle(IMColor.label.opacity(0.75))
+                        )
+                } else {
+                    UserAvatar(size: 92, gradient: gradient,
+                               letter: String(displayName.prefix(1)), imageURL: avatarURL)
+                }
+            }
+
             Text(displayName)
                 .font(.system(size: 28, weight: .bold))
                 .foregroundStyle(IMColor.label)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            if let user = contact?.username {
-                Text("@\(user)")
+
+            if isGroup {
+                Text("\(max(profile?.members.count ?? 0, 2)) people")
                     .font(.system(size: 15))
                     .foregroundStyle(IMColor.secondary)
+            } else if let handle {
+                Text("@\(handle)")
+                    .font(.system(size: 15))
+                    .foregroundStyle(IMColor.secondary)
+            }
+
+            if let bio = profile?.bio.nilIfBlank {
+                Text(bio)
+                    .font(.system(size: 14))
+                    .foregroundStyle(IMColor.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 34)
+                    .padding(.top, 2)
+            }
+
+            if let profile, profile.postCount > 0 || profile.followerCount > 0 {
+                HStack(spacing: 18) {
+                    publicStat(profile.postCount, "posts")
+                    publicStat(profile.followerCount, "followers")
+                }
+                .padding(.top, 2)
             }
         }
         .padding(.top, 4)
     }
 
+    private func publicStat(_ value: Int, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            Text(Self.compact(value))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(IMColor.label)
+            Text(label)
+                .font(.system(size: 14))
+                .foregroundStyle(IMColor.secondary)
+        }
+    }
+
+    // MARK: Quick actions
+
     private var quickActions: some View {
         HStack(spacing: 28) {
-            actionButton("phone.fill", "call")
-            actionButton("video.fill", "video")
-            actionButton("envelope.fill", "mail")
+            actionButton("phone.fill", "Call", enabled: phone != nil) {
+                open(scheme: "tel")
+            }
+            actionButton("video.fill", "FaceTime", enabled: phone != nil) {
+                open(scheme: "facetime")
+            }
+            actionButton(isMuted ? "bell.slash.fill" : "bell.fill",
+                         isMuted ? "Unmute" : "Mute", enabled: true) {
+                guard let id = convo?.id else { return }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                app.toggleWorldMute(id)
+            }
         }
         .padding(.top, 4)
     }
 
-    private func actionButton(_ icon: String, _ label: String) -> some View {
-        Button { } label: {
-            Image(systemName: icon)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(IMColor.label)
-                .frame(width: 56, height: 56)
-                .background(Circle().fill(IMColor.chrome))
+    private var isMuted: Bool {
+        guard let id = convo?.id else { return false }
+        return app.isWorldMuted(id)
+    }
+
+    /// Hands the number to the system dialer / FaceTime — the only real call
+    /// path there is, since My World has no calling backend of its own.
+    private func open(scheme: String) {
+        guard let phone else { return }
+        let digits = phone.filter { "+0123456789".contains($0) }
+        guard let url = URL(string: "\(scheme)://\(digits)"),
+              UIApplication.shared.canOpenURL(url) else {
+            app.showWorldNotice("This device can't place that call.")
+            return
+        }
+        UIApplication.shared.open(url)
+    }
+
+    private func actionButton(_ icon: String, _ label: String,
+                              enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(enabled ? IMColor.label : IMColor.secondary.opacity(0.5))
+                    .frame(width: 56, height: 56)
+                    .background(Circle().fill(IMColor.chrome))
+                Text(label)
+                    .font(.system(size: 12))
+                    .foregroundStyle(enabled ? IMColor.secondary : IMColor.secondary.opacity(0.5))
+            }
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
         .accessibilityLabel(label)
     }
 
@@ -148,7 +262,7 @@ struct WorldContactView: View {
         case .photos:
             photosGrid
         case .locations:
-            locationOnly
+            locationsSection
         case .backgrounds:
             backgroundsGrid
         case .links:
@@ -156,6 +270,260 @@ struct WorldContactView: View {
         case .documents:
             documentsSection
         }
+    }
+
+    // MARK: Info
+
+    private var infoSection: some View {
+        VStack(spacing: 12) {
+            if let phone {
+                phoneCard(phone)
+            }
+
+            if isGroup, let members = profile?.members, !members.isEmpty {
+                membersCard(members)
+            }
+
+            statsCard
+            settingsCard
+        }
+    }
+
+    private func phoneCard(_ phone: String) -> some View {
+        Button { open(scheme: "tel") } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("mobile")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(IMColor.secondary)
+                        .textCase(.uppercase)
+                    Text(phone)
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(IMColor.label)
+                }
+                Spacer()
+                Image(systemName: "phone.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(IMColor.blue)
+            }
+            .padding(16)
+            .background(cardShape)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+    }
+
+    private func membersCard(_ members: [WorldContactMember]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(members.enumerated()), id: \.element.id) { i, member in
+                HStack(spacing: 12) {
+                    UserAvatar(size: 38,
+                               gradient: SocialStore.gradient(for: member.handle ?? member.name),
+                               letter: String(member.name.prefix(1)),
+                               imageURL: member.avatarURL)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(member.name)
+                            .font(.system(size: 16))
+                            .foregroundStyle(IMColor.label)
+                        if let h = member.handle {
+                            Text("@\(h)")
+                                .font(.system(size: 12))
+                                .foregroundStyle(IMColor.secondary)
+                        }
+                    }
+                    Spacer()
+                    if !member.isYou, let h = member.handle {
+                        Button {
+                            app.closeWorldContact()
+                            app.openUserProfile(handle: h, name: member.name,
+                                                avatarURL: member.avatarURL)
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(IMColor.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+
+                if i < members.count - 1 { rowDivider }
+            }
+        }
+        .background(cardShape)
+        .padding(.horizontal, 16)
+    }
+
+    private var statsCard: some View {
+        let messages = (convo?.messages ?? []).filter { $0.kind != .timestamp && $0.kind != .system }
+        let photos = app.worldChatPhotos(for: convo).count
+        let voice = messages.filter { $0.kind == .audio }.count
+        return HStack(spacing: 0) {
+            stat("\(messages.count)", "messages")
+            statDivider
+            stat("\(photos)", "media")
+            statDivider
+            stat("\(voice)", "voice notes")
+        }
+        .padding(.vertical, 14)
+        .background(cardShape)
+        .padding(.horizontal, 16)
+    }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 3) {
+            Text(value)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(IMColor.label)
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(IMColor.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var statDivider: some View {
+        Rectangle().fill(IMColor.separator.opacity(0.5)).frame(width: 0.5, height: 28)
+    }
+
+    private var settingsCard: some View {
+        VStack(spacing: 0) {
+            Toggle(isOn: Binding(
+                get: { isMuted },
+                set: { _ in if let id = convo?.id { app.toggleWorldMute(id) } }
+            )) {
+                Label {
+                    Text("Mute notifications").font(.system(size: 16))
+                } icon: {
+                    Image(systemName: "bell.slash.fill").foregroundStyle(IMColor.blue)
+                }
+                .foregroundStyle(IMColor.label)
+            }
+            .tint(IMColor.blue)
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+
+            rowDivider
+
+            Toggle(isOn: Binding(
+                get: { convo?.pinned ?? false },
+                set: { _ in if let id = convo?.id { app.togglePinWorldConversation(id) } }
+            )) {
+                Label {
+                    Text("Pin to top").font(.system(size: 16))
+                } icon: {
+                    Image(systemName: "pin.fill").foregroundStyle(IMColor.blue)
+                }
+                .foregroundStyle(IMColor.label)
+            }
+            .tint(IMColor.blue)
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+
+            rowDivider
+
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) { tab = .backgrounds }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "paintpalette.fill")
+                        .foregroundStyle(IMColor.blue)
+                    Text("Chat wallpaper")
+                        .font(.system(size: 16))
+                        .foregroundStyle(IMColor.label)
+                    Spacer()
+                    Text((convo?.background ?? .none).title)
+                        .font(.system(size: 15))
+                        .foregroundStyle(IMColor.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(IMColor.secondary)
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            rowDivider
+
+            Button {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                confirmingDelete = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "trash.fill")
+                        .foregroundStyle(Color(red: 1, green: 0.27, blue: 0.23))
+                    Text(isGroup ? "Leave conversation" : "Delete conversation")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Color(red: 1, green: 0.27, blue: 0.23))
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .background(cardShape)
+        .padding(.horizontal, 16)
+    }
+
+    // MARK: Locations
+
+    private var locationsSection: some View {
+        let pins = app.worldChatLocations(for: convo)
+        return Group {
+            if pins.isEmpty {
+                emptyTab("Locations")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(pins) { pin in
+                        locationCard(pin)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+
+    private func locationCard(_ pin: WorldMessage) -> some View {
+        let coordinate = CLLocationCoordinate2D(latitude: pin.latitude ?? 0,
+                                                longitude: pin.longitude ?? 0)
+        return Button {
+            let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+            item.name = pin.text.nilIfBlank ?? "Shared Location"
+            item.openInMaps()
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                StaticLocationMap(coordinate: coordinate)
+                    .frame(height: 150)
+                HStack(spacing: 8) {
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(IMColor.blue)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pin.text.nilIfBlank ?? "Shared Location")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(IMColor.label)
+                            .lineLimit(1)
+                        Text(pin.fromUser ? "Shared by you" : "Shared with you")
+                            .font(.system(size: 12))
+                            .foregroundStyle(IMColor.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(IMColor.secondary)
+                }
+                .padding(14)
+            }
+            .background(cardShape)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: Backgrounds
@@ -213,25 +581,44 @@ struct WorldContactView: View {
     // MARK: Links
 
     private var linksSection: some View {
-        VStack(spacing: 12) {
-            linkCard(icon: "video.fill", tint: Color(red: 0.2, green: 0.78, blue: 0.35),
-                     title: "FaceTime", subtitle: "Link")
-            ForEach(sharedLinks, id: \.self) { url in
-                linkCard(icon: "link", tint: IMColor.blue, title: url, subtitle: "Shared link")
+        let links = sharedLinks
+        return Group {
+            if links.isEmpty {
+                emptyTab("Links")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(links, id: \.self) { url in
+                        Button {
+                            guard let target = Self.url(from: url) else { return }
+                            UIApplication.shared.open(target)
+                        } label: {
+                            linkCard(icon: "link", tint: IMColor.blue,
+                                     title: url, subtitle: "Shared link")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
     }
 
+    /// Links actually pasted into the thread, newest first, de-duplicated.
     private var sharedLinks: [String] {
-        (convo?.messages ?? []).flatMap { msg -> [String] in
+        var seen = Set<String>()
+        return (convo?.messages ?? []).reversed().flatMap { msg -> [String] in
             guard msg.kind == .text else { return [] }
             return msg.text
-                .split(separator: " ")
+                .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
                 .map(String.init)
                 .filter { $0.hasPrefix("http://") || $0.hasPrefix("https://") || $0.hasPrefix("www.") }
         }
+        .filter { seen.insert($0).inserted }
+    }
+
+    private static func url(from raw: String) -> URL? {
+        URL(string: raw.hasPrefix("www.") ? "https://\(raw)" : raw)
     }
 
     private func linkCard(icon: String, tint: Color, title: String, subtitle: String) -> some View {
@@ -252,7 +639,8 @@ struct WorldContactView: View {
             Spacer()
         }
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(IMColor.chrome))
+        .background(cardShape)
+        .contentShape(Rectangle())
     }
 
     // MARK: Documents
@@ -261,7 +649,7 @@ struct WorldContactView: View {
         let docs = (convo?.messages ?? []).filter { $0.kind == .file }
         return Group {
             if docs.isEmpty {
-                emptyTab("documents")
+                emptyTab("Documents")
             } else {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
                                     GridItem(.flexible(), spacing: 12)], spacing: 12) {
@@ -292,160 +680,47 @@ struct WorldContactView: View {
         }
     }
 
-    private var infoSection: some View {
-        VStack(spacing: 12) {
-            locationCard
-            if app.worldSharingLocation {
-                Button {
-                    withAnimation { app.worldSharingLocation = false }
-                } label: {
-                    Text("Stop Sharing My Location")
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(Color(red: 1, green: 0.27, blue: 0.23))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(IMColor.chrome)
-                        )
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 16)
-            }
-
-            if let phone = contact?.phone {
-                phoneCard(phone)
-            }
-
-            conversationLineCard
-        }
-    }
-
-    private var locationCard: some View {
-        let lat = contact?.latitude ?? 34.0531
-        let lon = contact?.longitude ?? -6.7985
-        let region = MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-            span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)
-        )
-
-        return ZStack(alignment: .topLeading) {
-            Map(initialPosition: .region(region)) {
-                Annotation("", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
-                    UserAvatar(
-                        size: 28,
-                        gradient: gradient,
-                        letter: String(displayName.prefix(1)),
-                        imageURL: avatarURL
-                    )
-                    .overlay(Circle().strokeBorder(.white, lineWidth: 2))
-                    .shadow(radius: 4)
-                }
-            }
-            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
-            .frame(height: 200)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .disabled(true)
-
-            HStack(spacing: 6) {
-                Text("🚗")
-                Text("\(contact?.distanceLabel ?? "23 km") · \(contact?.etaLabel ?? "36 min")")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.white)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(IMColor.blue))
-            .padding(12)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(contact?.city ?? "Nearby")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(IMColor.label)
-                Text("Live")
-                    .font(.system(size: 13))
-                    .foregroundStyle(IMColor.secondary)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        }
-        .padding(.horizontal, 16)
-    }
-
-    private func phoneCard(_ phone: String) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("mobile")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(IMColor.secondary)
-                    .textCase(.uppercase)
-                Text(phone)
-                    .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(IMColor.label)
-            }
-            Spacer()
-            Image(systemName: "phone.fill")
-                .font(.system(size: 18))
-                .foregroundStyle(IMColor.label)
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(IMColor.chrome)
-        )
-        .padding(.horizontal, 16)
-    }
-
-    private var conversationLineCard: some View {
-        HStack {
-            Text("Conversation Line")
-                .font(.system(size: 16))
-                .foregroundStyle(IMColor.label)
-            Spacer()
-            HStack(spacing: 6) {
-                Text("P")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(IMColor.label)
-                    .frame(width: 18, height: 18)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(IMColor.blue))
-                Text("Personal")
-                    .font(.system(size: 16))
-                    .foregroundStyle(IMColor.label)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(IMColor.secondary)
-            }
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(IMColor.chrome)
-        )
-        .padding(.horizontal, 16)
-    }
-
-    private var locationOnly: some View {
-        locationCard
-    }
+    // MARK: Photos
 
     private var photosGrid: some View {
-        let chatPhotos = app.worldChatPhotos(for: convo)
+        let photos = app.worldChatPhotos(for: convo)
         return Group {
-            if chatPhotos.isEmpty {
+            if photos.isEmpty {
                 emptyTab("Photos")
             } else {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 3),
-                                   GridItem(.flexible(), spacing: 3),
-                                   GridItem(.flexible(), spacing: 3)], spacing: 3) {
-                    ForEach(Array(chatPhotos.enumerated()), id: \.offset) { _, data in
-                        MediaImage(data: data, cornerRadius: 0)
-                            .frame(minHeight: 110)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 3),
+                          spacing: 3) {
+                    ForEach(photos) { photo in
+                        MediaImage(url: photo.url, data: photo.data, cornerRadius: 0)
+                            .frame(height: 118)
+                            .overlay(alignment: .bottomTrailing) {
+                                if photo.isVideo {
+                                    Image(systemName: "play.circle.fill")
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, .black.opacity(0.45))
+                                        .font(.system(size: 18))
+                                        .padding(5)
+                                }
+                            }
                             .clipped()
                     }
                 }
                 .padding(.horizontal, 16)
             }
         }
+    }
+
+    // MARK: Shared bits
+
+    private var cardShape: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous).fill(IMColor.chrome)
+    }
+
+    private var rowDivider: some View {
+        Rectangle()
+            .fill(IMColor.separator.opacity(0.5))
+            .frame(height: 0.5)
+            .padding(.leading, 16)
     }
 
     private func emptyTab(_ name: String) -> some View {
@@ -459,5 +734,13 @@ struct WorldContactView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 48)
+    }
+
+    private static func compact(_ value: Int) -> String {
+        switch value {
+        case ..<1_000: return "\(value)"
+        case ..<1_000_000: return String(format: "%.1fK", Double(value) / 1_000)
+        default: return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
     }
 }

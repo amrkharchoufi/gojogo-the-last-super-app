@@ -242,15 +242,26 @@ class MessagingRepository {
             boolean isSender = uid.equals(msg.senderId());
             Update.Builder u = Update.builder().tableName(table)
                 .key(Map.of("pk", s("USER#" + uid), "sk", s("CONV#" + msg.conversationId())));
+            // `convId` and `gsi1pk` are re-stated on every bump, not just written
+            // at create time: an update on a membership row that was deleted (the
+            // participant left) recreates it, and a row without them is unreadable
+            // and invisible to the list query — the thread would silently swallow
+            // messages instead of coming back.
             if (isSender) {
-                u.updateExpression("SET lastActivityAt = :t, gsi1sk = :t, preview = :p")
+                u.updateExpression("SET lastActivityAt = :t, gsi1sk = :t, preview = :p, "
+                        + "convId = :cid, gsi1pk = :gpk")
                     .expressionAttributeValues(Map.of(
-                        ":t", s(msg.createdAt().toString()), ":p", s(preview)));
+                        ":t", s(msg.createdAt().toString()), ":p", s(preview),
+                        ":cid", s(msg.conversationId().toString()),
+                        ":gpk", s("USERCONV#" + uid)));
             } else {
                 u.updateExpression("SET lastActivityAt = :t, gsi1sk = :t, preview = :p, "
+                        + "convId = :cid, gsi1pk = :gpk, "
                         + "unread = if_not_exists(unread, :zero) + :one")
                     .expressionAttributeValues(Map.of(
                         ":t", s(msg.createdAt().toString()), ":p", s(preview),
+                        ":cid", s(msg.conversationId().toString()),
+                        ":gpk", s("USERCONV#" + uid),
                         ":zero", n(0), ":one", n(1)));
             }
             writes.add(TransactWriteItem.builder().update(u.build()).build());
@@ -405,6 +416,16 @@ class MessagingRepository {
     void deleteMembership(UUID userId, UUID convId) {
         db.deleteItem(r -> r.tableName(table)
             .key(Map.of("pk", s("USER#" + userId), "sk", s("CONV#" + convId))));
+    }
+
+    /** Re-creates the membership row of a participant who left, so the thread is
+     *  back in their list (read from the start, since their unread was dropped). */
+    Membership rejoin(UUID userId, ConversationMeta meta) {
+        Map<String, AttributeValue> item = membershipItem(
+            userId, meta.id(), 0, meta.lastActivityAt(), meta.preview(), meta.title(),
+            !"DIRECT".equals(meta.type()), false, false, null);
+        db.putItem(r -> r.tableName(table).item(item));
+        return readMembership(item);
     }
 
     // ---- connection registry (written by the WS Lambdas) ------------------

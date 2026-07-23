@@ -7,9 +7,15 @@ final class AudioRecorderController: NSObject, ObservableObject, AVAudioRecorder
     @Published var isRecording = false
     @Published var elapsed: TimeInterval = 0
     @Published var level: CGFloat = 0
+    /// Rolling window of recent levels, oldest first — drives the live meter in
+    /// the chat composer's hold-to-record bar.
+    @Published var levels: [CGFloat] = []
     @Published var finishedURL: URL?
     @Published var permissionDenied = false
     @Published var errorMessage: String?
+
+    /// How many samples the rolling meter keeps (~2.7s at the 0.08s tick).
+    private let levelWindow = 34
 
     private var recorder: AVAudioRecorder?
     private var timer: Timer?
@@ -41,10 +47,26 @@ final class AudioRecorderController: NSObject, ObservableObject, AVAudioRecorder
         }
     }
 
+    /// Permission-then-record in one call, for hold-to-talk where there's no
+    /// separate "prepare" moment. A denial leaves `permissionDenied` set so the
+    /// caller can explain rather than record silence.
+    func startAfterPermission() {
+        Task { @MainActor in
+            guard await AVAudioApplication.requestRecordPermission() else {
+                permissionDenied = true
+                return
+            }
+            permissionDenied = false
+            configureSession()
+            start()
+        }
+    }
+
     func start() {
         finishedURL = nil
         elapsed = 0
         level = 0
+        levels = []
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("gojogo-\(UUID().uuidString).m4a")
         let settings: [String: Any] = [
@@ -86,6 +108,7 @@ final class AudioRecorderController: NSObject, ObservableObject, AVAudioRecorder
         isRecording = false
         elapsed = 0
         level = 0
+        levels = []
     }
 
     private func startTimers() {
@@ -102,6 +125,8 @@ final class AudioRecorderController: NSObject, ObservableObject, AVAudioRecorder
                 let power = r.averagePower(forChannel: 0) // -160...0
                 let normalized = max(0, min(1, CGFloat((power + 50) / 50)))
                 self.level = normalized
+                self.levels.append(normalized)
+                if self.levels.count > self.levelWindow { self.levels.removeFirst() }
             }
         }
     }

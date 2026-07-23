@@ -202,6 +202,10 @@ struct RegisterPushBody: Encodable {
     var platform: String
 }
 
+struct UnregisterPushBody: Encodable {
+    var token: String
+}
+
 // MARK: - Backend timestamps
 
 enum BackendDate {

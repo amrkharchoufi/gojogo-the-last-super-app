@@ -17,14 +17,52 @@ extension AppState {
         WorldSocket.shared.onEvent = { [weak self] event in
             self?.handleWorldSocketEvent(event)
         }
+        WorldSocket.shared.onReconnect = { [weak self] in
+            // Anything fanned out while the socket was down never arrived —
+            // pull the list (and the open thread) back into sync.
+            self?.resyncWorld()
+        }
+        WorldSocket.shared.onStatusChange = { [weak self] connected in
+            withAnimation(.ggSnappy) { self?.worldRealtimeConnected = connected }
+        }
         await loadWorldProfile()
         do {
             let live = try await MessagingStore.shared.fetchConversations()
             mergeLiveConversations(live)
             WorldSocket.shared.connect()
+            worldRealtimeConnected = WorldSocket.shared.isConnected
         } catch {
             #if DEBUG
             print("Messaging connect failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Re-dials the socket and refreshes what's on screen. Called when the app
+    /// returns to the foreground and after a dropped connection — API Gateway
+    /// closes idle sockets, so a backgrounded app always comes back stale.
+    func worldEnterForeground() {
+        guard backendConnected, worldSetupComplete else { return }
+        WorldSocket.shared.reconnectNow()
+        resyncWorld()
+    }
+
+    /// Refreshes the conversation list, plus the messages of the open thread.
+    func resyncWorld() {
+        Task {
+            await refreshWorldConversations()
+            if let id = selectedWorldConversationID { await reloadLiveConversation(id) }
+        }
+    }
+
+    func refreshWorldConversations() async {
+        guard backendConnected else { return }
+        do {
+            let live = try await MessagingStore.shared.fetchConversations()
+            mergeLiveConversations(live)
+        } catch {
+            #if DEBUG
+            print("Conversation refresh failed: \(error.localizedDescription)")
             #endif
         }
     }
@@ -177,7 +215,7 @@ extension AppState {
         let title = names.prefix(3).joined(separator: ", ")
         do {
             let convo = try await MessagingStore.shared.createConversation(
-                participantIds: ids, title: title)
+                participantIds: ids, title: title, background: worldDefaultBackground)
             if worldConversations.firstIndex(where: { $0.id == convo.id }) == nil {
                 worldConversations.insert(convo, at: 0)
             }
@@ -195,7 +233,8 @@ extension AppState {
               user.profileId != SocialStore.shared.myProfileId else { return false }
         do {
             let convo = try await MessagingStore.shared.createConversation(
-                participantIds: [user.profileId], title: user.displayName)
+                participantIds: [user.profileId], title: user.displayName,
+                background: worldDefaultBackground)
             if worldConversations.firstIndex(where: { $0.id == convo.id }) == nil {
                 worldConversations.insert(convo, at: 0)
             }
@@ -208,40 +247,91 @@ extension AppState {
 
     /// Live threads become the source of truth for the Messages list; SampleData
     /// threads (no server id) stay below so the demo/composer still works.
+    ///
+    /// Merges *field by field* rather than replacing the array: a refresh that
+    /// swapped in the server's row wholesale would drop the loaded `messages`
+    /// of whatever thread is open, blanking the chat mid-conversation.
     private func mergeLiveConversations(_ live: [WorldConversation]) {
         guard !live.isEmpty else { return }
+        var merged: [WorldConversation] = []
+        merged.reserveCapacity(worldConversations.count + live.count)
+
+        for var incoming in live {
+            if let existing = worldConversations.first(where: { $0.id == incoming.id }) {
+                incoming.messages = existing.messages
+                incoming.contactID = existing.contactID
+                // A local send that hasn't been echoed yet is newer than the row.
+                if existing.lastActivityAt > incoming.lastActivityAt {
+                    incoming.lastActivityAt = existing.lastActivityAt
+                    incoming.preview = existing.preview
+                }
+            }
+            merged.append(incoming)
+        }
         let liveIds = Set(live.map(\.id))
-        var merged = live
         merged.append(contentsOf: worldConversations.filter { !liveIds.contains($0.id) })
-        withAnimation(.easeOut(duration: 0.25)) { worldConversations = merged }
+
+        withAnimation(.easeOut(duration: 0.22)) { worldConversations = merged }
     }
 
     /// Fetches messages for a live thread the first time it's opened, then marks
     /// it read on the server. No-op for SampleData threads.
     func loadLiveConversationIfNeeded(_ id: UUID) {
         guard MessagingStore.shared.isLive(id) else { return }
-        Task {
-            do {
-                let page = try await MessagingStore.shared.fetchMessages(id)
-                if let i = worldConversations.firstIndex(where: { $0.id == id }) {
-                    // Preserve any optimistic messages not yet echoed by the server.
-                    let serverIds = Set(page.messages.map(\.id))
-                    let pendingLocal = worldConversations[i].messages.filter {
-                        !serverIds.contains($0.id) && $0.fromUser && $0.kind != .timestamp
-                    }
-                    worldConversations[i].messages = page.messages + pendingLocal
-                }
-                if let last = worldConversations.first(where: { $0.id == id })?.messages.last(where: {
-                    $0.kind != .timestamp && $0.kind != .system
-                }) {
-                    try? await MessagingStore.shared.markRead(id, lastMessageId: last.id)
-                }
-            } catch {
-                #if DEBUG
-                print("Live message load failed: \(error.localizedDescription)")
-                #endif
+        Task { await reloadLiveConversation(id) }
+    }
+
+    /// Pulls the newest page for a thread and reconciles it with what's on screen,
+    /// keeping optimistic bubbles and local media (recorded audio, staged photos)
+    /// that the server copy can't carry.
+    func reloadLiveConversation(_ id: UUID) async {
+        guard MessagingStore.shared.isLive(id) else { return }
+        do {
+            let page = try await MessagingStore.shared.fetchMessages(id)
+            guard let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
+            let localByID = Dictionary(
+                worldConversations[i].messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            let serverIds = Set(page.messages.map(\.id))
+            let reconciled = page.messages.map { server -> WorldMessage in
+                guard let local = localByID[server.id] else { return server }
+                return merging(server: server, local: local)
             }
+            // Optimistic sends the server hasn't echoed back yet stay at the end.
+            let pendingLocal = worldConversations[i].messages.filter {
+                !serverIds.contains($0.id) && $0.fromUser && $0.kind != .timestamp
+            }
+            let next = reconciled + pendingLocal
+            if !messagesEqual(worldConversations[i].messages, next) {
+                worldConversations[i].messages = next
+            }
+            if let last = next.last(where: { $0.kind != .timestamp && $0.kind != .system }) {
+                try? await MessagingStore.shared.markRead(id, lastMessageId: last.id)
+            }
+        } catch {
+            #if DEBUG
+            print("Live message load failed: \(error.localizedDescription)")
+            #endif
         }
+    }
+
+    /// Server copy wins on everything the server owns; on-device media the wire
+    /// can't carry (staged image bytes, the local recording) is carried over.
+    private func merging(server: WorldMessage, local: WorldMessage) -> WorldMessage {
+        var merged = server
+        if merged.imageData == nil { merged.imageData = local.imageData }
+        if merged.localAudioURL == nil { merged.localAudioURL = local.localAudioURL }
+        if merged.carouselItems.isEmpty { merged.carouselItems = local.carouselItems }
+        return merged
+    }
+
+    /// Cheap identity check so a poll that changed nothing doesn't rebuild the list.
+    private func messagesEqual(_ lhs: [WorldMessage], _ rhs: [WorldMessage]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (a, b) in zip(lhs, rhs) {
+            if a.id != b.id || a.text != b.text || a.readLabel != b.readLabel
+                || a.reactions.count != b.reactions.count || a.poll != b.poll { return false }
+        }
+        return true
     }
 
     // MARK: Outbound (called from deliverWorldMessage for live threads)
@@ -263,6 +353,27 @@ extension AppState {
                     if let data = msg.imageData, let url = try await uploadWorldImage(data) {
                         mediaItems = [WorldMediaItemDTO(imageUrl: url, videoUrl: nil,
                                                         isVideo: true, durationLabel: msg.durationLabel)]
+                    }
+                case .sticker:
+                    // PNG keeps the alpha edge that makes a sticker a sticker.
+                    if let data = msg.imageData {
+                        let url = try await APIClient.shared.uploadMedia(data, contentType: "image/png")
+                        mediaItems = [WorldMediaItemDTO(imageUrl: url, videoUrl: nil,
+                                                        isVideo: false, durationLabel: nil)]
+                    }
+                case .audio:
+                    // The recorded m4a rides in `videoUrl` — the media item is the
+                    // wire's only file slot, and `isVideo: false` marks it audio.
+                    if let local = msg.localAudioURL, let url = try await uploadWorldAudio(local) {
+                        mediaItems = [WorldMediaItemDTO(imageUrl: nil, videoUrl: url,
+                                                        isVideo: false,
+                                                        durationLabel: msg.durationLabel)]
+                        adoptUploadedAudio(url, for: msg.id, in: conversationId)
+                    }
+                case .location:
+                    if let lat = msg.latitude, let lon = msg.longitude {
+                        mediaItems = [WorldLocationPayload(latitude: lat, longitude: lon,
+                                                           name: msg.text).mediaItem]
                     }
                 case .carousel:
                     var items: [WorldMediaItemDTO] = []
@@ -301,6 +412,29 @@ extension AppState {
         return f.string(from: date)
     }
 
+    /// Uploads a recorded voice note. Returns nil (rather than throwing) when the
+    /// backend rejects the type, so the rest of the message still sends and the
+    /// sender keeps local playback.
+    private func uploadWorldAudio(_ url: URL) async throws -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        do {
+            return try await APIClient.shared.uploadMedia(data, contentType: "audio/m4a")
+        } catch {
+            #if DEBUG
+            print("Voice note upload failed: \(error.localizedDescription)")
+            #endif
+            return nil
+        }
+    }
+
+    /// Stamps the CDN URL onto the optimistic bubble so it survives a reload.
+    private func adoptUploadedAudio(_ url: String, for messageID: UUID, in conversationId: UUID) {
+        guard let i = worldConversations.firstIndex(where: { $0.id == conversationId }),
+              let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
+        else { return }
+        worldConversations[i].messages[j].audioURL = url
+    }
+
     private func uploadWorldImage(_ data: Data) async throws -> String? {
         let type = APIClient.imageContentType(for: data)
         let payload: Data
@@ -316,7 +450,8 @@ extension AppState {
     /// Sends a typing ping on a live thread, throttled to once per ~3s. Called
     /// from the composer's onChange; SampleData threads ignore it.
     func worldTypingChanged() {
-        guard let id = selectedWorldConversationID, MessagingStore.shared.isLive(id),
+        guard worldTypingIndicatorsEnabled,
+              let id = selectedWorldConversationID, MessagingStore.shared.isLive(id),
               !worldDraft.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         let now = Date()
         if let last = worldLastTypingSentAt, now.timeIntervalSince(last) < 3 { return }
@@ -355,7 +490,7 @@ extension AppState {
               view.id != SocialStore.shared.myProfileId else { return false }
         do {
             let convo = try await MessagingStore.shared.createConversation(
-                participantIds: [view.id], title: nil)
+                participantIds: [view.id], title: nil, background: worldDefaultBackground)
             if let existing = worldConversations.firstIndex(where: { $0.id == convo.id }) {
                 openWorldConversation(worldConversations[existing].id)
             } else {
@@ -368,6 +503,113 @@ extension AppState {
             print("Start live conversation failed: \(error.localizedDescription)")
             #endif
             return false
+        }
+    }
+
+    // MARK: My World settings
+
+    /// Loads the settings screen's editable copy of the World profile.
+    func openWorldSettings() {
+        worldSettingsError = nil
+        worldSettingsSaved = false
+        worldSettingsAvatarData = nil
+        let opened = worldSetupName.isEmpty ? user.name : worldSetupName
+        worldSettingsName = opened
+        worldSheet = .settings
+        Task {
+            await loadWorldProfile()
+            // Adopt whatever the server says, unless the field was edited while
+            // the request was in flight — otherwise the card opens looking dirty.
+            if worldSettingsName == opened, !worldSetupName.isEmpty {
+                worldSettingsName = worldSetupName
+            }
+        }
+    }
+
+    /// Saves the World display name / photo (`PUT /v1/world/me`), uploading a
+    /// newly picked image first. Live conversations show this to everyone else,
+    /// so a failure has to surface rather than silently keep the old name.
+    func saveWorldSettingsProfile() {
+        guard !worldSettingsBusy else { return }
+        let name = worldSettingsName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name.count >= 2 else {
+            worldSettingsError = "Your name needs at least 2 characters."
+            return
+        }
+        worldSettingsBusy = true
+        worldSettingsError = nil
+        worldSettingsSaved = false
+        Task {
+            defer { worldSettingsBusy = false }
+            do {
+                var avatarUrl = worldSetupAvatarURL
+                if let data = worldSettingsAvatarData {
+                    avatarUrl = try await uploadWorldImage(data)
+                }
+                let me = try await MessagingStore.shared.worldUpdateProfile(
+                    displayName: name, avatarUrl: avatarUrl)
+                worldSetupName = me.displayName ?? name
+                worldSetupAvatarURL = me.avatarUrl
+                worldSetupComplete = me.setupComplete
+                worldSettingsAvatarData = nil
+                withAnimation(.ggSnappy) { worldSettingsSaved = true }
+            } catch {
+                worldSettingsError = (error as? APIClient.APIError)?.errorDescription
+                    ?? "Couldn't save. Try again."
+            }
+        }
+    }
+
+    /// Per-thread mute — device-local, since push fan-out has no per-thread flag.
+    func toggleWorldMute(_ id: UUID) {
+        if worldMutedConversations.contains(id) {
+            worldMutedConversations.remove(id)
+        } else {
+            worldMutedConversations.insert(id)
+        }
+        WorldPreference.mutedConversations = worldMutedConversations
+    }
+
+    func isWorldMuted(_ id: UUID) -> Bool { worldMutedConversations.contains(id) }
+
+    // MARK: Contact page
+
+    /// Assembles the other side of a thread: the live participant record, their
+    /// public GojoGo profile when they have a handle, and the group roster.
+    func loadWorldContactProfile(for id: UUID) {
+        guard let convo = worldConversations.first(where: { $0.id == id }) else { return }
+        let contact = worldContacts.first { $0.id == convo.contactID }
+        let participants = MessagingStore.shared.participants(in: id)
+        let other = MessagingStore.shared.otherParticipant(in: id)
+        let mine = SocialStore.shared.myProfileId
+
+        var profile = WorldContactProfile(
+            conversationID: id,
+            name: other?.displayName ?? contact?.name ?? convo.title,
+            handle: other?.handle ?? contact?.username.nilIfBlank,
+            avatarURL: other?.avatarUrl ?? contact?.avatarURL ?? convo.avatarURL,
+            phone: other.flatMap { MessagingStore.shared.phone(of: $0.id) }
+                ?? contact?.phone.nilIfBlank,
+            isGroup: convo.isGroup)
+        profile.members = participants.map { p in
+            WorldContactMember(id: p.id,
+                               name: p.id == mine ? "You"
+                                   : (p.displayName ?? p.handle.map { "@\($0)" } ?? "Member"),
+                               handle: p.handle,
+                               avatarURL: p.avatarUrl,
+                               isYou: p.id == mine)
+        }
+        worldContactProfile = profile
+
+        // Public profile (bio, counts) is a second, optional hop.
+        guard let handle = profile.handle, backendConnected else { return }
+        Task {
+            guard let view = try? await ProfileStore.shared.view(handle: handle),
+                  worldContactProfile?.conversationID == id else { return }
+            worldContactProfile?.bio = view.bio
+            worldContactProfile?.postCount = view.postCount
+            worldContactProfile?.followerCount = view.followerCount
+            if worldContactProfile?.avatarURL == nil { worldContactProfile?.avatarURL = view.avatarUrl }
         }
     }
 
@@ -395,9 +637,7 @@ extension AppState {
     private func applyIncomingMessage(_ dto: MessageDTO) {
         guard let i = worldConversations.firstIndex(where: { $0.id == dto.conversationId }) else {
             // First message of a thread we don't have yet — refresh the list.
-            Task { if let live = try? await MessagingStore.shared.fetchConversations() {
-                mergeLiveConversations(live)
-            } }
+            Task { await refreshWorldConversations() }
             return
         }
         let mapped = MessagingStore.shared.map(dto)
@@ -405,8 +645,11 @@ extension AppState {
         withAnimation(.spring(response: 0.42, dampingFraction: 0.7)) {
             if mine, let clientId = dto.clientId,
                let j = worldConversations[i].messages.firstIndex(where: { $0.id == clientId }) {
-                // Echo of our own optimistic bubble — adopt the server id.
-                worldConversations[i].messages[j] = mapped
+                // Echo of our own optimistic bubble — adopt the server id, but keep
+                // the on-device media (staged photo bytes, the local recording) so
+                // the bubble doesn't blink back to a network load.
+                worldConversations[i].messages[j] = merging(
+                    server: mapped, local: worldConversations[i].messages[j])
             } else if !worldConversations[i].messages.contains(where: { $0.id == mapped.id }) {
                 worldConversations[i].messages.append(mapped)
                 worldConversations[i].preview = mine ? "You: \(mapped.snippetText)" : mapped.snippetText
@@ -463,6 +706,37 @@ extension AppState {
         }
     }
 
+    /// Removes the audio cache, map thumbnails and sticker recents.
+    /// Returns how many bytes were freed.
+    @discardableResult
+    func clearWorldMediaCache() -> Int64 {
+        let fm = FileManager.default
+        let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        var freed: Int64 = 0
+        for folder in ["world-audio", "world-stickers"] {
+            let dir = caches.appendingPathComponent(folder, isDirectory: true)
+            freed += Self.directorySize(dir)
+            try? fm.removeItem(at: dir)
+        }
+        StickerLibrary.shared.reload()
+        return freed
+    }
+
+    var worldMediaCacheSize: Int64 {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return ["world-audio", "world-stickers"]
+            .map { Self.directorySize(caches.appendingPathComponent($0, isDirectory: true)) }
+            .reduce(0, +)
+    }
+
+    private static func directorySize(_ dir: URL) -> Int64 {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return files.reduce(0) { total, url in
+            total + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+    }
+
     private func wireKind(_ kind: WorldMessageKind) -> String {
         switch kind {
         case .text: return "text"
@@ -471,6 +745,7 @@ extension AppState {
         case .photo: return "photo"
         case .video: return "video"
         case .carousel: return "carousel"
+        case .sticker: return "sticker"
         case .audio: return "audio"
         case .location: return "location"
         case .poll: return "poll"
