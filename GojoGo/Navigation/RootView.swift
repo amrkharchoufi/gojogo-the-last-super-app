@@ -12,7 +12,13 @@ struct MainAppView: View {
         ZStack(alignment: .bottom) {
             Group {
                 if app.navMode == .myWorld {
-                    MyWorldView()
+                    // First run in My World: WhatsApp-style setup (phone + World
+                    // profile) before the messages list — design stays GojoGo.
+                    if app.needsWorldSetup {
+                        WorldSetupView()
+                    } else {
+                        MyWorldView()
+                    }
                 } else {
                     switch app.activeTab {
                     case .home:      HomeView()

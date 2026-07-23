@@ -1,5 +1,6 @@
 package com.gojogo.social.internal;
 
+import com.gojogo.media.MediaApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -24,13 +25,15 @@ class StoryService {
     private final StoryViewRepository views;
     private final FollowRepository follows;
     private final ProfileApi profiles;
+    private final MediaApi media;
 
     StoryService(StoryFrameRepository frames, StoryViewRepository views,
-                 FollowRepository follows, ProfileApi profiles) {
+                 FollowRepository follows, ProfileApi profiles, MediaApi media) {
         this.frames = frames;
         this.views = views;
         this.follows = follows;
         this.profiles = profiles;
+        this.media = media;
     }
 
     @Transactional
@@ -40,6 +43,7 @@ class StoryService {
             StoryFrame frame = frames.save(new StoryFrame(me, url));
             created.add(new StoryFrameDto(frame.getId(), frame.getImageUrl(), false, frame.getCreatedAt()));
         }
+        media.markReferenced(frameImageUrls);
         return created;
     }
 

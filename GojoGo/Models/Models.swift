@@ -679,10 +679,14 @@ struct WorldCarouselItem: Identifiable, Equatable {
     var imageData: Data
     var isVideo: Bool
     var durationLabel: String?
+    /// Remote URL for live (backend) messages; local `imageData` wins when set.
+    var imageURL: String?
 
-    init(id: UUID = UUID(), imageData: Data, isVideo: Bool = false, durationLabel: String? = nil) {
+    init(id: UUID = UUID(), imageData: Data, isVideo: Bool = false,
+         durationLabel: String? = nil, imageURL: String? = nil) {
         self.id = id; self.imageData = imageData
         self.isVideo = isVideo; self.durationLabel = durationLabel
+        self.imageURL = imageURL
     }
 }
 
@@ -708,6 +712,8 @@ struct WorldMessage: Identifiable {
     var fileMeta: String?
     var readLabel: String?
     var imageData: Data?
+    /// Remote URL for live (backend) photo/video messages; `imageData` wins when set.
+    var imageURL: String?
     var durationLabel: String?
     var senderName: String?
     var carouselItems: [WorldCarouselItem]
@@ -722,13 +728,14 @@ struct WorldMessage: Identifiable {
 
     init(id: UUID = UUID(), kind: WorldMessageKind = .text, text: String,
          fromUser: Bool = false, fileName: String? = nil, fileMeta: String? = nil,
-         readLabel: String? = nil, imageData: Data? = nil, durationLabel: String? = nil,
+         readLabel: String? = nil, imageData: Data? = nil, imageURL: String? = nil,
+         durationLabel: String? = nil,
          senderName: String? = nil, carouselItems: [WorldCarouselItem] = [],
          reactions: [WorldReaction] = [], replyTo: WorldReplySnippet? = nil,
          poll: WorldPoll? = nil, scheduledLabel: String? = nil) {
         self.id = id; self.kind = kind; self.text = text; self.fromUser = fromUser
         self.fileName = fileName; self.fileMeta = fileMeta; self.readLabel = readLabel
-        self.imageData = imageData; self.durationLabel = durationLabel
+        self.imageData = imageData; self.imageURL = imageURL; self.durationLabel = durationLabel
         self.senderName = senderName; self.carouselItems = carouselItems
         self.reactions = reactions; self.replyTo = replyTo
         self.poll = poll; self.scheduledLabel = scheduledLabel
@@ -821,6 +828,17 @@ struct WorldConversation: Identifiable {
         self.messages = messages; self.filterBadge = filterBadge
         self.lastActivityAt = lastActivityAt; self.background = background
     }
+}
+
+/// Steps of the WhatsApp-style My World first-run setup (own phone-verified
+/// identity, separate from the app/social account). Design stays GojoGo.
+enum WorldSetupStep: Int, Comparable {
+    case intro       // onboarding pages presenting My World
+    case phone       // enter phone number
+    case code        // 6-digit verification code
+    case profile     // World display name + photo
+
+    static func < (a: WorldSetupStep, b: WorldSetupStep) -> Bool { a.rawValue < b.rawValue }
 }
 
 /// Modal sheet slot for the My World list (non-immersive). Poll & Send-Later are

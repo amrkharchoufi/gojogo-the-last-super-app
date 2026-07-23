@@ -76,6 +76,42 @@ struct CognitoAuthClient {
         return try tokens(from: response)
     }
 
+    /// Exchanges a Hosted-UI authorization code for tokens (PKCE, public client).
+    /// Used by the Google sign-in flow after ASWebAuthenticationSession returns.
+    func exchangeAuthorizationCode(_ code: String, codeVerifier: String,
+                                   redirectURI: String) async throws -> Tokens {
+        var comps = URLComponents()
+        comps.queryItems = [
+            URLQueryItem(name: "grant_type", value: "authorization_code"),
+            URLQueryItem(name: "client_id", value: BackendConfig.cognitoClientId),
+            URLQueryItem(name: "code", value: code),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "code_verifier", value: codeVerifier),
+        ]
+
+        var request = URLRequest(url: BackendConfig.hostedUIBaseURL.appendingPathComponent("oauth2/token"))
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = comps.percentEncodedQuery?.data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        guard let http = response as? HTTPURLResponse else { throw AuthError.malformedResponse }
+        if http.statusCode != 200 {
+            let type = (json["error"] as? String) ?? "TokenExchangeError"
+            throw AuthError.cognito(type: type, message: (json["error_description"] as? String) ?? "")
+        }
+        // The /oauth2/token endpoint returns snake_case fields.
+        guard let idToken = json["id_token"] as? String,
+              let accessToken = json["access_token"] as? String
+        else { throw AuthError.malformedResponse }
+        return Tokens(
+            idToken: idToken,
+            accessToken: accessToken,
+            refreshToken: json["refresh_token"] as? String,
+            expiresIn: json["expires_in"] as? Int ?? 3600)
+    }
+
     func refresh(refreshToken: String) async throws -> Tokens {
         let response = try await call("InitiateAuth", body: [
             "ClientId": BackendConfig.cognitoClientId,

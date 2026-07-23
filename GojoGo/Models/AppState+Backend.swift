@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import UserNotifications
 
 enum EmailAuthStep {
     case credentials, code
@@ -24,6 +26,9 @@ extension AppState {
             backendConnected = true
             await refreshSocial()
             await refreshOwnCounts()
+            await connectMessaging()
+            await refreshNotifications()
+            enablePushNotifications()
             schedulePersist()
         } catch {
             // Offline or cold backend — keep cached UI; next launch retries.
@@ -94,6 +99,55 @@ extension AppState {
             } catch {
                 #if DEBUG
                 print("Feed page load failed: \(error.localizedDescription)")
+                #endif
+            }
+        }
+    }
+
+    /// Requests notification permission and registers for APNs. The device
+    /// token is sent to the backend once it arrives (see PushRegistrar); an
+    /// incoming/tapped push refreshes the activity feed.
+    func enablePushNotifications() {
+        PushRegistrar.shared.onPushReceived = { [weak self] in
+            Task { @MainActor in await self?.refreshNotifications() }
+        }
+        PushRegistrar.shared.markAuthenticated()
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
+            guard granted else { return }
+            Task { @MainActor in UIApplication.shared.registerForRemoteNotifications() }
+        }
+    }
+
+    /// Replaces the activity feed with live notifications (follows / likes /
+    /// comments). Falls back to whatever's cached on failure.
+    func refreshNotifications() async {
+        guard backendConnected else { return }
+        do {
+            let page = try await NotificationStore.shared.fetch()
+            withAnimation(.easeOut(duration: 0.25)) { notifications = page.items }
+        } catch {
+            #if DEBUG
+            print("Notifications refresh failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Uploads a new profile photo and saves it to the backend + local user.
+    func syncProfileAvatar(_ data: Data) {
+        guard backendConnected else { return }
+        Task {
+            do {
+                let payload = UIImage(data: data)?.jpegData(compressionQuality: 0.9) ?? data
+                let url = try await APIClient.shared.uploadMedia(payload, contentType: "image/jpeg")
+                user.avatarURL = url
+                if profileUser?.isOwn == true { profileUser?.avatarURL = url }
+                let body = UpdateProfileBody(displayName: nil, handle: nil, bio: nil,
+                                             category: nil, birthYear: nil, avatarUrl: url, interests: nil)
+                if let profile = try? await ProfileStore.shared.updateMe(body) { applyProfile(profile) }
+                schedulePersist()
+            } catch {
+                #if DEBUG
+                print("Avatar upload failed: \(error.localizedDescription)")
                 #endif
             }
         }
@@ -179,23 +233,93 @@ extension AppState {
 
     private func completeSignIn(email mail: String, password: String) async throws {
         let tokens = try await CognitoAuthClient().signIn(email: mail, password: password)
+        await applyTokens(tokens, email: mail)
+    }
+
+    /// Shared tail for every sign-in path (email, Google, Apple): persist the
+    /// Cognito token set, establish the profile session, and route to
+    /// onboarding (new account) or the app (returning account).
+    func applyTokens(_ tokens: CognitoAuthClient.Tokens, email mail: String) async {
         await AuthSession.shared.store(tokens, email: mail)
-        let session = try await ProfileStore.shared.establishSession()
-        authPassword = ""
-        authCode = ""
-        authError = nil
-        let isNewAccount = session.displayName == nil
-        if isNewAccount {
-            pendingOnboarding = true
-            user.handle = session.handle ?? ""
-            withAnimation(.easeInOut(duration: 0.4)) {
-                phase = .onboarding
-                onboardingStep = 1
+        do {
+            let session = try await ProfileStore.shared.establishSession()
+            authPassword = ""
+            authCode = ""
+            authError = nil
+            let isNewAccount = session.displayName == nil
+            if isNewAccount {
+                pendingOnboarding = true
+                user.handle = session.handle ?? ""
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    phase = .onboarding
+                    onboardingStep = 1
+                }
+            } else {
+                withAnimation(.easeInOut(duration: 0.4)) { phase = .app }
             }
-        } else {
-            withAnimation(.easeInOut(duration: 0.4)) { phase = .app }
+            await connectBackend()
+        } catch {
+            authError = error.localizedDescription
         }
-        await connectBackend()
+    }
+
+    // MARK: Social sign-in (WelcomeView)
+
+    /// Google via Cognito Hosted UI (ASWebAuthenticationSession + PKCE).
+    func signInWithGoogle() {
+        guard !authBusy else { return }
+        authBusy = true
+        authError = nil
+        Task {
+            defer { authBusy = false }
+            do {
+                let tokens = try await GoogleSignInClient().signIn()
+                let mail = JWT.email(fromIDToken: tokens.idToken) ?? ""
+                await applyTokens(tokens, email: mail)
+            } catch SocialAuthError.cancelled {
+                // User dismissed the sheet — no error UI.
+            } catch {
+                authError = error.localizedDescription
+                #if DEBUG
+                print("Google sign-in failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+    /// Native Sign in with Apple → backend token exchange.
+    func signInWithApple() {
+        guard !authBusy else { return }
+        authBusy = true
+        authError = nil
+        Task {
+            defer { authBusy = false }
+            do {
+                let result = try await AppleSignInClient().signIn()
+                guard let tokenData = result.credential.identityToken,
+                      let identityToken = String(data: tokenData, encoding: .utf8) else {
+                    authError = "Apple sign-in returned no identity token."
+                    return
+                }
+                let name = [result.credential.fullName?.givenName,
+                            result.credential.fullName?.familyName]
+                    .compactMap { $0 }
+                    .joined(separator: " ")
+                let tokens = try await BackendAuth.exchangeApple(
+                    AppleAuthBody(identityToken: identityToken,
+                                  rawNonce: result.rawNonce,
+                                  fullName: name.isEmpty ? nil : name))
+                let mail = result.credential.email ?? JWT.email(fromIDToken: tokens.idToken) ?? ""
+                await applyTokens(tokens, email: mail)
+            } catch SocialAuthError.cancelled {
+                // User dismissed the sheet — no error UI.
+            } catch {
+                authError = error.localizedDescription
+                #if DEBUG
+                print("Apple sign-in failed: \(error)")
+                #endif
+            }
+        }
     }
 
     /// Pushes the onboarding choices (name, handle, birth year, interests) to the profile.

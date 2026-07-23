@@ -1,0 +1,7 @@
+{
+  "name": "gojogo-auth-triggers",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Cognito custom-auth (native Apple) + Google account-linking triggers. No dependencies — uses Node built-ins and the AWS SDK bundled in the Lambda runtime."
+}

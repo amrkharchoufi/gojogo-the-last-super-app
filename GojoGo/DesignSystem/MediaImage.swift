@@ -38,19 +38,17 @@ struct MediaImage: View {
                 .resizable()
                 .aspectRatio(contentMode: contentMode)
         } else if let url, let u = URL(string: url), u.scheme != nil {
-            AsyncImage(url: u) { phase in
+            CachedAsyncImage(url: u) { phase in
                 switch phase {
                 case .success(let img):
                     img.resizable().aspectRatio(contentMode: contentMode)
                 case .failure:
                     MediaPlaceholder(cornerRadius: 0)
-                case .empty:
+                case .loading:
                     ZStack {
                         GGColor.surface2
                         ProgressView().tint(GGColor.textTertiary)
                     }
-                @unknown default:
-                    MediaPlaceholder(cornerRadius: 0)
                 }
             }
         } else {
@@ -110,7 +108,7 @@ struct UserAvatar: View {
                     .resizable()
                     .scaledToFill()
             } else if let imageURL, let u = URL(string: imageURL), u.scheme != nil {
-                AsyncImage(url: u) { phase in
+                CachedAsyncImage(url: u) { phase in
                     if case .success(let img) = phase {
                         img.resizable().scaledToFill()
                     } else if let letter {

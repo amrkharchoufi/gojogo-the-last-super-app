@@ -29,10 +29,12 @@ class PresignService {
         "video/quicktime", "mov");
 
     private final MediaProperties properties;
+    private final MediaReferenceService references;
     private final S3Presigner presigner = S3Presigner.create();
 
-    PresignService(MediaProperties properties) {
+    PresignService(MediaProperties properties, MediaReferenceService references) {
         this.properties = properties;
+        this.references = references;
     }
 
     PresignResponse presign(UUID profileId, String contentType) {
@@ -54,6 +56,8 @@ class PresignService {
             .url()
             .toString();
         String publicUrl = "https://" + properties.cdnDomain() + "/" + key;
+        // Record the key so the cleanup sweep can tell whether it is ever referenced.
+        references.recordUpload(key, profileId, contentType);
         return new PresignResponse(uploadUrl, key, publicUrl, contentType, EXPIRY.toSeconds());
     }
 

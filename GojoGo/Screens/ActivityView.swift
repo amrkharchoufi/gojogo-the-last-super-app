@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 // MARK: - Activity (notifications)
 
@@ -209,6 +210,8 @@ struct EditProfileSheet: View {
     @State private var name = ""
     @State private var bio = ""
     @State private var category = "Creator"
+    @State private var avatarItem: PhotosPickerItem?
+    @State private var avatarData: Data?
 
     private let categories = ["Creator", "Artist", "Athlete", "Founder", "Photographer", "Musician", "Personal"]
 
@@ -218,10 +221,22 @@ struct EditProfileSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack {
                         Spacer()
-                        UserAvatar(size: 88,
-                                   gradient: app.user.avatarGradient,
-                                   letter: String(app.user.name.prefix(1)),
-                                   imageURL: app.user.avatarURL)
+                        PhotosPicker(selection: $avatarItem, matching: .images) {
+                            ZStack(alignment: .bottomTrailing) {
+                                UserAvatar(size: 88,
+                                           gradient: app.user.avatarGradient,
+                                           letter: String(app.user.name.prefix(1)),
+                                           imageURL: app.user.avatarURL,
+                                           imageData: avatarData)
+                                Image(systemName: "camera.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(GGColor.onAccent)
+                                    .frame(width: 28, height: 28)
+                                    .background(Circle().fill(GGColor.white))
+                                    .overlay(Circle().strokeBorder(GGColor.bg, lineWidth: 2))
+                            }
+                        }
+                        .buttonStyle(.plain)
                         Spacer()
                     }
                     .padding(.top, 8)
@@ -276,6 +291,15 @@ struct EditProfileSheet: View {
             name = app.user.name
             bio = app.user.bio
             category = app.user.category
+        }
+        .onChange(of: avatarItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    avatarData = data
+                    app.syncProfileAvatar(data)
+                }
+            }
         }
     }
 

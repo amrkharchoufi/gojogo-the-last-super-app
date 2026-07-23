@@ -88,6 +88,28 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
         </dependency>
+        <!-- Native Sign in with Apple: the backend validates Apple's identity
+             token then admin-creates/links the Cognito user and mints tokens. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>cognitoidentityprovider</artifactId>
+        </dependency>
+        <!-- Messaging module: DynamoDB single-table store for conversations /
+             messages / connection registry, and the API Gateway @connections
+             management API for WebSocket server->client fan-out. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>apigatewaymanagementapi</artifactId>
+        </dependency>
+        <!-- My World phone verification: OTP delivered by SNS SMS. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sns</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

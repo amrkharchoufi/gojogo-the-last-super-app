@@ -2,12 +2,15 @@ package com.gojogo.social.internal;
 
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.social.PostCommented;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -23,25 +26,30 @@ class CommentService {
     private final PostRepository posts;
     private final FollowRepository follows;
     private final ProfileApi profiles;
+    private final ApplicationEventPublisher events;
 
     CommentService(CommentRepository comments, CommentLikeRepository commentLikes,
                    CommentLikeCountUpdater likeCounts, PostRepository posts,
-                   FollowRepository follows, ProfileApi profiles) {
+                   FollowRepository follows, ProfileApi profiles,
+                   ApplicationEventPublisher events) {
         this.comments = comments;
         this.commentLikes = commentLikes;
         this.likeCounts = likeCounts;
         this.posts = posts;
         this.follows = follows;
         this.profiles = profiles;
+        this.events = events;
     }
 
     @Transactional
     CommentResponse create(UUID me, UUID postId, String text) {
-        if (!posts.existsById(postId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such post");
-        }
+        Post post = posts.findById(postId).orElseThrow(() ->
+            new ResponseStatusException(HttpStatus.NOT_FOUND, "No such post"));
         Comment comment = comments.save(new Comment(postId, me, text));
         posts.bumpCommentCount(postId, 1);
+        // Notify the author (the notifications module ignores self-comments).
+        events.publishEvent(new PostCommented(postId, post.getAuthorId(), me,
+            comment.getId(), OffsetDateTime.now()));
         return toResponses(List.of(comment), me).getFirst();
     }
 

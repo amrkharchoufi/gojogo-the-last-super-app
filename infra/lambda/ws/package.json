@@ -1,0 +1,7 @@
+{
+  "name": "gojogo-ws",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "My World messaging WebSocket Lambdas: a Cognito-JWT request authorizer for $connect and a $connect/$disconnect handler that maintains the DynamoDB connection registry. No dependencies — Node built-in crypto verifies the JWT and @aws-sdk/* ships in the Node 20 runtime."
+}

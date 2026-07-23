@@ -11,7 +11,7 @@ spring:
     open-in-view: false
   flyway:
     default-schema: public
-    schemas: public,profile,social,media
+    schemas: public,profile,social,media,notifications
     create-schemas: true
   security:
     oauth2:
@@ -23,6 +23,40 @@ gojogo:
   media:
     bucket: ${MEDIA_BUCKET:}
     cdn-domain: ${MEDIA_CDN_DOMAIN:}
+    # Orphan-upload sweep (see MediaCleanupJob). delete=false is report-only:
+    # it logs the unreferenced objects it would delete without removing them.
+    # Flip MEDIA_CLEANUP_DELETE=true only once those logs look right.
+    cleanup:
+      enabled: ${MEDIA_CLEANUP_ENABLED:true}
+      delete: ${MEDIA_CLEANUP_DELETE:false}
+      min-age-hours: ${MEDIA_CLEANUP_MIN_AGE_HOURS:24}
+      batch-size: ${MEDIA_CLEANUP_BATCH_SIZE:500}
+  # Native Sign in with Apple exchange (see AppleAuthService).
+  apple:
+    audience: ${APPLE_AUDIENCE:com.gojo.gojogo}
+  cognito:
+    user-pool-id: ${COGNITO_USER_POOL_ID:}
+    app-client-id: ${COGNITO_APP_CLIENT_ID:}
+  # My World messaging: DynamoDB single table + the API Gateway WebSocket
+  # @connections management URL for server->client fan-out (see messaging module).
+  messaging:
+    table: ${MESSAGING_TABLE:}
+    ws-endpoint: ${MESSAGING_WS_ENDPOINT:}
+  # My World setup (phone verification + World profile). dev-otp-code, when set,
+  # is accepted alongside the real SMS code so the flow works while SNS SMS is
+  # still in the account's sandbox — leave empty in production.
+  world:
+    dev-otp-code: ${WORLD_OTP_DEV_CODE:}
+    sms-sender-id: ${WORLD_SMS_SENDER_ID:GojoGo}
+    sms-enabled: ${WORLD_SMS_ENABLED:true}
+  # APNs push (activity notifications). All empty → push disabled (sender
+  # no-ops). key-base64 is the base64 of the Apple .p8 token-auth key file.
+  apns:
+    key-id: ${APNS_KEY_ID:}
+    team-id: ${APNS_TEAM_ID:}
+    bundle-id: ${APNS_BUNDLE_ID:com.gojo.gojogo}
+    key-base64: ${APNS_KEY_BASE64:}
+    production: ${APNS_PRODUCTION:false}
 
 server:
   port: 8080

@@ -1,8 +1,10 @@
 package com.gojogo.social.internal;
 
+import com.gojogo.media.MediaApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
 import com.gojogo.social.PostCreated;
+import com.gojogo.social.PostLiked;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
@@ -17,6 +19,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 class PostService {
@@ -26,15 +29,18 @@ class PostService {
     private final PostBookmarkRepository bookmarks;
     private final FollowRepository follows;
     private final ProfileApi profiles;
+    private final MediaApi media;
     private final ApplicationEventPublisher events;
 
     PostService(PostRepository posts, PostLikeRepository likes, PostBookmarkRepository bookmarks,
-                FollowRepository follows, ProfileApi profiles, ApplicationEventPublisher events) {
+                FollowRepository follows, ProfileApi profiles, MediaApi media,
+                ApplicationEventPublisher events) {
         this.posts = posts;
         this.likes = likes;
         this.bookmarks = bookmarks;
         this.follows = follows;
         this.profiles = profiles;
+        this.media = media;
         this.events = events;
     }
 
@@ -51,6 +57,9 @@ class PostService {
             for (CreateMediaItem item : request.mediaItems()) {
                 post.addMedia(item.imageUrl(), item.videoUrl());
             }
+            media.markReferenced(request.mediaItems().stream()
+                .flatMap(item -> Stream.of(item.imageUrl(), item.videoUrl()))
+                .toList());
         }
         post = posts.save(post);
         events.publishEvent(new PostCreated(post.getId(), me, post.getCreatedAt()));
@@ -100,12 +109,15 @@ class PostService {
 
     @Transactional
     void like(UUID me, UUID postId) {
-        requireExists(postId);
+        Post post = posts.findById(postId).orElseThrow(() ->
+            new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found"));
         try {
             likes.saveAndFlush(new PostLike(postId, me));
             posts.bumpLikeCount(postId, 1);
+            // Notify the author (the notifications module ignores self-likes).
+            events.publishEvent(new PostLiked(postId, post.getAuthorId(), me, OffsetDateTime.now()));
         } catch (DataIntegrityViolationException alreadyLiked) {
-            // idempotent
+            // idempotent — no duplicate notification
         }
     }
 

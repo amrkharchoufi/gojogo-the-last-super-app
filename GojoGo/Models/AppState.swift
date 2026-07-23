@@ -67,6 +67,24 @@ final class AppState: ObservableObject {
     /// When set, the next send is scheduled for this label instead of sent now.
     @Published var worldSendLaterLabel: String? = nil
     private var worldScheduledTasks: [UUID: Task<Void, Never>] = [:]
+
+    // MARK: My World setup (WhatsApp-style: own phone-verified identity)
+    /// Backend `GET /v1/world/me` — true once phone verified + World name set.
+    @Published var worldSetupComplete: Bool = false
+    /// Whether `worldSetupComplete` reflects a real backend answer yet.
+    @Published var worldSetupLoaded: Bool = false
+    @Published var worldSetupStep: WorldSetupStep = .intro
+    @Published var worldSetupPhone: String = ""
+    @Published var worldSetupCode: String = ""
+    @Published var worldSetupName: String = ""
+    @Published var worldSetupAvatarData: Data? = nil
+    @Published var worldSetupAvatarURL: String? = nil
+    @Published var worldSetupBusy: Bool = false
+    @Published var worldSetupError: String? = nil
+    /// Verified phone shown read-only once set (My World identity key).
+    @Published var worldPhone: String? = nil
+    /// Throttle for outbound typing pings on live threads.
+    var worldLastTypingSentAt: Date? = nil
     @Published var showProfile: Bool = false
     @Published var profileUser: ProfileUser? = nil
     @Published var showStoriesBrowser: Bool = false
@@ -498,6 +516,7 @@ final class AppState: ObservableObject {
         if let i = worldConversations.firstIndex(where: { $0.id == id }) {
             worldConversations[i].unread = 0
         }
+        loadLiveConversationIfNeeded(id)
     }
 
     func closeWorldConversation() {
@@ -623,7 +642,42 @@ final class AppState: ObservableObject {
     func addWorldContact(_ raw: String) {
         let entry = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !entry.isEmpty else { return }
+        // Comma-separated handles/numbers → a real backend group conversation.
+        let recipients = entry.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if backendConnected, recipients.count >= 2 {
+            Task {
+                if await startLiveGroup(recipients: recipients) {
+                    worldSheet = nil; showWorldFilters = false; worldSearch = ""
+                } else {
+                    addLocalWorldContact(entry, isPhone: false)
+                }
+            }
+            return
+        }
         let isPhone = entry.allSatisfy { "+0123456789 -()".contains($0) }
+        // On a connected backend, resolve a real My World account — by phone
+        // number (WhatsApp-style) or by @handle — and open a live thread; fall
+        // back to a local demo contact when there's no match.
+        if backendConnected {
+            Task {
+                let opened = isPhone
+                    ? await startLiveConversation(phone: entry)
+                    : await startLiveConversation(handle: entry)
+                if opened {
+                    worldSheet = nil
+                    showWorldFilters = false
+                    worldSearch = ""
+                } else {
+                    addLocalWorldContact(entry, isPhone: isPhone)
+                }
+            }
+            return
+        }
+        addLocalWorldContact(entry, isPhone: isPhone)
+    }
+
+    private func addLocalWorldContact(_ entry: String, isPhone: Bool) {
         let cleaned = entry.hasPrefix("@") ? String(entry.dropFirst()) : entry
         let contact = WorldContact(
             name: isPhone ? entry : cleaned.capitalized,
@@ -706,10 +760,13 @@ final class AppState: ObservableObject {
                                    readLabel: scheduled == nil ? "Delivered" : nil,
                                    replyTo: currentReplySnippet(),
                                    scheduledLabel: scheduled)
+            let replyToId = worldReplyingTo   // capture before clearing (for live linking)
+            let scheduledDate = scheduled != nil ? worldSendLaterDate : nil
             worldDraft = ""
             clearWorldReply()
             worldSendLaterLabel = nil
-            deliverWorldMessage(msg, preview: "You: \(text)", scheduled: scheduled != nil)
+            deliverWorldMessage(msg, preview: "You: \(text)", scheduled: scheduled != nil,
+                                replyToId: replyToId, scheduledAt: scheduledDate)
         }
     }
 
@@ -777,7 +834,8 @@ final class AppState: ObservableObject {
     /// Appends an outgoing message to the open thread and schedules the canned reply.
     /// When `scheduled` is true the bubble first appears in a pending state and is
     /// "sent" a few seconds later (demo stand-in for Send Later).
-    private func deliverWorldMessage(_ msg: WorldMessage, preview: String, scheduled: Bool = false) {
+    private func deliverWorldMessage(_ msg: WorldMessage, preview: String, scheduled: Bool = false,
+                                     replyToId: UUID? = nil, scheduledAt: Date? = nil) {
         guard let id = selectedWorldConversationID,
               let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
         // Only the newest outgoing message carries a receipt label.
@@ -792,6 +850,14 @@ final class AppState: ObservableObject {
         }
         bumpWorldConversationActivity(at: i)
         showWorldAppsMenu = false
+
+        // Live thread: send to the backend; the real reply (or a scheduled
+        // send's delivery) arrives over the socket. SampleData threads keep the
+        // local canned-reply / demo send-later simulation.
+        if MessagingStore.shared.isLive(id) {
+            liveSend(msg, in: id, replyToId: replyToId, scheduledAt: scheduled ? scheduledAt : nil)
+            return
+        }
 
         if scheduled {
             scheduleWorldSendLater(messageID: msg.id, in: id, preview: preview)
@@ -845,6 +911,10 @@ final class AppState: ObservableObject {
                 reactions.append(WorldReaction(tapback: tapback, fromUser: true))
             }
             worldConversations[i].messages[j].reactions = reactions
+        }
+        if MessagingStore.shared.isLive(id) {
+            let mine = worldConversations[i].messages[j].reactions.first { $0.fromUser }
+            liveReact(mine?.tapback, on: messageID, in: id)
         }
         worldReactionTarget = nil
     }
@@ -903,6 +973,9 @@ final class AppState: ObservableObject {
                 poll.options[k].voters.append("You")
             }
             worldConversations[i].messages[j].poll = poll
+        }
+        if MessagingStore.shared.isLive(id) {
+            liveVotePoll(messageID: messageID, optionID: optionID, in: id)
         }
     }
 
@@ -1019,7 +1092,11 @@ final class AppState: ObservableObject {
 
     var unreadActivityCount: Int { notifications.filter { !$0.read }.count }
 
-    func openActivity() { showActivity = true }
+    func openActivity() {
+        showActivity = true
+        // Pull the latest activity when the sheet opens.
+        if backendConnected { Task { await refreshNotifications() } }
+    }
 
     func closeActivity() {
         showActivity = false
@@ -1029,6 +1106,10 @@ final class AppState: ObservableObject {
     func markActivityRead() {
         guard notifications.contains(where: { !$0.read }) else { return }
         for i in notifications.indices { notifications[i].read = true }
+        // Persist read state so the badge stays cleared across launches/devices.
+        if backendConnected {
+            Task { try? await NotificationStore.shared.markAllRead() }
+        }
     }
 
     func pushActivity(_ item: ActivityItem) {
@@ -1203,6 +1284,19 @@ final class AppState: ObservableObject {
         if profileUser?.isOwn == true {
             profileUser = .own(from: user, posts: myPosts.count)
         }
+        // Persist to the backend (was local-only before).
+        if backendConnected {
+            let body = UpdateProfileBody(
+                displayName: cleanName.isEmpty ? nil : cleanName,
+                handle: nil, bio: user.bio, category: category,
+                birthYear: nil, avatarUrl: nil, interests: nil)
+            Task {
+                if let profile = try? await ProfileStore.shared.updateMe(body) {
+                    applyProfile(profile)
+                    SocialStore.shared.myHandle = profile.handle
+                }
+            }
+        }
         schedulePersist()
     }
 
@@ -1317,6 +1411,14 @@ final class AppState: ObservableObject {
         AuthSession.shared.clear()
         SocialStore.shared.reset()
         ProfileStore.shared.reset()
+        WorldSocket.shared.disconnect()
+        MessagingStore.shared.reset()
+        PushRegistrar.shared.reset()
+        worldSetupComplete = false
+        worldSetupLoaded = false
+        worldSetupStep = .intro
+        worldSetupPhone = ""; worldSetupCode = ""; worldSetupName = ""
+        worldSetupAvatarData = nil; worldSetupAvatarURL = nil; worldPhone = nil
         backendConnected = false
         pendingOnboarding = false
         authPassword = ""

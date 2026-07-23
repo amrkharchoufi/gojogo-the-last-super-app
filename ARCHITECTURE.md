@@ -1,8 +1,8 @@
-# GojoGo — Backend Architecture & Build Plan
+# GojoGo — System Architecture & Build Plan
 
-Status: planning document, backend not yet started (iOS app is a SwiftUI prototype on sample data)
+Status: **Phase 1 complete** (auth / profile / social / media live); **Phase 2 · Milestones 1–3 deployed** — M1 My World messaging (+ WhatsApp-style setup), M2 platform notifications (activity feed, first consumer of social domain events), M3 APNs push (**activated** — key in Secrets Manager, verified authenticating to Apple; device delivery pending a physical-device test) + messaging polish (reply-linking, typing) — `messaging` module + DynamoDB + WebSocket infra + iOS wiring live in prod (two-user REST + real-time fan-out green), plus a **WhatsApp-style My World setup**: its own phone-verified identity (OTP over SNS + dev-code fallback) and World name/avatar, gated on first entry, separate from the app/social account. See [PROGRESS.md](PROGRESS.md) for deploy URLs, API surface, and known issues.
 Stack: Spring Boot (modular monolith, Spring Modulith) · AWS · Postgres · iOS/SwiftUI client
-Budget context: build proceeding in small paid milestones (~$100 increments of Claude usage)
+Budget context: build in small paid milestones. Phase 2 Milestones 1–3 (My World messaging, notifications, APNs push + polish) are deployed; the next spend should finish the remaining Phase 2 loops (live device E2E, social sign-in verification) before spreading into commerce + delivery + Stripe.
 
 ---
 
@@ -10,184 +10,260 @@ Budget context: build proceeding in small paid milestones (~$100 increments of C
 
 **Modular monolith now, microservices later — only when forced to.** One deployable Spring Boot application, internally split into modules that never share database tables, never call each other's internals directly, and communicate only through public interfaces and domain events. This gets almost all the benefit of microservices (clean boundaries, independent reasoning, safe parallel work) without the operational cost (N deployments, N databases, service-to-service auth, a gateway) before that cost is justified.
 
-Scalability comes from statelessness + horizontal scaling + caching, not from splitting services. A stateless Spring Boot monolith behind a load balancer, with Redis caching and read replicas, scales to very large traffic before any module needs to become its own service — this is how Shopify and GitHub operate at enormous scale.
+Scalability comes from statelessness + horizontal scaling + caching, not from splitting services. A stateless Spring Boot monolith behind a load balancer, with Redis caching and read replicas, scales to very large traffic before any module needs to become its own service.
 
 **When to actually split a module out**, and not before:
-- A workload needs different scaling/hardware than the rest (video transcoding needing GPU-ish instances; the dispatch/geo-matching module needing low-latency co-located Redis).
-- A module's failure mode must not take down everything else (realtime chat crashing shouldn't break checkout).
+- A workload needs different scaling/hardware than the rest (video transcoding; geo-dispatch needing low-latency co-located Redis).
+- A module's failure mode must not take down everything else (messaging crashing shouldn't break checkout).
 - A team boundary forms and independent deploy cadence is needed (not relevant solo, relevant once you hire).
 
 ---
 
-## 2. Enforcing the boundary: Spring Modulith
+## 2. Shape of the system: platform + verticals
 
-Use **Spring Modulith** (official Spring project) instead of relying on folder-structure convention:
+GojoGo is a **superapp**. A flat list of equal modules under-explains how the iOS client is already structured (`AppNavMode.myWorld` vs `.collections`). Prefer this mental model:
 
-- Each domain is a top-level package (`com.gojogo.social`, `com.gojogo.profile`, `com.gojogo.media`, ...). A module may expose a public API package; everything else in the module is package-private and physically inaccessible from other modules.
-- `ApplicationModules.of(GojogoApplication.class).verify()` runs in the test suite and **fails the build** if any module reaches into another module's internals. This is what prevents the boundary from rotting under deadline pressure — it's enforced, not just agreed upon.
-- Cross-module communication happens two ways:
-  1. **Synchronous, public API call** — module A calls an explicit public interface method on module B (e.g., `ProfileLookupApi.getUser(id)`), never B's repository or entities directly.
-  2. **Asynchronous, event-driven** — module A publishes a domain event (`PostCreated`, `OrderPlaced`, `UserFollowed`); other modules react via `@ApplicationModuleListener`. In-process now; swapping the transport to SQS/EventBridge later is a config change, not a rewrite.
-- `@ApplicationModuleTest` lets you test one module in isolation, bootstrapping only its dependencies — this is also what makes eventual extraction low-risk: the module's test suite already proves it works standalone.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     PLATFORM (shared)                        │
+│  identity · media · messaging · notifications · payments     │
+│  dispatch · search                                           │
+└─────────────────────────────────────────────────────────────┘
+          ▲ used by ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   VERTICAL PRODUCTS                          │
+│  social · watch · travel · delivery · economy · partner      │
+│  assistant                                                   │
+└─────────────────────────────────────────────────────────────┘
+```
 
-## 3. Data ownership rule
+| Layer | Modules | Role |
+|---|---|---|
+| **Platform** | `auth`/`identity`, `media`, `messaging`, `notifications`, `payments`, `dispatch`, `search` | Reusable capabilities. Verticals compose these; they do not re-implement chat, push, geo-matching, or uploads. |
+| **Verticals** | `social`, `watch` (catalog UX on `media`), `travel`, `delivery`, `economy`, `partner`, `assistant` | Product surfaces the user opens from Collections / My World. Own their domain data; call platform APIs + publish events. |
 
-**Schema-per-module in one physical Postgres database**, from day one:
+**Why this is better than a flat module list:** My World is not “another social feature” — it is the private network shell. Seller chat is commerce, not World Chat. Co-watch Madeleine rooms sit on media + assistant. Dispatch is shared by travel and delivery and must be an explicit module, not an informal “shared engine.”
 
-- `social.*`, `profile.*`, `media.*`, `delivery.*`, `travel.*`, `economy.*`, `partner.*` — one schema per domain module.
-- **No foreign keys across schemas. No cross-schema JOINs in application code, ever.** If module A needs data owned by module B, it calls B's public API or reacts to B's events — never queries B's tables directly.
-- This is the single highest-leverage rule in this document. When a module is later extracted into its own service, its schema is already isolated — you point a new database connection at it and nothing about the module's internal code changes.
+---
 
-## 4. Target system diagram (full vision)
+## 3. Enforcing the boundary: Spring Modulith
+
+Use **Spring Modulith** instead of folder-structure convention alone:
+
+- Each domain is a top-level package (`com.gojogo.social`, `com.gojogo.profile`, `com.gojogo.media`, …). A module may expose a public API package; everything else is package-private.
+- `ApplicationModules.of(GojogoApplication.class).verify()` fails the build if a module reaches into another module's internals.
+- Cross-module communication:
+  1. **Synchronous public API** — e.g. `ProfileLookupApi.getUser(id)`.
+  2. **Asynchronous domain events** — e.g. `PostCreated`, `OrderPlaced`, `UserFollowed` via `@ApplicationModuleListener`. In-process now; SQS/EventBridge later is config, not a rewrite.
+- `@ApplicationModuleTest` boots one module in isolation — extraction stays low-risk.
+
+**Live packages today:** `com.gojogo.auth`, `profile`, `social`, `media`, `messaging`, `notifications` (plus app-level `SecurityConfig` / `ApiExceptionHandler`). `notifications` is the first cross-module event consumer (listens to `social`'s `UserFollowed` / `PostLiked` / `PostCommented`).
+
+---
+
+## 4. Data ownership rule
+
+**Schema-per-module in one physical Postgres database:**
+
+- Platform/vertical schemas as modules land: `profile.*`, `social.*`, `media.*`, `messaging.*` (Postgres side where needed), `notifications.*`, `economy.*`, `delivery.*`, `travel.*`, `partner.*`, `dispatch.*` (or Redis-primary with a thin Postgres ledger), `payments.*` (ledger only — Stripe is source of truth for charges).
+- **No foreign keys across schemas. No cross-schema JOINs in application code.** Cross-domain reads go through public APIs or events.
+- Messaging / live position / Madeleine memory may use **DynamoDB** where write patterns demand it; that does not excuse mixing Postgres ownership across modules.
+
+This is the highest-leverage rule in the document: extraction later is a connection-string change, not a data model rewrite.
+
+---
+
+## 5. Target system diagram (full vision)
 
 ```
 iOS app (SwiftUI)
    │
-   ├── CloudFront ──► S3 (media, HLS video)
-   ├── ALB / API Gateway ──► Spring Boot modular monolith (App Runner → ECS Fargate later)
-   ├── API Gateway (WebSocket) ──► Realtime module (chat, typing, live tracking)
-   └── Cognito (auth, JWT)
+   ├── CloudFront ──► S3 (media, HLS video)     [interim: direct S3 until CF verified]
+   ├── App Runner / later ALB ──► Spring Boot modular monolith
+   ├── API Gateway WebSocket ──► messaging (+ live tracking fan-out)
+   ├── Cognito (auth, JWT)
+   └── Mapbox (client-side maps/directions for Travel/Partner)  ← not the dispatch authority
 
-Spring Boot monolith modules:
-   social · profile · media · delivery · travel · economy · partner
-   — each with its own Postgres schema, communicating via public APIs + domain events
+Spring Boot — PLATFORM:
+   identity/auth · media · messaging · notifications · payments · dispatch · search
+
+Spring Boot — VERTICALS:
+   social · watch(catalog) · travel · delivery · economy · partner · assistant
 
 Shared infra:
-   Postgres (RDS) · Redis (ElastiCache — cache, sessions, geo dispatch) · OpenSearch (search)
-   S3 (media) · MediaConvert (video transcoding) · Bedrock (Madeleine AI)
-   EventBridge / SQS (async event fan-out) · SNS → APNs (push)
+   Postgres (RDS) · Redis (cache, sessions, GEO dispatch) · OpenSearch
+   S3 · MediaConvert · Bedrock (Madeleine)
+   EventBridge / SQS · SNS → APNs
 ```
 
-## 5. Domain → module mapping (from current iOS app)
+**Client vs server maps:** Mapbox runs on-device for camera, routing preview, and markers. Server `dispatch` owns matching, ETAs for assigned jobs, and authoritative trip/order state. Do not treat Mapbox as the backend.
 
-| iOS screen / model (existing) | Backend module | Schema | Notes |
-|---|---|---|---|
-| `WelcomeView`, `EmailSignUpView`, `OnboardingFlow` | `auth` (thin — mostly Cognito) | — | Cognito user pool; app-side profile creation on first login |
-| `HomeView`, `Post`, `Story`, `Comment`, `ComposePostView` | `social` | `social` | Feed, posts, stories, comments, likes, follows |
-| `ProfileView`, `ProfileHomeView`, `GGUser`, `ProfileUser` | `profile` | `profile` | User profiles, settings, interests |
-| `ShortsView`, `WatchView`, `GojoTVView`, `VideoItem`, `Short`, `TVShow` | `media` | `media` | Video catalog + S3/MediaConvert/CloudFront pipeline |
-| `WorldChatView`, `WorldConversation`, `WorldMessage`, polls/reactions | `realtime` | `realtime` (mostly DynamoDB, not Postgres) | WebSocket-based, kept semi-separate from day one — natural first extraction candidate |
-| `GojoTravelView`, `TravelPlace`, `RideOption`, `TravelDriver` | `travel` | `travel` | Ride-hailing; shares dispatch engine with delivery |
-| `GojoDeliveryView`, `DeliveryRestaurant`, `DeliveryCartLine`, `DeliveryCourier` | `delivery` | `delivery` | Catalog/orders; shares dispatch engine with travel |
-| `EconomyView`, `Product`, seller chat | `economy` | `economy` | Marketplace |
-| `PartnerFlowView`, `PartnerDashboardView`, `PartnerApplication` | `partner` | `partner` | Driver/courier onboarding + KYC workflow |
-| `MadeleineHomeView`, `MadeleineOrb`, `WatchingMadeleineView` | `assistant` | `assistant` (mostly DynamoDB) | Bedrock-backed AI assistant |
-| `SearchView` | (cross-cutting) | — | OpenSearch, indexed from domain events, not its own module |
+---
 
-## 6. Tech stack
+## 6. Coverage matrix — iOS functions → ownership
+
+### 6a Covered and mapped
+
+| iOS surface / models | Layer | Module | Schema / store | Notes |
+|---|---|---|---|---|
+| `WelcomeView`, `EmailSignUpView`, `OnboardingFlow` | Platform | `auth` (thin) + `profile` | Cognito + `profile` | Session via `POST /v1/auth/session`; email + Google (Hosted UI) + native Apple (`POST /v1/auth/apple`) — **deployed (2026-07-23); live E2E of Google + Apple still pending** |
+| `HomeView`, `Post`, `Story`, `Comment`, `ComposePostView` | Vertical | `social` | `social` | Feed, likes, bookmarks, follows — **live** |
+| `ProfileView`, `GGUser`, `ProfileUser`, interests | Platform-ish | `profile` | `profile` | CRUD + by-handle — **live** |
+| Presigned upload, post/story media | Platform | `media` | S3 (+ `media` metadata) | CloudFront deferred — **live** (S3 public-read interim) |
+| `ShortsView`, `WatchView`, `GojoTVView`, `VideoItem`, `Short`, `TVShow` | Vertical on platform | `media` (+ later `watch` catalog) | `media` | Still SampleData on client; UGC HLS = later |
+| `GojoTravelView`, `TravelPlace`, `RideOption`, `TravelDriver` | Vertical | `travel` | `travel` | Uses platform `dispatch` + client Mapbox |
+| `GojoDeliveryView`, restaurant/cart/courier | Vertical | `delivery` | `delivery` | Own `AppTab`; uses platform `dispatch` |
+| `EconomyView`, `Product` | Vertical | `economy` | `economy` | Marketplace listings |
+| `PartnerFlowView`, `PartnerDashboardView`, KYC/stake | Vertical | `partner` | `partner` | Driver/courier onboarding |
+| `MadeleineHomeView`, `MadeleineOrb` | Vertical | `assistant` | DynamoDB memory | Bedrock |
+| `SearchView` | Platform | `search` | OpenSearch | Event-indexed; not a domain owner |
+
+### 6b Gaps closed by this revision (were weak/missing)
+
+| iOS surface / models | Was | Now |
+|---|---|---|
+| **My World** — `AppNavMode.myWorld`, `MyWorldView`, circles, contacts | Folded vaguely into “realtime chat” | Platform **`messaging`**: conversations, circles, contacts, typing, polls, send-later, attachments. Private network shell, not public social. |
+| `WorldChatView`, `WorldConversation`, `WorldMessage`, reactions | `realtime` only | Same `messaging` module; DynamoDB + WebSocket primary |
+| Profile **DMs** (`dmPeer`, `dmThreads`) | Unowned | `messaging` (1:1 threads keyed by profile); distinct product UX, same transport |
+| **Seller chat** (`messagingProduct`, `sellerChat`) | Implied under economy | `economy` owns thread metadata / context; **transport** = `messaging` (or economy embeds messaging API). Do not put marketplace threads in World circles. |
+| **Co-watch chat** (`WatchingMadeleineView`, `watchingChat`) | Unowned | Ephemeral **media room** + `assistant` participation; not My World history |
+| `ActivityView`, `ActivityItem` | Only “SNS later” | Platform **`notifications`** — **live**: in-app activity feed from `UserFollowed`/`PostLiked`/`PostCommented` events; APNs fan-out still later |
+| **Profile Home** (`ProfileHomeBlock`, canvas editor) | Lumped under profile vaguely | Owned by **`profile`** (structured blocks JSON / rows in `profile` schema) |
+| Watch channel subscribe / dislike / download | Unowned | `media`/`watch` engagement tables; downloads are client-local unless offline sync is productized |
+| Partner live jobs / radar | Under partner only | `partner` UX + **`dispatch`** for offers/assignment |
+
+### 6c Chat ownership summary (four surfaces)
+
+| Surface | Product owner | Transport |
+|---|---|---|
+| My World (circles, group/1:1, polls, send-later) | `messaging` | WebSocket + DynamoDB |
+| Profile DMs | `messaging` | Same |
+| Seller chat | `economy` | `messaging` API |
+| Co-watch / Madeleine while watching | `media` room + `assistant` | WebSocket (ephemeral or short TTL) |
+
+---
+
+## 7. iOS client architecture
+
+The backend modules only matter if the client stays aligned.
+
+### Current shape (Phase 1)
+
+| Piece | Role |
+|---|---|
+| `AppState` | **Façade** views bind to (`@EnvironmentObject`). Still owns navigation + most `@Published` UI state. |
+| `Stores/SocialStore`, `Stores/ProfileStore` | Domain API + DTO→UI mapping; called from `AppState+Backend.swift`. |
+| `CoreNetworking/` | `APIClient`, Cognito JSON auth, Keychain, `BackendConfig`, DTOs. |
+| `SessionStore` | Local cache / restore for snappy launch. |
+| `SampleData` | All verticals not yet wired (Watch, Travel, Delivery, Economy, My World, Madeleine, …). |
+
+A full split of `AppState` into many `@Published` stores was **deferred** (views are tightly coupled). Revisit when the next domain goes live — add a store, keep `AppState` as the façade until a vertical is mostly API-backed.
+
+### Navigation (must stay in sync with backend product splits)
+
+- `AppNavMode`: `.myWorld` (private network) vs `.collections` (public superapp tabs).
+- `AppTab`: `.home`, `.watch`, `.madeleine`, `.travel`, `.delivery`, `.economy`, `.search`.
+- Auth: `AuthPhase` `.welcome` → `.email` → `.onboarding` → `.app`.
+- Travel: `TravelPhase` home → searching → choosingRide → matching → enRoute → inTrip → completed.
+
+### Rules
+
+- Drive UI from `AppState` (or thin stores behind it) — no parallel global navigation stacks.
+- Live path: optimistic UI → API; DEBUG log failures; keychain session restore on launch.
+- Do not invent a second networking stack; extend `APIClient` / stores per module.
+
+---
+
+## 8. Tech stack
 
 | Layer | Choice | Why |
 |---|---|---|
-| Backend framework | **Spring Boot 3 + Spring Modulith** | Enforced module boundaries, built-in event-driven internal comms, documented monolith→microservice path |
-| Language | Java 21 (or Kotlin, if preferred later) | |
-| Database | **PostgreSQL** (AWS RDS) | Schema-per-module; system of record for users, posts, orders, trips, partner data |
-| Cache / sessions / geo | **Redis** (ElastiCache) | Sessions, hot-feed cache, rate limiting, `GEOADD`/`GEOSEARCH` for dispatch |
-| Realtime | DynamoDB + API Gateway WebSocket | Chat messages, connection registry, live trip/courier position — deliberately outside the Postgres monolith from day one |
-| Search | OpenSearch | Indexed asynchronously off domain events |
-| Media storage/delivery | S3 + CloudFront | All user media and video |
-| Video transcoding | MediaConvert | HLS ABR ladder for Shorts/GojoTV |
-| AI assistant | Amazon Bedrock (Claude) | Madeleine; DynamoDB for conversation memory |
-| Auth | Amazon Cognito | JWT verified at the gateway; add Sign in with Apple |
-| Payments | Stripe + Stripe Connect | Never build payment rails; ledger table in Postgres for reconciliation |
-| Events | EventBridge (+ SQS consumers) | Async fan-out: search indexing, notifications, analytics |
-| Push | SNS → APNs | |
+| Backend framework | **Spring Boot 3 + Spring Modulith** | Enforced boundaries; in-process events → SQS later |
+| Language | Java 21+ (repo may run newer JDK for builds) | |
+| Database | **PostgreSQL** (RDS) | Schema-per-module system of record |
+| Cache / geo | **Redis** (ElastiCache) | Sessions, feed cache, rate limits, `GEO*` for dispatch |
+| Messaging realtime | DynamoDB + API Gateway WebSocket | Chat, presence, live trip/courier positions |
+| Search | OpenSearch | Async index from domain events |
+| Media | S3 + CloudFront (CF when account verified) | User media + later HLS |
+| Video transcoding | MediaConvert | Shorts / GojoTV ABR |
+| AI | Amazon Bedrock | Madeleine |
+| Auth | Amazon Cognito | JWT. Email/password + **Google** (Hosted-UI federation) + **native Sign in with Apple** (backend validates Apple's token, mints via a passwordless `CUSTOM_AUTH` flow). One `auth-triggers` Lambda gates the Apple challenge and links Google→email (`AdminLinkProviderForUser`), so all three providers share one email-keyed account. See PROGRESS.md "Social sign-in". |
+| Payments | Stripe + Stripe Connect | Ledger in Postgres for reconciliation only |
+| Maps (client) | Mapbox | Travel / partner UI; not dispatch authority |
+| Events | EventBridge (+ SQS) | Search, notifications, analytics |
+| Push | **APNs directly** (HTTP/2 + ES256 `.p8`) | Via `notifications` — chose direct APNs over SNS→APNs for a simpler, self-contained sender (free, one secret). SNS→APNs stays an option if multi-provider (APNs+FCM) fan-out is wanted later. Config-gated on an Apple key. |
 | IaC | AWS CDK | |
-| CI/CD | GitHub Actions → ECR → App Runner (→ ECS Fargate later) | |
-| Deploy target (early) | **AWS App Runner** | Container-based, no ALB/VPC wiring to hand-manage yet; swap to ECS Fargate + ALB later with no code change |
+| CI/CD | GitHub Actions → ECR → App Runner (→ ECS later) | |
+| Deploy (early) | **AWS App Runner** | Already in use for Phase 1 |
 
 ---
 
-## 7. Milestone plan — Phase 1 slice (current ~$100 budget)
+## 9. Phase 1 — done (historical milestones)
 
-Goal of this phase: **turn the app from a demo into a real product for its core loop** — real accounts, a real social feed, real media — while laying down the module/schema discipline so every later phase is cheap to add.
+Goal achieved: **real accounts, real feed, real media upload**, with Modulith + schema discipline in place.
 
-Each milestone is sized to run as its own Claude Code session (fresh context, cheaper). Model: Sonnet 5 by default; escalate to Opus/Fable only if a session gets stuck on something hard.
+| Milestone | Outcome |
+|---|---|
+| 1 — Skeleton + auth | Cognito, App Runner, RDS, `/v1/auth/session` |
+| 2 — Profiles + social | Feed, posts, stories, likes, comments, follows + events |
+| 3 — Media upload | Presigned S3 PUT; CF blocked on account verification |
+| 4 — iOS wiring | `CoreNetworking`, stores, Home/Profile/Compose on live API |
+| 5 — Hardening | Pagination, refresh, error bodies, by-handle; `PROGRESS.md` |
 
-### Milestone 1 — Backend skeleton + auth
-**Budget: ~$15–20**
-
-- New Spring Boot 3 project (Maven multi-module or Modulith package structure), Java 21.
-- Modules scaffolded: `auth`, `profile`, `social`, `media` (empty shells except `auth`).
-- Spring Modulith wired in: `ApplicationModules.of(...).verify()` in the test suite from commit #1.
-- AWS Cognito user pool created via CDK; Spring Security configured to validate Cognito JWTs.
-- `/v1/auth/session` endpoint: given a valid Cognito JWT, create-or-fetch the app-side profile row.
-- RDS Postgres instance (small, dev-tier) provisioned via CDK, one schema per module created (even if empty).
-- Deployed to AWS App Runner via GitHub Actions; a health-check endpoint confirms the deploy.
-
-**Definition of done:** you can sign up via Cognito from a REST client (or curl) and get back a JWT + a created profile row.
-
-### Milestone 2 — Profiles + social API
-**Budget: ~$25–30**
-
-- `profile` module: user profile CRUD, interests, avatar reference (S3 key, not yet uploadable — that's milestone 3).
-- `social` module: `Post`, `Story`, `Comment`, `Like`, `Follow` entities — mirroring the existing `Models.swift` shapes (`Post`, `PostMediaItem`, `Comment`, `StoryFrame`) so the iOS models map directly.
-- Feed endpoint: `GET /v1/feed` — simple recency + following-based ordering (no ML ranking yet).
-- Compose endpoint: `POST /v1/posts` (text + media references), `POST /v1/stories`.
-- Follow/unfollow, like/unlike, comment endpoints.
-- `social` publishes domain events (`PostCreated`, `UserFollowed`) via Spring Modulith's event system — no consumers yet, but the publish side is in place so `search`/`activity` can subscribe later at zero cost to `social`.
-
-**Definition of done:** a client can create a profile, post content, follow another user, and see a feed — all against Postgres, no sample data.
-
-### Milestone 3 — Media upload
-**Budget: ~$10**
-
-- S3 bucket for user media (`gojogo-user-media`), scoped IAM policy.
-- `media` module: `POST /v1/media/presign` returns a presigned S3 PUT URL; client uploads directly to S3 (never proxied through the API).
-- CloudFront distribution in front of the bucket for reads.
-- `PostMediaItem`/`StoryFrame` records store the CloudFront URL once upload completes.
-
-**Definition of done:** a photo taken/picked in the iOS compose flow uploads to S3 and renders back in the feed via CloudFront.
-
-### Milestone 4 — iOS wiring
-**Budget: ~$30**
-
-- New `CoreNetworking` layer in the iOS app: `URLSession` + async/await, JWT storage/refresh (Keychain), typed request/response models matching the backend DTOs.
-- Auth flow: `WelcomeView` → `EmailSignUpView` → Cognito hosted auth (or native Cognito SDK flow) → session established.
-- Split `AppState` (currently one `ObservableObject` with 80+ `@Published` properties covering every domain) into per-domain observable stores: `SocialStore`, `ProfileStore`, at minimum — matching the module boundaries on the backend. Other domains (`WorldChatView`, `GojoTravelView`, etc.) keep using `SampleData` for now; only social/profile/media get wired live.
-- Rewire `HomeView`, `ComposePostView`, `ProfileView`, `StoryViewer`, `CommentsSheet` off `SampleData` onto the live API.
-- Media picker → presigned upload flow → post/story creation against the real backend.
-
-**Definition of done:** running the app end-to-end — sign up, post a photo, see it in the feed, view another profile — with zero `SampleData` involved in that path.
-
-### Milestone 5 — Buffer / hardening
-**Budget: ~$15–20**
-
-- Fix whatever milestones 1–4 leave rough: deploy issues, CDK edge cases, auth token refresh bugs, feed pagination.
-- Basic error handling and empty/loading states in the wired iOS screens.
-- Write `PROGRESS.md` (see §9) so future sessions resume cheaply.
-
-**Running total: ~$95–120** — matches the $100 budget with a small buffer either way depending on how milestone 5 lands.
+Details, curl-verified flows, and incidents: **[PROGRESS.md](PROGRESS.md)**.
 
 ---
 
-## 8. Later phases (not in current budget — for when you top up)
+## 10. Later phases (when budget tops up)
 
-### Phase 2 — Realtime + commerce
-- `realtime` module: WebSocket chat (DynamoDB-backed), matching `WorldChatView`/`WorldConversation`/`WorldMessage` — polls, reactions, replies, typing indicators.
-- `economy` module: marketplace (`Product`, seller chat).
-- `delivery` module: restaurant catalog, cart, orders (no live dispatch yet — order status only).
-- Stripe + Stripe Connect integration; ledger table for reconciliation.
-- OpenSearch wired up as a real `search` consumer of the `PostCreated`/`ProductCreated` events already being published since Milestone 2.
-- `partner` module: driver/courier onboarding + KYC document upload workflow.
+### Phase 2 — Messaging first (preferred next slice)
 
-### Phase 3 — Dispatch + AI
-- Redis geo-dispatch engine shared by `delivery` and `travel` — courier/driver matching, live position tracking.
-- `travel` module: ride-hailing on top of the shared dispatch engine.
-- `assistant` module: Madeleine on Bedrock, streamed over the existing WebSocket, DynamoDB conversation memory.
-- Video pipeline: S3 → MediaConvert → HLS → CloudFront for user-generated Shorts/GojoTV content (today these use pre-supplied remote videos).
+Deepen **one** product loop: **My World**.
 
-### Phase 4 — Extract what's earned it
-By this point, natural extraction candidates (in likely order): `realtime` (already semi-separate on DynamoDB), the shared dispatch engine (`delivery` + `travel`), then `media`/video processing (different scaling profile — CPU/GPU-heavy transcoding vs. request-response API traffic). Extraction is cheap specifically because of the schema-per-module and event-driven discipline established in Phase 1 — each becomes its own Spring Boot service pointed at its own already-isolated data, communicating over the same event contracts that already existed in-process.
+- Platform `messaging`: WebSocket gateway, DynamoDB conversations/messages, typing, reactions, polls, send-later, attachments (reuse `media` presign). **M1 deployed (2026-07-23):** durable writes in the Spring `messaging` module over a DynamoDB single table; API Gateway WebSocket for server→client fan-out (`$connect`/`$disconnect` Lambdas own only the connection registry, keyed by Cognito subject); `Fanout` pushes via `@connections`. See PROGRESS.md "Phase 2 · Milestone 1".
+- Wire `MyWorldView` / `WorldChatView` / contacts / circles off SampleData. **M1 built:** live threads coexist with the demo — live send-over-REST/receive-over-socket (text/media/poll/reactions/read/typing), the fake auto-reply suppressed for live threads; phone number or `@handle` → real 1:1.
+- **My World identity (WhatsApp model, M1 deployed):** My World is a phone-verified space separate from the app/social account. First entry runs a setup (intro pages → phone OTP → World name/avatar), gated by `GET /v1/world/me`; the World profile (phone-keyed, own name+avatar) lives in the `messaging` module + DynamoDB and decorates conversation/message display. OTP over SNS SMS with a dev-code fallback while SNS is sandboxed.
+- Profile DMs on the same module.
+- Platform `notifications`: persist `ActivityItem`-shaped rows from `UserFollowed` / `PostLiked`-style events; in-app `ActivityView` first, APNs second. **M2 built (deployed):** `notifications` module consumes `UserFollowed`/`PostLiked`/`PostCommented` (AFTER_COMMIT listeners) → Postgres rows; `GET /v1/notifications`, unread-count, mark-read; `ActivityView` live. **M3 built (deployed, config-gated):** direct-APNs sender + device-token registration over those rows; iOS remote-notification registration. Activates when an Apple `.p8` key is set (see PROGRESS.md APNs checklist) + tested on a device.
+- **Messaging polish (M3, live + complete):** reply-to linking, outbound typing, **send-later over the wire** (DynamoDB pending partition + a `@Scheduled` claim-and-deliver poller), **World-name reply snippets**, **backend group creation** (comma-separated recipients → 3+ participants). Live video uploads its poster frame (streamable in-chat playback stays with Phase 3's UGC video pipeline). Also fixed in the audit: profile edits + avatar upload now persist to the backend. Still open by design: streamable chat video (Phase 3), and per-message send-later precision is bounded by the 30s poller.
+- Optional thin OpenSearch for people/handles only — full commerce search waits. **(not in M1)**
+
+**M1 deferred to M2:** send-later over the wire (currently local-only for live threads), server-side reply-to linking (snippet renders sender-side only), outbound typing on keystroke, group/circle creation UI against the backend, and APNs. Live video-attachment upload is stubbed (photos/carousel upload works).
+
+**Defer in this phase:** Stripe, delivery catalog, economy listings, partner KYC — unless a specific paid milestone says otherwise. Spreading across all of old “Phase 2” burns budget without a shippable loop.
+
+### Phase 2b — Commerce (after messaging is live)
+
+- `economy`: products, sell flow, seller chat via messaging API.
+- `delivery`: catalog, cart, order status (no live geo-dispatch yet).
+- Stripe + Connect; `payments` ledger.
+- OpenSearch consumer for `PostCreated` / `ProductCreated`.
+- `partner`: onboarding + KYC document upload.
+
+### Phase 3 — Dispatch + AI + video pipeline
+
+- Explicit platform **`dispatch`** module (Redis geo) used by `delivery` and `travel`.
+- `travel` ride-hailing on dispatch; client keeps Mapbox for map UX.
+- `assistant`: Madeleine on Bedrock over existing WebSocket; DynamoDB memory; co-watch rooms.
+- UGC video: S3 → MediaConvert → HLS → CloudFront.
+- Profile Home block persistence under `profile`.
+
+### Phase 4 — Extract what earned it
+
+Likely order: `messaging` (already DynamoDB-heavy) → `dispatch` → `media` transcoding workers. Same event contracts; new deployables only when scaling or failure isolation demands it.
 
 ---
 
-## 9. Session-to-session continuity
+## 11. Session-to-session continuity
 
-Maintain a `PROGRESS.md` at the repo root (created at the end of Milestone 5, updated at the end of every future milestone) recording: what's deployed, what's stubbed, known issues, and the next milestone to run. Each new Claude Code session should read `PROGRESS.md` first rather than re-deriving context — this is what keeps later sessions cheap.
+1. Read **[PROGRESS.md](PROGRESS.md)** first (what’s deployed, stubs, next action).
+2. Use this file for **boundaries and sequencing**, not for live URLs or incident history.
+3. Update `PROGRESS.md` at the end of every milestone; update this file when module ownership or phase order changes.
 
 ---
 
-## 10. Cost notes
+## 12. Cost notes
 
-- Claude usage: this plan assumes Sonnet 5 for nearly all sessions (~$8–20/session at current pricing), escalating to Opus/Fable only for genuinely hard debugging. Estimated 8–12 sessions to clear Milestones 1–5.
-- AWS runtime cost at this dev scale: roughly $15–30/month (small RDS instance + App Runner + S3/CloudFront), well within typical free-tier/dev budgets — separate from the Claude credit and billed directly by AWS.
+- Claude: prefer a capable default model per session; escalate only when stuck. Phase 1 took on the order of several focused sessions; Phase 2 messaging will be similar or larger because of WebSockets.
+- AWS at current scale: roughly tens of dollars/month (App Runner + RDS + S3). Pause App Runner when idle. CloudFront waits on account verification (see `PROGRESS.md`).
+- Prefer **one deep vertical per top-up** over parallel half-wired commerce surfaces.

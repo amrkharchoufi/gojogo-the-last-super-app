@@ -35,8 +35,17 @@ final class APIClient {
         _ = try await raw("POST", path, body: nil)
     }
 
+    /// POST a JSON body to an endpoint that returns no content (204).
+    func postNoContent(_ path: String, body: some Encodable) async throws {
+        _ = try await raw("POST", path, body: try encoder.encode(body))
+    }
+
     func patch<T: Decodable>(_ path: String, body: some Encodable) async throws -> T {
         try await request("PATCH", path, body: try encoder.encode(body))
+    }
+
+    func put<T: Decodable>(_ path: String, body: some Encodable) async throws -> T {
+        try await request("PUT", path, body: try encoder.encode(body))
     }
 
     func delete(_ path: String) async throws {

@@ -29,20 +29,16 @@ struct WelcomeView: View {
                                 .font(.system(size: 22, weight: .medium))
                                 .foregroundStyle(.white)
                         } action: {
-                            // Social sign-in isn't wired yet — email is the real flow.
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                app.phase = .email
-                            }
+                            // Native Sign in with Apple → backend token exchange.
+                            app.signInWithApple()
                         }
 
                         authCircle {
                             GoogleMark()
                                 .frame(width: 22, height: 22)
                         } action: {
-                            // Social sign-in isn't wired yet — email is the real flow.
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                app.phase = .email
-                            }
+                            // Google via Cognito Hosted UI (ASWebAuthenticationSession).
+                            app.signInWithGoogle()
                         }
 
                         authCircle {
@@ -55,6 +51,16 @@ struct WelcomeView: View {
                             }
                         }
                     }
+                    .opacity(app.authBusy ? 0.35 : 1)
+                    .disabled(app.authBusy)
+
+                    if let error = app.authError {
+                        Text(error)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color(hex: "FF7A7A"))
+                            .multilineTextAlignment(.center)
+                            .transition(.opacity)
+                    }
 
                     legalFooter
                 }
@@ -63,7 +69,24 @@ struct WelcomeView: View {
                 .offset(y: appear ? 0 : 10)
                 .animation(.easeOut(duration: 0.6).delay(0.12), value: appear)
             }
+
+            if app.authBusy {
+                ZStack {
+                    GGColor.black.opacity(0.55).ignoresSafeArea()
+                    VStack(spacing: 14) {
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(1.3)
+                        Text("Signing you in…")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(GGColor.textSecondary)
+                    }
+                }
+                .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.25), value: app.authBusy)
+        .animation(.easeInOut(duration: 0.25), value: app.authError)
         .onAppear { appear = true }
     }
 

@@ -1,7 +1,9 @@
 package com.gojogo.profile.internal;
 
 import com.gojogo.profile.ProfileApi;
+import com.gojogo.profile.ProfileAvatarChanged;
 import com.gojogo.profile.ProfileDto;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,9 +22,11 @@ import java.util.stream.Collectors;
 class ProfileService implements ProfileApi {
 
     private final UserProfileRepository repository;
+    private final ApplicationEventPublisher events;
 
-    ProfileService(UserProfileRepository repository) {
+    ProfileService(UserProfileRepository repository, ApplicationEventPublisher events) {
         this.repository = repository;
+        this.events = events;
     }
 
     @Override
@@ -86,7 +90,11 @@ class ProfileService implements ProfileApi {
             profile.setBirthYear(request.birthYear());
         }
         if (request.avatarUrl() != null) {
-            profile.setAvatarUrl(request.avatarUrl().isBlank() ? null : request.avatarUrl());
+            String avatar = request.avatarUrl().isBlank() ? null : request.avatarUrl();
+            profile.setAvatarUrl(avatar);
+            if (avatar != null) {
+                events.publishEvent(new ProfileAvatarChanged(profile.getId(), avatar));
+            }
         }
         if (request.interests() != null) {
             profile.setInterests(request.interests());

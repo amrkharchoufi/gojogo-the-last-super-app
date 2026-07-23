@@ -10,6 +10,20 @@ struct SessionDTO: Decodable {
     var handle: String?
 }
 
+// Native Apple sign-in exchange (POST /v1/auth/apple).
+struct AppleAuthBody: Encodable {
+    var identityToken: String
+    var rawNonce: String
+    var fullName: String?
+}
+
+struct AppleTokenDTO: Decodable {
+    var idToken: String
+    var accessToken: String
+    var refreshToken: String?
+    var expiresIn: Int
+}
+
 struct ProfileDTO: Decodable {
     var id: UUID
     var cognitoSub: String
@@ -133,6 +147,40 @@ struct PresignDTO: Decodable {
     var publicUrl: String
     var contentType: String
     var expiresSeconds: Int
+}
+
+// MARK: - Notifications (activity feed)
+
+struct NotificationActorDTO: Decodable {
+    var id: UUID
+    var name: String?
+    var handle: String?
+    var avatarUrl: String?
+}
+
+struct NotificationDTO: Decodable {
+    var id: UUID
+    var type: String
+    var actor: NotificationActorDTO
+    var postId: UUID?
+    var commentId: UUID?
+    var text: String
+    var createdAt: String
+    var read: Bool
+}
+
+struct NotificationsPageDTO: Decodable {
+    var items: [NotificationDTO]
+    var nextBefore: String?
+}
+
+struct UnreadCountDTO: Decodable {
+    var count: Int
+}
+
+struct RegisterPushBody: Encodable {
+    var token: String
+    var platform: String
 }
 
 // MARK: - Backend timestamps

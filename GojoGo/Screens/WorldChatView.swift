@@ -595,7 +595,7 @@ struct WorldChatView: View {
     }
 
     private func photoBubble(_ msg: WorldMessage) -> some View {
-        MediaImage(data: msg.imageData, cornerRadius: 18)
+        MediaImage(url: msg.imageURL, data: msg.imageData, cornerRadius: 18)
             .frame(maxWidth: 240)
             .frame(height: 260)
             .overlay {
@@ -859,6 +859,7 @@ struct WorldChatView: View {
                         .tint(IMColor.blue)
                         .padding(.leading, 16)
                         .padding(.vertical, 10)
+                        .onChange(of: app.worldDraft) { _, _ in app.worldTypingChanged() }
 
                     if canSend {
                         Button {
@@ -992,7 +993,7 @@ private struct ChatCarouselBubble: View {
             TabView(selection: $page) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     ZStack {
-                        MediaImage(data: item.imageData, cornerRadius: 0)
+                        MediaImage(url: item.imageURL, data: item.imageData, cornerRadius: 0)
                             .frame(width: width, height: height)
                             .clipped()
 
