@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct EconomyView: View {
     @EnvironmentObject var app: AppState
@@ -732,6 +733,8 @@ struct SellListingSheet: View {
     @State private var category = "Home"
     @State private var notes = ""
     @State private var posted = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var photoData: Data?
 
     var body: some View {
         NavigationStack {
@@ -740,6 +743,8 @@ struct SellListingSheet: View {
                     Text("List something nearby")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(GGColor.textPrimary)
+
+                    photoPicker
 
                     field("Title", text: $title)
                     field("Price", text: $price)
@@ -762,22 +767,9 @@ struct SellListingSheet: View {
 
                     Button {
                         guard !title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                        let listing = Product(
-                            name: title,
-                            price: price.isEmpty ? "$—" : (price.hasPrefix("$") ? price : "$\(price)"),
-                            meta: "you · just now",
-                            gradient: app.user.avatarGradient,
-                            category: category,
-                            seller: app.user.handle,
-                            condition: "Like new",
-                            distance: "0 km",
-                            description: notes.isEmpty ? "Listed by you on GojoGo Economy." : notes
-                        )
-                        withAnimation {
-                            app.products.insert(listing, at: 0)
-                            posted = true
-                        }
-                        app.schedulePersist()
+                        app.createListing(title: title, price: price, category: category,
+                                          notes: notes, imageData: photoData)
+                        withAnimation { posted = true }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                             app.showSellSheet = false
                         }
@@ -798,6 +790,38 @@ struct SellListingSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Close") { app.showSellSheet = false }
                         .foregroundStyle(GGColor.textSecondary)
+                }
+            }
+        }
+    }
+
+    private var photoPicker: some View {
+        PhotosPicker(selection: $photoItem, matching: .images) {
+            ZStack {
+                if let photoData, let image = UIImage(data: photoData) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    VStack(spacing: 6) {
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 22))
+                        Text("Add a photo")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundStyle(GGColor.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 150)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.1)
+        }
+        .buttonStyle(.plain)
+        .onChange(of: photoItem) { _, item in
+            Task {
+                if let data = try? await item?.loadTransferable(type: Data.self) {
+                    photoData = data
                 }
             }
         }

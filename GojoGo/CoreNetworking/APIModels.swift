@@ -47,6 +47,25 @@ struct UpdateProfileBody: Encodable {
     var interests: [String]?
 }
 
+// MARK: - Username (handle) change
+
+struct ChangeHandleBody: Encodable {
+    var handle: String
+}
+
+struct HandleAvailabilityDTO: Decodable {
+    var available: Bool
+    var reason: String   // "ok" | "taken" | "invalid" | "current"
+    var normalized: String
+}
+
+struct HandleStatusDTO: Decodable {
+    var handle: String
+    var handleChangedAt: String?
+    var changeAvailableAt: String?  // nil => can change now
+    var canChangeNow: Bool
+}
+
 struct ProfileViewDTO: Decodable {
     var id: UUID
     var name: String

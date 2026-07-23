@@ -48,6 +48,12 @@ class UserProfile {
     @Column(name = "avatar_url")
     private String avatarUrl;
 
+    @Column(name = "handle_changed_at")
+    private OffsetDateTime handleChangedAt;
+
+    @Column(name = "handle_change_count", nullable = false)
+    private int handleChangeCount;
+
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "user_interest", schema = "profile",
         joinColumns = @JoinColumn(name = "profile_id"))
@@ -138,6 +144,23 @@ class UserProfile {
 
     void setAvatarUrl(String avatarUrl) {
         this.avatarUrl = avatarUrl;
+    }
+
+    OffsetDateTime getHandleChangedAt() {
+        return handleChangedAt;
+    }
+
+    void setHandleChangedAt(OffsetDateTime handleChangedAt) {
+        this.handleChangedAt = handleChangedAt;
+    }
+
+    int getHandleChangeCount() {
+        return handleChangeCount;
+    }
+
+    void recordHandleChange() {
+        this.handleChangedAt = OffsetDateTime.now();
+        this.handleChangeCount++;
     }
 
     void setInterests(Set<String> interests) {

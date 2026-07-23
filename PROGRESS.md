@@ -13,7 +13,7 @@ These are the only open items that require you personally; everything else in Ph
 5. **Cost/scaling decisions** — RDS is publicly reachable (a NAT Gateway ~$32/mo removes that); App Runner bills ~24/7 (`aws apprunner pause-service` when idle). Your call.
 6. **Git** — nothing has been committed this session; commit when you're happy.
 
-Rare/edge (decide if you care): account-linking is one-directional (Google-first → later email self-signup on the same address fails) and orphaned media uploads are never cleaned up — **both now have code pending live verification** (see Known issues): a clearer `PreSignUp_SignUp` error, and a report-only orphan sweep with reference tracking.
+Rare/edge (decide if you care): account-linking is one-directional (Google-first → later email self-signup on the same address fails) and orphaned media uploads are never cleaned up — **both deployed 2026-07-23, pending behavioral E2E** (see Known issues): a clearer `PreSignUp_SignUp` error, and a report-only orphan sweep with reference tracking.
 
 ## Environment — ready
 
@@ -24,6 +24,7 @@ Rare/edge (decide if you care): account-linking is one-directional (Google-first
 
 ## Milestone status
 
+- [x] **Phase 2b · Milestone 1 — Economy marketplace** ✅ **deployed + verified (2026-07-23)** — new backend `economy` vertical module (Postgres `economy` schema, Flyway `V6__economy.sql`): listings CRUD, browse (keyset pagination + category filter), save/unsave, mine/saved, publishes `ListingCreated` for the future search index. iOS `EconomyStore` + `AppState+Economy` wire `EconomyView`/`SellListingSheet` to the live catalog (sell-with-photo, save-sync); SampleData is the offline fallback. Two-user prod curl E2E green (create ±price, seller-decorated browse, category filter, save/`/saved`/`/mine`, unsave, 403 non-owner delete, 204→404). Fixed a save-count double-bump found in the first E2E (see incidents log). Seller-chat-over-messaging + Stripe/payments are the next 2b slices. See the Phase 2b M1 section below.
 - [x] **Milestone 1 — Backend skeleton + auth** ✅
 - [x] **Milestone 2 — Profiles + social API** ✅
 - [x] **Milestone 3 — Media upload** ✅ (CloudFront deferred — see known issues)
@@ -61,6 +62,7 @@ Rare/edge (decide if you care): account-linking is one-directional (Google-first
 - `POST /v1/auth/session` — create-or-fetch profile; returns profileId/handle
 - `POST /v1/auth/apple` (**public**) — native Sign in with Apple: validates Apple's identity token, admin-creates/links the Cognito user, returns a Cognito token set `{idToken, accessToken, refreshToken, expiresIn}`
 - `GET|PATCH /v1/profiles/me` — own profile (displayName, handle, bio, category, birthYear, avatarUrl, interests; PATCH = null field means unchanged; 409 on taken handle)
+- `PUT /v1/profiles/me/handle` `{handle}` — change username (2-month cooldown after the free sets; 429 too-soon / 409 taken / 400 too-short) · `GET /v1/profiles/me/handle-status` → `{handle, handleChangedAt, changeAvailableAt, canChangeNow}` · `GET /v1/profiles/me/handle-available?handle=` → `{available, reason, normalized}` (reason ok|taken|invalid|current). See "Username change" below.
 - `GET /v1/profiles/{id}` — profile view with postCount/followerCount/followingCount/isOwn/following
 - `GET /v1/profiles/{id}/posts` · `POST|DELETE /v1/profiles/{id}/follow`
 - `GET /v1/feed?before=<ISO8601>&limit=` — keyset-paginated; following+own, falls back to global recency when following no one; `nextBefore` cursor
@@ -226,7 +228,57 @@ Platform `notifications` (ARCHITECTURE.md §10) — the **first consumer of the 
 
 **Verified (2026-07-23):** A self-likes → no notification; B follows + likes + comments on A → A's `unread-count` = 3, feed shows comment/like/follow newest-first with actor + text; mark-read → count 0. Scratchpad `verify_notifications.sh`.
 
+## Phase 2b · Milestone 1 — Economy marketplace (deployed + verified 2026-07-23)
+
+First slice of Phase 2b commerce (ARCHITECTURE.md §10). The `economy` **vertical** owns its listing data, decorates sellers via the `profile` public API, marks listing images referenced via `media`, and publishes a domain event for the future search index. No new AWS infra — reuses RDS; Flyway `V6__economy.sql` runs on startup (creates the `economy` schema).
+
+**Backend — `com.gojogo.economy` module** (new): entities `Listing` / `ListingMedia` / `SavedListing`; `ListingService` (auth = seller-scoped for delete; save is idempotent); `EconomyController`; `EconomyCurrentProfile` (uniquely named — **not** `CurrentProfile[s]`, per the notifications bean-collision incident). Publishes `com.gojogo.economy.ListingCreated` on create (no consumer yet — mirrors `social.PostCreated`, first consumer = OpenSearch in a later 2b slice).
+
+Schema (`economy` schema, no cross-schema FKs — seller_id/user_id are plain UUIDs):
+
+| Table | Columns |
+|---|---|
+| `economy.listing` | id, seller_id, title, price_cents (nullable = "on ask"), currency, category, condition, location_label, description, active, save_count, created_at |
+| `economy.listing_media` | id, listing_id (FK, cascade), sort_order, image_url |
+| `economy.saved_listing` | listing_id (FK) + user_id PK, created_at |
+
+**API surface** (all Bearer-authed):
+- `GET /v1/economy/listings?category=&before=<ISO8601>&limit=` — active listings, keyset-paginated (createdAt desc), optional category filter, `nextBefore` cursor, seller-decorated + `saved`/`isOwn`
+- `GET /v1/economy/listings/{id}` · `POST /v1/economy/listings` (sell) · `DELETE /v1/economy/listings/{id}` (owner only)
+- `POST|DELETE /v1/economy/listings/{id}/save` (bump/decrement save_count, idempotent)
+- `GET /v1/economy/listings/mine` · `GET /v1/economy/saved`
+
+**iOS** — `EconomyModels` (DTOs) + `EconomyStore` (REST + DTO→`Product` mapping; price cents↔display string, stable seller gradient, `remoteListingIds` gate) + `AppState+Economy.swift`. On `connectBackend` → `refreshEconomy()` replaces the SampleData catalog with live listings (newest = featured hero, rest = grid); an empty prod keeps the samples. `SellListingSheet` now has a `PhotosPicker` and routes publish → `createListing` (uploads the photo via `media/presign`, POSTs the listing); `toggleSaveProduct` → `syncListingSave` for server-backed products. Offline degrades to the local draft/sample path.
+
+**Verified (2026-07-23):** backend `mvn -Dtest=ModularityTests test` green under Corretto 21 (module boundaries intact); iOS `xcodebuild -scheme GojoGo -sdk iphonesimulator` → `BUILD SUCCEEDED`. **Prod two-user curl E2E green** (test users A=`gojogo-m1-test@example.com` / B=`gojogo-m2-bob@example.com`, `TestPass123456!`): A creates a listing with price + a second "on ask" (null price) → B's browse shows it seller-decorated (`isOwn=false`, `saved=false`) → category=Cameras filter returns it → B saves (idempotent, 3× → `save_count`=1 after the fix) → B's `/saved` returns it → A's `/mine` returns both → B unsaves (`/saved` empties, count→0) → B deleting A's listing → **403** → A deletes → **204**, subsequent GET → **404**. Test listings cleaned up afterward. Scratchpad `verify_economy.sh` + `verify_savecount.sh` (session-local).
+
+### Deploy runbook (executed 2026-07-23; repeat after backend changes)
+
+```
+# 1. Backend only (no CDK/infra change — economy adds no AWS resources):
+export JAVA_HOME=/Users/mac/Library/Java/JavaVirtualMachines/corretto-21.0.5/Contents/Home
+cd backend && mvn -B -DskipTests compile jib:build \
+  -Djib.image=578109959809.dkr.ecr.us-east-1.amazonaws.com/gojogo-backend:latest \
+  -Djib.to.auth.username=AWS -Djib.to.auth.password="$(aws ecr get-login-password --region us-east-1)"
+# 2. Roll App Runner (V6 Flyway migration applies on startup):
+aws apprunner start-deployment --service-arn arn:aws:apprunner:us-east-1:578109959809:service/gojogo-backend/a33d8b2ac276407babdfdb27a5c2a940
+```
+
+**Deferred (next 2b slices):** seller-chat over the `messaging` API (needs a messaging public API + economy thread metadata; the current in-app seller chat stays the local canned demo), Stripe + Connect checkout + `payments` ledger, the OpenSearch consumer of `ListingCreated`, and economy listing pagination in the grid UI (`loadMoreEconomyIfNeeded` exists but the grid caps at 8 cards today).
+
+## Username change — 2-month cooldown with grace (deployed + verified 2026-07-23)
+
+Users can change their `@handle` from **Edit profile → Username**. Policy: the **first two sets are free** (the onboarding pick + one grace change — e.g. to fix a typo), after which a change is allowed **once every 2 calendar months**. Enforced entirely server-side in the `profile` module (Flyway `V7` adds `handle_changed_at` + `handle_change_count` to `profile.user_profile`; no new AWS infra).
+
+- **One central guard** (`ProfileService.applyHandleChange`) runs for **both** `PATCH /v1/profiles/me` and the dedicated `PUT /v1/profiles/me/handle` — so the cooldown can't be bypassed via PATCH. Rules: no-op if unchanged (doesn't consume a free set); free while `handle_change_count < 2`; after that requires `now ≥ handle_changed_at + 2 months`; target must be valid + un-taken. `409` taken / `429` cooldown (message carries the next-eligible date) / `400` too short. The auto-generated signup handle is not a user change (count starts 0).
+- **Availability + status endpoints**: `handle-available` (format + case-insensitive not-taken-by-another, `reason` ok|taken|invalid|current) and `handle-status` (`canChangeNow` / `changeAvailableAt`) drive the iOS UI gate.
+- **iOS** — [ChangeUsernameSheet](GojoGo/Screens/ChangeUsernameSheet.swift): debounced live availability (green available / red taken / neutral "current"), a cooldown banner + disabled field when gated, "Save username" → `AppState.changeUsername` (`PUT`, surfaces the backend 429/409 message). Wired into [EditProfileSheet](GojoGo/Screens/ActivityView.swift) (replaced the old "handle can't be changed in the prototype" placeholder). `ProfileStore.handleStatus/checkHandle/changeHandle` + DTOs added.
+
+**Verified (2026-07-23)** — non-destructive prod E2E on user A (`verify_handle.sh`, session-local): availability check returns current/taken/invalid/ok correctly; change to a taken handle → **409**; free set #1 (change away) → 200, still `canChangeNow=true`; grace set #2 (change back, restores A) → 200, then `canChangeNow=false` with `changeAvailableAt` = +2 months; 3rd change → **429** (read-only reject, A unchanged); no-op PUT of the current handle → 200 (not rate-limited); A's handle restored to `gojogom1test` at the end (A's `handle_change_count` is now 2, so A is gated until 2026-09-23 — a real test-data side effect, harmless to other flows).
+
 ## Incidents & fixes log
+
+- **Economy save-count double-bump (2026-07-23, caught in the first E2E, fixed before sign-off):** `ListingService.save` used `saveAndFlush(new SavedListing(...))` in a `try/catch (DataIntegrityViolationException)` to be idempotent, then `bumpSaveCount(+1)`. But `SavedListing` (like `PostLike`/`PostBookmark`/`CommentLike`) uses an `@IdClass` with **assigned** (non-generated) ids, so Spring Data `save()` runs a JPA **merge** (select-then-update), *not* a persist/insert — a duplicate save never throws, silently UPDATEs the row, and the count bumps again (E2E showed `save_count`=2 after two saves). **Fixed** by guarding on `saves.existsById(new SavedListing.Key(...))` before the save+bump (try/catch kept only as a concurrent-insert backstop). Re-verified 3× save → count 1. **Lesson:** for assigned-id join entities, don't rely on a duplicate-key exception for idempotency — check existence first. The **same latent bug exists in `social`** (`PostService.like`/`bookmark`, `CommentService.like`) — flagged as a separate task (pre-existing; the double-like count case was never exercised).
 
 - **Notifications deploy (2026-07-23):** first roll **auto-rolled-back** — startup `ConflictingBeanDefinitionException`: both `messaging.internal.CurrentProfile` and `notifications.internal.CurrentProfile` took the default bean name `currentProfile`. Neither `mvn compile` nor the `ModularityTests` boot the full Spring context, so it only surfaced at runtime; App Runner's health check caught it and rolled back to the prior image (no downtime — `/v1/world/*` kept serving). Fixed by renaming to `NotificationCurrentProfile`. **Lesson:** two `@Component`s with the same simple class name across modules collide; keep bean class names unique (or set an explicit `@Component("name")`).
 
@@ -244,8 +296,8 @@ Platform `notifications` (ARCHITECTURE.md §10) — the **first consumer of the 
 - **Signup requires `admin-confirm-sign-up`** or emailed code — decide UX before launch.
 - Feed `following` decoration loads the full followee id set per request — fine now, cache/join later.
 - App Runner bills ~24/7 (~$25/mo with RDS); `aws apprunner pause-service` when idle.
-- **Account linking is one-directional** (email → federated). The Lambda links a *new* Google/Apple sign-in to an *existing* email user. The reverse — someone who used **Google first** and later tries to **self-sign-up with email/password** on the same address — still hits the email-alias uniqueness and fails at sign-up (they should keep using Google). **Code added, pending live verification:** a `PreSignUp_SignUp` handler in [auth-triggers/index.mjs](infra/lambda/auth-triggers/index.mjs) now detects the pre-existing federated user and returns a clear "continue with Google/Apple" message instead of an opaque Cognito failure (it can't silently merge — a native password can't be attached to a federation-only user from a trigger). **To ship:** `cdk deploy GojoGoAuthStack`, then E2E-test Google-first-then-email-signup on device and confirm the message renders in `CognitoAuthClient`. Still open by design: if Apple withholds the email (private-relay off), that Apple identity gets a synthetic `@appleid.gojogo` username and won't link to a real-email account.
-- **Media is served straight from S3** (public-read on `media/*`) until AWS Support verifies the account for CloudFront — see incidents log. **Orphan cleanup — code added, pending live verification:** presigned keys are now tracked in `media.upload_object` ([V5 migration](backend/src/main/resources/db/migration/V5__media_uploads.sql)); modules call `MediaApi.markReferenced` when they persist a URL (posts, stories, message attachments, social + World avatars); [MediaCleanupJob](backend/src/main/java/com/gojogo/media/internal/MediaCleanupJob.java) sweeps daily. **Ships report-only** (`MEDIA_CLEANUP_DELETE=false`): it logs the orphans it *would* delete and removes nothing. **To ship:** `cdk deploy GojoGoAppStack` (adds the S3 delete grant + env var), watch App Runner logs for `Media orphan sweep (report-only)` to confirm no in-use media is flagged, then set `MEDIA_CLEANUP_DELETE=true`. Note: pre-V5 uploads aren't tracked, so they're never flagged or deleted (conservative).
+- **Account linking is one-directional** (email → federated). The Lambda links a *new* Google/Apple sign-in to an *existing* email user. The reverse — someone who used **Google first** and later tries to **self-sign-up with email/password** on the same address — still hits the email-alias uniqueness and fails at sign-up (they should keep using Google). **Deployed 2026-07-23 (`GojoGoAuthStack`), pending behavioral E2E:** a `PreSignUp_SignUp` handler in [auth-triggers/index.mjs](infra/lambda/auth-triggers/index.mjs) now detects the pre-existing federated user and returns a clear "continue with Google/Apple" message instead of an opaque Cognito failure (it can't silently merge — a native password can't be attached to a federation-only user from a trigger). **To test:** Google-first-then-email-signup on device; confirm the message renders in `CognitoAuthClient`. Still open by design: if Apple withholds the email (private-relay off), that Apple identity gets a synthetic `@appleid.gojogo` username and won't link to a real-email account.
+- **Media is served straight from S3** (public-read on `media/*`) until AWS Support verifies the account for CloudFront — see incidents log. **Orphan cleanup — deployed 2026-07-23 (`GojoGoAppStack` + backend image; V5 migration applied, health UP), running report-only:** presigned keys are now tracked in `media.upload_object` ([V5 migration](backend/src/main/resources/db/migration/V5__media_uploads.sql)); modules call `MediaApi.markReferenced` when they persist a URL (posts, stories, message attachments, social + World avatars); [MediaCleanupJob](backend/src/main/java/com/gojogo/media/internal/MediaCleanupJob.java) sweeps daily at 03:30 UTC. Live env `MEDIA_CLEANUP_DELETE=false` → it logs the orphans it *would* delete and removes nothing. **To enable deletion:** after the daily sweep, check App Runner logs for `Media orphan sweep (report-only)` and confirm no in-use media is flagged, then set `MEDIA_CLEANUP_DELETE=true`. Note: pre-V5 uploads aren't tracked, so they're never flagged or deleted (conservative).
 - **My World OTP has a dev bypass code** `WORLD_OTP_DEV_CODE=424242` (App Runner env, set in [app-stack.ts](infra/lib/app-stack.ts)) that verifies any number without a real SMS — because SNS SMS is almost certainly still in the account's **sandbox** (only verified destination numbers, ~$1/mo cap). Real delivery needs SNS SMS production access (AWS Support) + a registered origination/sender id; then **clear `WORLD_OTP_DEV_CODE`** before launch. The World profile is separate from the social profile by design (WhatsApp model).
 - **~~Simulator MCP panel blocked~~ (resolved)**: `xcode-select` now points at Xcode 26.2; the app builds via `xcodebuild`. Original note: `xcode-select` doesn't point at Xcode — fix with `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` (needs user password).
 - All milestone work is committed locally; push to GitHub when ready (`git push`).

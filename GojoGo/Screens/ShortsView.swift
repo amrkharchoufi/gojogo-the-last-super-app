@@ -13,7 +13,9 @@ struct ShortsView: View {
             let w = geo.size.width
 
             ZStack {
-                Color.black.ignoresSafeArea()
+                // Immersive black behind actual video; theme background for the
+                // empty state so light mode doesn't read as a broken black screen.
+                baseBackground.ignoresSafeArea()
 
                 if app.shorts.isEmpty {
                     GGEmptyState(
@@ -21,7 +23,6 @@ struct ShortsView: View {
                         title: "No Shorts yet",
                         message: "Vertical clips will appear here when people start posting."
                     )
-                    .foregroundStyle(.white)
                 } else {
                     // Only keep current ±1 mounted for smooth preload without thrashing.
                     ForEach(visibleIndices, id: \.self) { i in
@@ -94,7 +95,7 @@ struct ShortsView: View {
             .allowsHitTesting(true)
         }
         .ignoresSafeArea(edges: .bottom)
-        .background(Color.black.ignoresSafeArea())
+        .background(baseBackground.ignoresSafeArea())
         .onAppear { jumpToFocusedShort() }
         .onChange(of: app.shorts.first?.id) { _, _ in
             if app.focusedShortID == nil {
@@ -108,6 +109,11 @@ struct ShortsView: View {
         .onChange(of: app.shorts.count) { _, _ in
             index = min(index, max(app.shorts.count - 1, 0))
         }
+    }
+
+    /// Black for the immersive video feed; theme background when there's nothing to play.
+    private var baseBackground: Color {
+        app.shorts.isEmpty ? GGColor.bg : .black
     }
 
     private var visibleIndices: [Int] {

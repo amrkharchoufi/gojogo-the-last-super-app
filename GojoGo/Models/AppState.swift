@@ -22,6 +22,9 @@ final class AppState: ObservableObject {
     /// Keyset cursor for the next feed page; nil = no more pages.
     var feedNextBefore: String? = nil
     var feedLoadingMore: Bool = false
+    /// Keyset cursor for the next economy listings page; nil = no more pages.
+    var economyNextBefore: String? = nil
+    var economyLoadingMore: Bool = false
     /// Set on fresh signups so the onboarding flow runs before entering the app.
     var pendingOnboarding: Bool = false
 
@@ -548,9 +551,11 @@ final class AppState: ObservableObject {
         return worldContacts.first(where: { $0.id == cid })
     }
 
-    /// Full-screen My World surfaces that hide the mode tab bar (chat / contact).
+    /// Full-screen My World surfaces that hide the mode tab bar (setup / chat / contact).
+    /// The first-run setup flow owns its own bottom CTA, so the dock and its bottom
+    /// hit-testing shield must step aside or they cover "Get started".
     var isWorldImmersive: Bool {
-        navMode == .myWorld && (selectedWorldConversationID != nil || showWorldContact)
+        navMode == .myWorld && (needsWorldSetup || selectedWorldConversationID != nil || showWorldContact)
     }
 
     // MARK: My World — list filtering
@@ -2238,12 +2243,14 @@ final class AppState: ObservableObject {
         if featuredProduct.id == id {
             featuredProduct.saved.toggle()
             if browsingProduct?.id == id { browsingProduct?.saved = featuredProduct.saved }
+            syncListingSave(id, saved: featuredProduct.saved)
             schedulePersist()
             return
         }
         guard let i = products.firstIndex(where: { $0.id == id }) else { return }
         products[i].saved.toggle()
         if browsingProduct?.id == id { browsingProduct?.saved = products[i].saved }
+        syncListingSave(id, saved: products[i].saved)
         schedulePersist()
     }
 

@@ -26,6 +26,7 @@ extension AppState {
             backendConnected = true
             await refreshSocial()
             await refreshOwnCounts()
+            await refreshEconomy()
             await connectMessaging()
             await refreshNotifications()
             enablePushNotifications()
@@ -151,6 +152,24 @@ extension AppState {
                 #endif
             }
         }
+    }
+
+    /// Changes the username against the backend (2-month cooldown enforced
+    /// server-side) and updates local state. Throws the backend message on
+    /// failure (429 cooldown / 409 taken) so the caller can surface it.
+    func changeUsername(to handle: String) async throws {
+        guard backendConnected else {
+            // Offline / prototype: apply locally so the UI still reflects the change.
+            user.handle = handle
+            if profileUser?.isOwn == true { profileUser = .own(from: user, posts: myPosts.count) }
+            schedulePersist()
+            return
+        }
+        let profile = try await ProfileStore.shared.changeHandle(handle)
+        applyProfile(profile)
+        SocialStore.shared.myHandle = profile.handle
+        if profileUser?.isOwn == true { profileUser = .own(from: user, posts: myPosts.count) }
+        schedulePersist()
     }
 
     func refreshOwnCounts() async {

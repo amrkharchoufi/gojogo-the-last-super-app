@@ -212,6 +212,7 @@ struct EditProfileSheet: View {
     @State private var category = "Creator"
     @State private var avatarItem: PhotosPickerItem?
     @State private var avatarData: Data?
+    @State private var showChangeUsername = false
 
     private let categories = ["Creator", "Artist", "Athlete", "Founder", "Photographer", "Musician", "Personal"]
 
@@ -260,9 +261,27 @@ struct EditProfileSheet: View {
                         }
                     }
 
-                    Text("Handle @\(app.user.handle) can't be changed in the prototype.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(GGColor.textTertiary)
+                    Button {
+                        showChangeUsername = true
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Username")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(GGColor.textSecondary)
+                                Text("@\(app.user.handle)")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(GGColor.textPrimary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(GGColor.textTertiary)
+                        }
+                        .padding(14)
+                        .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.1)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(20)
             }
@@ -287,6 +306,9 @@ struct EditProfileSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .sheet(isPresented: $showChangeUsername) {
+            ChangeUsernameSheet().environmentObject(app)
+        }
         .onAppear {
             name = app.user.name
             bio = app.user.bio

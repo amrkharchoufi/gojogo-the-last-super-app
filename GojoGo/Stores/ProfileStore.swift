@@ -25,6 +25,24 @@ final class ProfileStore {
         return profile
     }
 
+    // MARK: Username change
+
+    func handleStatus() async throws -> HandleStatusDTO {
+        try await APIClient.shared.get("/v1/profiles/me/handle-status")
+    }
+
+    func checkHandle(_ handle: String) async throws -> HandleAvailabilityDTO {
+        let encoded = handle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? handle
+        return try await APIClient.shared.get("/v1/profiles/me/handle-available?handle=\(encoded)")
+    }
+
+    func changeHandle(_ handle: String) async throws -> ProfileDTO {
+        let profile: ProfileDTO = try await APIClient.shared.put(
+            "/v1/profiles/me/handle", body: ChangeHandleBody(handle: handle))
+        me = profile
+        return profile
+    }
+
     func view(_ id: UUID) async throws -> ProfileViewDTO {
         try await APIClient.shared.get("/v1/profiles/\(id.uuidString.lowercased())")
     }

@@ -57,7 +57,7 @@ Use **Spring Modulith** instead of folder-structure convention alone:
   2. **Asynchronous domain events** — e.g. `PostCreated`, `OrderPlaced`, `UserFollowed` via `@ApplicationModuleListener`. In-process now; SQS/EventBridge later is config, not a rewrite.
 - `@ApplicationModuleTest` boots one module in isolation — extraction stays low-risk.
 
-**Live packages today:** `com.gojogo.auth`, `profile`, `social`, `media`, `messaging`, `notifications` (plus app-level `SecurityConfig` / `ApiExceptionHandler`). `notifications` is the first cross-module event consumer (listens to `social`'s `UserFollowed` / `PostLiked` / `PostCommented`).
+**Live packages today:** `com.gojogo.auth`, `profile`, `social`, `media`, `messaging`, `notifications`, `economy` (plus app-level `SecurityConfig` / `ApiExceptionHandler`). `notifications` is the first cross-module event consumer (listens to `social`'s `UserFollowed` / `PostLiked` / `PostCommented`). `economy` is the first Phase 2b vertical — publishes `ListingCreated` (no consumer yet; the search index is a later 2b slice).
 
 ---
 
@@ -234,7 +234,7 @@ Deepen **one** product loop: **My World**.
 
 ### Phase 2b — Commerce (after messaging is live)
 
-- `economy`: products, sell flow, seller chat via messaging API.
+- `economy`: products, sell flow, seller chat via messaging API. **M1 deployed + verified (2026-07-23):** the `economy` vertical module (listings CRUD, browse/keyset pagination, save/unsave, mine/saved) + iOS wiring (`EconomyStore` / `AppState+Economy`, live catalog + sell-with-photo) are live in prod; publishes `ListingCreated`; two-user curl E2E green. Deferred to later 2b slices: seller-chat over the messaging API, and the OpenSearch consumer. See PROGRESS.md "Phase 2b · Milestone 1".
 - `delivery`: catalog, cart, order status (no live geo-dispatch yet).
 - Stripe + Connect; `payments` ledger.
 - OpenSearch consumer for `PostCreated` / `ProductCreated`.

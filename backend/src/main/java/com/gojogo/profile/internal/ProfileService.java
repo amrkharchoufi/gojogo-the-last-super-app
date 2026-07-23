@@ -5,9 +5,13 @@ import com.gojogo.profile.ProfileAvatarChanged;
 import com.gojogo.profile.ProfileDto;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.time.OffsetDateTime;
+import java.time.Period;
 import java.util.Collection;
 import java.util.Locale;
 import java.util.Map;
@@ -20,6 +24,12 @@ import java.util.stream.Collectors;
 
 @Service
 class ProfileService implements ProfileApi {
+
+    /** Once the free sets are used up, a handle change is allowed at most once per this window. */
+    private static final Period HANDLE_CHANGE_COOLDOWN = Period.ofMonths(2);
+    /** Free handle sets before the cooldown applies: the onboarding pick + one grace change. */
+    private static final int FREE_HANDLE_SETS = 2;
+    private static final int HANDLE_MIN_LENGTH = 2;
 
     private final UserProfileRepository repository;
     private final ApplicationEventPublisher events;
@@ -73,12 +83,8 @@ class ProfileService implements ProfileApi {
         if (request.displayName() != null) {
             profile.setDisplayName(request.displayName());
         }
-        if (request.handle() != null && !request.handle().equals(profile.getHandle())) {
-            String handle = normalizeHandle(request.handle());
-            if (repository.existsByHandle(handle)) {
-                throw new HandleTakenException(handle);
-            }
-            profile.setHandle(handle);
+        if (request.handle() != null) {
+            applyHandleChange(profile, request.handle());
         }
         if (request.bio() != null) {
             profile.setBio(request.bio());
@@ -100,6 +106,76 @@ class ProfileService implements ProfileApi {
             profile.setInterests(request.interests());
         }
         return toDto(repository.save(profile));
+    }
+
+    /** Dedicated username-change endpoint — same rules as PATCH, handle-only. */
+    @Transactional
+    ProfileDto changeHandle(String cognitoSub, String email, String requestedHandle) {
+        UserProfile profile = repository.findByCognitoSub(cognitoSub)
+            .orElseGet(() -> repository.saveAndFlush(new UserProfile(cognitoSub, email, generateHandle(email))));
+        applyHandleChange(profile, requestedHandle);
+        return toDto(repository.save(profile));
+    }
+
+    @Transactional(readOnly = true)
+    HandleStatusResponse handleStatus(String cognitoSub, String email) {
+        UserProfile profile = repository.findByCognitoSub(cognitoSub)
+            .orElseGet(() -> new UserProfile(cognitoSub, email, ""));
+        OffsetDateTime last = profile.getHandleChangedAt();
+        boolean inFreeTier = profile.getHandleChangeCount() < FREE_HANDLE_SETS;
+        OffsetDateTime availableAt = (inFreeTier || last == null) ? null : last.plus(HANDLE_CHANGE_COOLDOWN);
+        boolean canChangeNow = availableAt == null || !OffsetDateTime.now().isBefore(availableAt);
+        return new HandleStatusResponse(profile.getHandle(), last,
+            canChangeNow ? null : availableAt, canChangeNow);
+    }
+
+    @Transactional(readOnly = true)
+    HandleAvailabilityResponse handleAvailability(String cognitoSub, String rawHandle) {
+        String normalized = normalizeHandle(rawHandle == null ? "" : rawHandle);
+        if (normalized.length() < HANDLE_MIN_LENGTH) {
+            return new HandleAvailabilityResponse(false, "invalid", normalized);
+        }
+        String currentHandle = repository.findByCognitoSub(cognitoSub)
+            .map(UserProfile::getHandle).orElse(null);
+        if (normalized.equals(currentHandle)) {
+            return new HandleAvailabilityResponse(false, "current", normalized);
+        }
+        if (repository.existsByHandle(normalized)) {
+            return new HandleAvailabilityResponse(false, "taken", normalized);
+        }
+        return new HandleAvailabilityResponse(true, "ok", normalized);
+    }
+
+    /**
+     * Central handle-change guard — every path (PATCH, dedicated endpoint) goes
+     * through here so the cooldown can't be bypassed. Rules:
+     *   • no-op if the normalized handle equals the current one;
+     *   • the first {@link #FREE_HANDLE_SETS} sets are free (onboarding pick + one grace);
+     *   • after that, a change requires {@link #HANDLE_CHANGE_COOLDOWN} since the last change;
+     *   • the target must be a valid, un-taken handle.
+     */
+    private void applyHandleChange(UserProfile profile, String requestedHandle) {
+        String handle = normalizeHandle(requestedHandle);
+        if (handle.length() < HANDLE_MIN_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Username must be at least " + HANDLE_MIN_LENGTH + " characters (letters, numbers, _ or .).");
+        }
+        if (handle.equals(profile.getHandle())) {
+            return; // unchanged — not a "change", doesn't consume a free set or the cooldown
+        }
+        boolean inFreeTier = profile.getHandleChangeCount() < FREE_HANDLE_SETS;
+        OffsetDateTime last = profile.getHandleChangedAt();
+        if (!inFreeTier && last != null) {
+            OffsetDateTime availableAt = last.plus(HANDLE_CHANGE_COOLDOWN);
+            if (OffsetDateTime.now().isBefore(availableAt)) {
+                throw new HandleChangeCooldownException(availableAt);
+            }
+        }
+        if (repository.existsByHandle(handle)) {
+            throw new HandleTakenException(handle);
+        }
+        profile.setHandle(handle);
+        profile.recordHandleChange();
     }
 
     private String generateHandle(String email) {
