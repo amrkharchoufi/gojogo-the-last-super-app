@@ -149,6 +149,8 @@ final class AppState: ObservableObject {
     @Published var browsingProduct: Product? = nil
     @Published var sellerChat: [ChatMessage] = []
     @Published var sellerDraft: String = ""
+    /// A listing thread waiting on My World setup — opened once it completes.
+    var pendingSellerConversation: (id: UUID, draft: String)? = nil
     @Published var showSellSheet: Bool = false
     @Published var selectedTVShow: TVShow? = nil
     @Published var tvShows: [TVShow] = SampleData.tvShows
@@ -2343,7 +2345,18 @@ final class AppState: ObservableObject {
         browsingProduct = nil
     }
 
+    /// "Message seller". A live listing opens the real My World thread with the
+    /// seller; everything else (SampleData catalog, signed out) keeps the local
+    /// demo conversation so the marketplace still demos end to end.
     func openSellerChat(for product: Product) {
+        if canMessageSeller(product) {
+            openLiveSellerChat(for: product)
+            return
+        }
+        openLocalSellerChat(for: product)
+    }
+
+    func openLocalSellerChat(for product: Product) {
         messagingProduct = liveProduct(id: product.id) ?? product
         if sellerChat.isEmpty {
             sellerChat = [

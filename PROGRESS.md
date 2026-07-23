@@ -24,6 +24,7 @@ Rare/edge (decide if you care): account-linking is one-directional (Google-first
 
 ## Milestone status
 
+- [x] **Phase 2b · Milestone 2 — Seller chat over messaging** ✅ **deployed + verified (2026-07-24)** — new `MessagingApi` public interface (first cross-vertical use of the messaging module); `POST /v1/economy/listings/{id}/chat` opens/reuses the buyer↔seller 1:1 and returns a prefilled opener without posting anything; iOS "Message seller" now lands in the real My World thread. Two-user prod curl E2E green. See the Phase 2b M2 section below.
 - [x] **Phase 2b · Milestone 1 — Economy marketplace** ✅ **deployed + verified (2026-07-23)** — new backend `economy` vertical module (Postgres `economy` schema, Flyway `V6__economy.sql`): listings CRUD, browse (keyset pagination + category filter), save/unsave, mine/saved, publishes `ListingCreated` for the future search index. iOS `EconomyStore` + `AppState+Economy` wire `EconomyView`/`SellListingSheet` to the live catalog (sell-with-photo, save-sync); SampleData is the offline fallback. Two-user prod curl E2E green (create ±price, seller-decorated browse, category filter, save/`/saved`/`/mine`, unsave, 403 non-owner delete, 204→404). Fixed a save-count double-bump found in the first E2E (see incidents log). Seller-chat-over-messaging + Stripe/payments are the next 2b slices. See the Phase 2b M1 section below.
 - [x] **Phase 2 · Milestone 4 — My World chat attachments + realtime resilience** ✅ **deployed + verified (2026-07-24)** — voice notes (hold-to-record, waveform playback, `audio/m4a` upload), system-keyboard stickers, the real camera, and a real GPS location pin carried as a `geo:` URI. Socket hardened (ping/backoff/foreground re-dial + re-sync) and the thread merge now keeps on-device media. Also fixed a pre-existing bug that permanently broke a 1:1 after both sides left it (see incidents log). Two-user prod curl E2E green. See the Phase 2 M4 section below.
 - [x] **Milestone 1 — Backend skeleton + auth** ✅
@@ -290,7 +291,21 @@ cd backend && mvn -B -DskipTests compile jib:build \
 aws apprunner start-deployment --service-arn arn:aws:apprunner:us-east-1:578109959809:service/gojogo-backend/a33d8b2ac276407babdfdb27a5c2a940
 ```
 
-**Deferred (next 2b slices):** seller-chat over the `messaging` API (needs a messaging public API + economy thread metadata; the current in-app seller chat stays the local canned demo), Stripe + Connect checkout + `payments` ledger, the OpenSearch consumer of `ListingCreated`, and economy listing pagination in the grid UI (`loadMoreEconomyIfNeeded` exists but the grid caps at 8 cards today).
+**Deferred (next 2b slices):** ~~seller-chat over the `messaging` API~~ — **done in M2 below (2026-07-24)**. Still open: Stripe + Connect checkout + `payments` ledger, the OpenSearch consumer of `ListingCreated`, and economy listing pagination in the grid UI (`loadMoreEconomyIfNeeded` exists but the grid caps at 8 cards today).
+
+## Phase 2b · Milestone 2 — seller chat over messaging (deployed + verified 2026-07-24)
+
+Closes the marketplace loop: "Message seller" on a live listing now opens a **real My World thread** with the seller instead of the canned demo. No new AWS infra — this is the first cross-vertical use of the `messaging` module.
+
+**The module seam.** New public API [`MessagingApi`](backend/src/main/java/com/gojogo/messaging/MessagingApi.java) (module root, like `ProfileApi` / `MediaApi`) with exactly one method — `openDirectConversation(callerId, otherId)` — implemented by `MessagingApiAdapter` over the same `MessagingService` the REST controller uses, so a listing thread is indistinguishable from one started in My World (same 1:1 dedupe, same WebSocket fan-out). Verticals get "put these two people in a thread"; they don't get to drive chat. `ModularityTests` confirms `economy → messaging` goes through the public API only.
+
+**API** — `POST /v1/economy/listings/{id}/chat` → `{conversationId, sellerId, suggestedMessage}`; `400` on your own listing, `404` on an unknown one. It **posts nothing**: the opener ("Hi — is the Leica M6 (12 000 MAD) still available?", price omitted for "on ask") is prefilled in the buyer's composer, so browsing a listing never leaves the seller an empty thread and the buyer still chooses to send.
+
+**iOS** — `EconomyStore.startChat` + `ListingChatDTO`; the store now also tracks `ownListingIds` (from `isOwn`) so the detail sheet shows a flat "Your listing" instead of a Message button on your own item. `AppState.openSellerChat` routes: live listing + session → `openLiveSellerChat` (fetch the thread → refresh conversations → leave the marketplace → open the thread with the draft prefilled); anything else (SampleData catalog, signed out, or a failed call) keeps the local demo chat, so the button is never dead. A buyer who hasn't done My World setup has the thread **parked** and opened for them the moment setup completes.
+
+**Verified (2026-07-24)** — `ModularityTests` green (Corretto 21), iOS `xcodebuild` → BUILD SUCCEEDED, and a prod two-user curl E2E (`verify_seller_chat.sh`, session-local): A lists → B opens the chat (`sellerId` = A, opener `"Hi — is the Leica M6 (12,000 MAD) still available?"`) → asking again returns the **same** conversation → **three** opens add **zero** messages to the thread (17 → 17: nothing is posted on the buyer's behalf) → B sends the opener and it lands in **A's** list (`unread=1`, preview set) → A on their own listing → **400**, unknown listing → **404** → an "on ask" listing yields a price-free opener.
+
+**Deferred (next 2b slices):** Stripe + Connect checkout and the `payments` ledger, the OpenSearch consumer of `ListingCreated`, the `delivery` vertical, and listing-context metadata on the thread itself (the conversation carries no listing reference today — the opener text is the only link).
 
 ## Username change — 2-month cooldown with grace (deployed + verified 2026-07-23)
 
@@ -332,6 +347,14 @@ Users can change their `@handle` from **Edit profile → Username**. Policy: the
 
 ## To resume in a new session
 
-Phase 2 · **Milestones 1 (My World messaging + setup), 2 (notifications), 3 (APNs push + reply/typing polish), 4 (chat attachments + socket resilience) are deployed.** APNs is activated (key in Secrets Manager, verified against Apple) — only a physical-device test remains (enable Push on the App ID, run on a device). Remaining messaging polish (deferred): true send-later (needs a scheduler), backend-backed group/circle creation UI, live video-attachment upload, World-name reply snippets. Then **Phase 2b commerce** (economy/delivery/Stripe). Consider swapping the My World OTP to Twilio/Vonage Verify when going live (SMS provider options discussed 2026-07-23). Outstanding user-only actions: add `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` GitHub repo secrets (untested deploy workflow), ask AWS Support to verify the account for CloudFront. (`xcode-select` is now correctly pointed at Xcode 26.2 — the iOS app builds via `xcodebuild`; the live simulator MCP panel needs a booted simulator.)
+**Phase 2 is complete and deployed** — M1 (My World messaging + setup), M2 (notifications), M3 (APNs push + reply/typing/send-later polish), M4 (chat attachments + socket resilience). APNs is activated (key in Secrets Manager, verified against Apple); only a physical-device test remains (enable Push on the App ID, run on a device). **Phase 2b is under way** — M1 (economy marketplace) and M2 (seller chat over the messaging API) are live.
 
-**On-device / simulator My World check still pending** — the curl + Node WebSocket E2E passed, but the SwiftUI live path (real thread replacing SampleData in `MyWorldView`, `@handle`-start, socket-driven UI updates) hasn't been exercised in a running app. Worth a simulator pass next session with two signed-in identities.
+**Next 2b slices, in the order they make sense:**
+1. **Listing context on the thread** — the seller conversation currently carries no reference to the listing (the opener text is the only link). Needs a listing card/metadata on the conversation, which is also what payments will hang off.
+2. **Stripe + Connect checkout + a `payments` ledger** — needs your Stripe account and keys (user action) before anything can be built past the ledger schema.
+3. **`delivery` vertical** (catalog, cart, order status) — the other half of commerce; no external accounts needed.
+4. **OpenSearch consumer of `ListingCreated`** — a cost decision (an OpenSearch domain is ~$25+/mo on top of current spend), so it's your call whether it happens in 2b or waits.
+
+Also consider swapping the My World OTP to Twilio/Vonage Verify before going live (SMS provider options discussed 2026-07-23). Outstanding user-only actions: add `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` GitHub repo secrets (untested deploy workflow), ask AWS Support to verify the account for CloudFront, enable Push on the App ID + test on a device.
+
+**On-device / simulator check still pending** — every slice through 2b M2 is verified by build + prod curl (and a Node WebSocket client for fan-out), but the SwiftUI live paths have never been exercised in a running app: My World live threads replacing SampleData, socket-driven UI updates, the new attachment surfaces (hold-to-record, sticker keyboard, camera, location permission), and the Economy → seller-chat hand-off. Worth a simulator pass with two signed-in identities — note the camera and the system sticker keyboard need a **real device**, and the Simulator falls back to the photo library by design.

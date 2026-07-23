@@ -718,14 +718,43 @@ struct WorldChatView: View {
     }
 
     /// A shared pin: real coordinates, tappable straight through to Maps.
+    ///
+    /// A message with no coordinates gets a plain bubble rather than a map of
+    /// somewhere it isn't — older location messages were sent before the pin
+    /// carried a position, and drawing a default city for them is a lie.
     @ViewBuilder
     private func locationBubble(_ msg: WorldMessage) -> some View {
-        let coord = CLLocationCoordinate2D(
-            latitude: msg.latitude ?? app.selectedWorldContact?.latitude ?? 33.5731,
-            longitude: msg.longitude ?? app.selectedWorldContact?.longitude ?? -7.5898)
+        if let latitude = msg.latitude, let longitude = msg.longitude {
+            mapLocationBubble(msg, coordinate: CLLocationCoordinate2D(latitude: latitude,
+                                                                      longitude: longitude))
+        } else {
+            HStack(spacing: 10) {
+                Image(systemName: "mappin.slash")
+                    .font(.system(size: 15))
+                    .foregroundStyle((msg.fromUser ? Color.white : IMColor.label).opacity(0.8))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(msg.text.nilIfBlank ?? "Location")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(msg.fromUser ? Color.white : IMColor.label)
+                    Text("Position not available")
+                        .font(.system(size: 12))
+                        .foregroundStyle((msg.fromUser ? Color.white : IMColor.secondary).opacity(0.75))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                BubbleShape(fromUser: msg.fromUser, tailed: true)
+                    .fill(msg.fromUser ? IMColor.blue : IMColor.bubbleGray)
+            )
+        }
+    }
+
+    private func mapLocationBubble(_ msg: WorldMessage,
+                                   coordinate coord: CLLocationCoordinate2D) -> some View {
         let title = msg.text.isEmpty ? "Shared Location" : msg.text
 
-        Button {
+        return Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             openInMaps(coord, name: title)
         } label: {

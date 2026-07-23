@@ -2,6 +2,7 @@ package com.gojogo.economy.internal;
 
 import com.gojogo.economy.ListingCreated;
 import com.gojogo.media.MediaApi;
+import com.gojogo.messaging.MessagingApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
 import org.springframework.context.ApplicationEventPublisher;
@@ -25,14 +26,17 @@ class ListingService {
     private final SavedListingRepository saves;
     private final ProfileApi profiles;
     private final MediaApi media;
+    private final MessagingApi messaging;
     private final ApplicationEventPublisher events;
 
     ListingService(ListingRepository listings, SavedListingRepository saves,
-                   ProfileApi profiles, MediaApi media, ApplicationEventPublisher events) {
+                   ProfileApi profiles, MediaApi media, MessagingApi messaging,
+                   ApplicationEventPublisher events) {
         this.listings = listings;
         this.saves = saves;
         this.profiles = profiles;
         this.media = media;
+        this.messaging = messaging;
         this.events = events;
     }
 
@@ -93,6 +97,46 @@ class ListingService {
         Listing listing = listings.findById(listingId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such listing"));
         return decorate(List.of(listing), me).getFirst();
+    }
+
+    /**
+     * Opens (or reuses) the buyer↔seller thread for a listing. Read-only on the
+     * economy side: the conversation lives in {@code messaging}, and nothing is
+     * posted here — the client prefills {@code suggestedMessage} so the buyer
+     * still chooses to send, and a browsed-away listing leaves no empty thread.
+     */
+    @Transactional(readOnly = true)
+    ListingChatResponse openChat(UUID me, UUID listingId) {
+        Listing listing = listings.findById(listingId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such listing"));
+        UUID seller = listing.getSellerId();
+        if (seller.equals(me)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "That's your own listing");
+        }
+        UUID conversationId = messaging.openDirectConversation(me, seller);
+        return new ListingChatResponse(conversationId, seller, opener(listing));
+    }
+
+    /** "Hi — is the Leica M6 (12,000 MAD) still available?" */
+    private static String opener(Listing listing) {
+        String price = listing.getPriceCents() == null
+            ? null
+            : priceLabel(listing.getPriceCents(), listing.getCurrency());
+        return price == null
+            ? "Hi — is the " + listing.getTitle() + " still available?"
+            : "Hi — is the " + listing.getTitle() + " (" + price + ") still available?";
+    }
+
+    private static String priceLabel(long cents, String currency) {
+        String code = currency == null || currency.isBlank() ? "USD" : currency;
+        long whole = cents / 100;
+        long fraction = cents % 100;
+        // Grouped: this lands in a message a buyer sends, and "12000 MAD" reads
+        // like a typo next to the listing's own formatted price.
+        return fraction == 0
+            ? String.format(java.util.Locale.ROOT, "%,d %s", whole, code)
+            : String.format(java.util.Locale.ROOT, "%,d.%02d %s", whole, fraction, code);
     }
 
     @Transactional

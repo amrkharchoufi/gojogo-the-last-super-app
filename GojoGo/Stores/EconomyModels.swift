@@ -34,6 +34,15 @@ struct ListingPageDTO: Decodable {
     let nextBefore: String?
 }
 
+/// Where a listing conversation lives, plus a ready-made opener. The backend
+/// creates (or reuses) the thread but posts nothing — the client prefills the
+/// composer so the buyer still chooses to send.
+struct ListingChatDTO: Decodable {
+    let conversationId: UUID
+    let sellerId: UUID
+    let suggestedMessage: String
+}
+
 struct CreateListingBody: Encodable {
     let title: String
     let priceCents: Int64?

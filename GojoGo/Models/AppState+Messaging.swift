@@ -182,6 +182,9 @@ extension AppState {
                     // Enter the real My World: pull live conversations, open socket.
                     withAnimation(.easeInOut(duration: 0.35)) { worldSetupStep = .intro }
                     await connectMessaging()
+                    // Someone who tapped "Message seller" before setting up lands
+                    // in that thread now rather than on the Messages list.
+                    resumePendingSellerConversation()
                 }
             } catch {
                 worldSetupError = (error as? APIClient.APIError)?.errorDescription

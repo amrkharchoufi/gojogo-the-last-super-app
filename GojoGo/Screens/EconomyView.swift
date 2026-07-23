@@ -604,17 +604,27 @@ struct ProductDetailView: View {
                 }
                 .buttonStyle(PressableStyle())
 
-                Button {
-                    app.openSellerChat(for: product)
-                } label: {
-                    Text("Message \(product.seller)")
+                if EconomyStore.shared.isOwn(product.id) {
+                    // Your own listing — there's no one to message.
+                    Text("Your listing")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(GGColor.onAccent)
+                        .foregroundStyle(GGColor.textSecondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
-                        .background(Capsule().fill(GGColor.white))
+                        .glassCapsule(interactive: false)
+                } else {
+                    Button {
+                        app.openSellerChat(for: product)
+                    } label: {
+                        Text("Message \(product.seller)")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(GGColor.onAccent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Capsule().fill(GGColor.white))
+                    }
+                    .buttonStyle(PressableStyle())
                 }
-                .buttonStyle(PressableStyle())
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

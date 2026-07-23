@@ -11,10 +11,17 @@ final class EconomyStore {
     /// Server-backed listing ids — AppState uses these to decide whether a save
     /// toggle should hit the API or stay local (SampleData catalog).
     private(set) var remoteListingIds: Set<UUID> = []
+    /// Listings the signed-in user is selling — you can't message yourself.
+    private(set) var ownListingIds: Set<UUID> = []
 
     func reset() {
         remoteListingIds = []
+        ownListingIds = []
     }
+
+    func isRemote(_ listingId: UUID) -> Bool { remoteListingIds.contains(listingId) }
+
+    func isOwn(_ listingId: UUID) -> Bool { ownListingIds.contains(listingId) }
 
     // MARK: Browse / detail
 
@@ -30,19 +37,19 @@ final class EconomyStore {
             path += "&before=\(enc)"
         }
         let page: ListingPageDTO = try await APIClient.shared.get(path)
-        page.listings.forEach { remoteListingIds.insert($0.id) }
+        track(page.listings)
         return (page.listings.map(map), page.nextBefore)
     }
 
     func saved(limit: Int = 50) async throws -> [Product] {
         let dtos: [ListingDTO] = try await APIClient.shared.get("/v1/economy/saved?limit=\(limit)")
-        dtos.forEach { remoteListingIds.insert($0.id) }
+        track(dtos)
         return dtos.map(map)
     }
 
     func mine(limit: Int = 50) async throws -> [Product] {
         let dtos: [ListingDTO] = try await APIClient.shared.get("/v1/economy/listings/mine?limit=\(limit)")
-        dtos.forEach { remoteListingIds.insert($0.id) }
+        track(dtos)
         return dtos.map(map)
     }
 
@@ -50,7 +57,7 @@ final class EconomyStore {
 
     func create(_ body: CreateListingBody) async throws -> Product {
         let dto: ListingDTO = try await APIClient.shared.post("/v1/economy/listings", body: body)
-        remoteListingIds.insert(dto.id)
+        track([dto])
         return map(dto)
     }
 
@@ -66,7 +73,24 @@ final class EconomyStore {
         try await APIClient.shared.delete("/v1/economy/listings/\(listingId)")
     }
 
+    // MARK: Seller chat
+
+    /// Opens (or reuses) the buyer↔seller thread for a listing. The backend
+    /// sends nothing — the caller prefills `suggestedMessage` in the composer.
+    func startChat(_ listingId: UUID) async throws -> ListingChatDTO {
+        try await APIClient.shared.post("/v1/economy/listings/\(listingId)/chat")
+    }
+
     // MARK: Mapping
+
+    /// Remembers which listings came from the server and which are the caller's
+    /// own, so the UI can pick the live path over the SampleData one.
+    private func track(_ dtos: [ListingDTO]) {
+        for dto in dtos {
+            remoteListingIds.insert(dto.id)
+            if dto.isOwn { ownListingIds.insert(dto.id) } else { ownListingIds.remove(dto.id) }
+        }
+    }
 
     func map(_ dto: ListingDTO) -> Product {
         let sellerName = dto.seller.name ?? dto.seller.handle ?? "seller"

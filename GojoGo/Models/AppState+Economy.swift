@@ -115,6 +115,60 @@ extension AppState {
         }
     }
 
+    // MARK: Seller chat (Phase 2b · M2)
+
+    /// True when "Message seller" can open a real thread — a server-backed
+    /// listing that isn't the caller's own, with a live session behind it.
+    func canMessageSeller(_ product: Product) -> Bool {
+        backendConnected
+            && EconomyStore.shared.isRemote(product.id)
+            && !EconomyStore.shared.isOwn(product.id)
+    }
+
+    /// Asks the backend for the buyer↔seller thread, then hands the user over to
+    /// My World with the opener prefilled. Nothing is sent on their behalf: the
+    /// message is a draft they can edit or discard, so browsing a listing never
+    /// leaves the seller an empty thread. Falls back to the local demo chat if
+    /// the call fails, so the button is never dead.
+    func openLiveSellerChat(for product: Product) {
+        Task {
+            do {
+                let chat = try await EconomyStore.shared.startChat(product.id)
+                // The thread may be brand new — pull it before opening it.
+                await refreshWorldConversations()
+                enterSellerConversation(chat.conversationId, draft: chat.suggestedMessage)
+            } catch {
+                #if DEBUG
+                print("Seller chat failed: \(error.localizedDescription)")
+                #endif
+                openLocalSellerChat(for: product)
+            }
+        }
+    }
+
+    /// Leaves the marketplace and lands in the thread. When My World hasn't been
+    /// set up yet the id is parked: the setup gate takes over, and the thread
+    /// opens by itself once the phone is verified.
+    private func enterSellerConversation(_ id: UUID, draft: String) {
+        browsingProduct = nil
+        messagingProduct = nil
+        enterMyWorld()
+        guard !needsWorldSetup else {
+            pendingSellerConversation = (id, draft)
+            return
+        }
+        openWorldConversation(id)
+        worldDraft = draft
+    }
+
+    /// Opens a thread parked while the caller finished My World setup.
+    func resumePendingSellerConversation() {
+        guard let pending = pendingSellerConversation, !needsWorldSetup else { return }
+        pendingSellerConversation = nil
+        openWorldConversation(pending.id)
+        worldDraft = pending.draft
+    }
+
     private func localListing(title: String, price: String, category: String, notes: String) -> Product {
         Product(
             name: title,

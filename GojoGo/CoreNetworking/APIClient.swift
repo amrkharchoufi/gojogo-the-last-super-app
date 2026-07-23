@@ -35,6 +35,12 @@ final class APIClient {
         _ = try await raw("POST", path, body: nil)
     }
 
+    /// Bodyless POST that returns a decoded result — an action whose parameters
+    /// are all in the path (e.g. opening a listing's seller thread).
+    func post<T: Decodable>(_ path: String) async throws -> T {
+        try await request("POST", path, body: nil)
+    }
+
     /// POST a JSON body to an endpoint that returns no content (204).
     func postNoContent(_ path: String, body: some Encodable) async throws {
         _ = try await raw("POST", path, body: try encoder.encode(body))

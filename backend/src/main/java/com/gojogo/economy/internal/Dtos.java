@@ -20,6 +20,11 @@ record ListingResponse(UUID id, SellerSummary seller, String title, Long priceCe
 record ListingPageResponse(List<ListingResponse> listings, OffsetDateTime nextBefore) {
 }
 
+/** Where to continue a listing conversation, plus the opener the buyer can send
+ *  as-is. Nothing is posted on the buyer's behalf — the client prefills it. */
+record ListingChatResponse(UUID conversationId, UUID sellerId, String suggestedMessage) {
+}
+
 record CreateListingRequest(@NotBlank @Size(max = 140) String title,
                             @PositiveOrZero Long priceCents,
                             @Size(max = 3) String currency,

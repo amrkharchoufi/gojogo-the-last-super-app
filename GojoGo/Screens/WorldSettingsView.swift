@@ -299,7 +299,10 @@ struct WorldSettingsView: View {
         section("STORAGE") {
             VStack(spacing: 0) {
                 settingsRow("Cached media", icon: "internaldrive.fill", tint: IMColor.secondary) {
-                    Text(ByteCountFormatter.string(fromByteCount: cacheSize, countStyle: .file))
+                    // ByteCountFormatter renders 0 as "Zero KB", which reads oddly.
+                    Text(cacheSize == 0
+                         ? "Empty"
+                         : ByteCountFormatter.string(fromByteCount: cacheSize, countStyle: .file))
                         .font(.system(size: 16))
                         .foregroundStyle(IMColor.secondary)
                 }

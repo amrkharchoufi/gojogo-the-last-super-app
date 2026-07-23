@@ -235,7 +235,7 @@ Deepen **one** product loop: **My World**.
 
 ### Phase 2b — Commerce (after messaging is live)
 
-- `economy`: products, sell flow, seller chat via messaging API. **M1 deployed + verified (2026-07-23):** the `economy` vertical module (listings CRUD, browse/keyset pagination, save/unsave, mine/saved) + iOS wiring (`EconomyStore` / `AppState+Economy`, live catalog + sell-with-photo) are live in prod; publishes `ListingCreated`; two-user curl E2E green. Deferred to later 2b slices: seller-chat over the messaging API, and the OpenSearch consumer. See PROGRESS.md "Phase 2b · Milestone 1".
+- `economy`: products, sell flow, seller chat via messaging API. **M2 deployed + verified (2026-07-24):** seller chat is live — `messaging` gained a public `MessagingApi` (one method: open the 1:1 between two people), `POST /v1/economy/listings/{id}/chat` returns the thread plus a prefilled opener and posts nothing itself, and iOS "Message seller" opens the real My World thread. First cross-vertical use of a platform module's public API; the boundary is enforced by `ModularityTests`. **M1 deployed + verified (2026-07-23):** the `economy` vertical module (listings CRUD, browse/keyset pagination, save/unsave, mine/saved) + iOS wiring (`EconomyStore` / `AppState+Economy`, live catalog + sell-with-photo) are live in prod; publishes `ListingCreated`; two-user curl E2E green. Deferred to later 2b slices: seller-chat over the messaging API, and the OpenSearch consumer. See PROGRESS.md "Phase 2b · Milestone 1".
 - `delivery`: catalog, cart, order status (no live geo-dispatch yet).
 - Stripe + Connect; `payments` ledger.
 - OpenSearch consumer for `PostCreated` / `ProductCreated`.

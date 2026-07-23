@@ -68,6 +68,13 @@ class EconomyController {
         listings.delete(current.require(jwt).id(), listingId);
     }
 
+    /** Buyer taps "Message seller": returns the thread to open (created on first
+     *  ask, reused after) and a ready-made opener. Sends nothing by itself. */
+    @PostMapping("/v1/economy/listings/{listingId}/chat")
+    ListingChatResponse chat(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID listingId) {
+        return listings.openChat(current.require(jwt).id(), listingId);
+    }
+
     @PostMapping("/v1/economy/listings/{listingId}/save")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     void save(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID listingId) {
