@@ -267,7 +267,12 @@ struct StickerCaptureField: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard let image = Self.sticker(in: textView.attributedText) else {
-                placeholder?.isHidden = !textView.attributedText.string.isEmpty
+                // Sticker-only field: anything typed or pasted as plain text is
+                // not a sticker, so drop it rather than leaving junk behind.
+                if !textView.attributedText.string.isEmpty {
+                    textView.attributedText = NSAttributedString(string: "")
+                }
+                placeholder?.isHidden = false
                 return
             }
             // Consume it: clear the field so the next pick reads cleanly.

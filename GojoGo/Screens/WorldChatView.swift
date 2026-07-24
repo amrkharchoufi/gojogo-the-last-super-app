@@ -19,6 +19,9 @@ struct WorldChatView: View {
     @State private var dismissDrag: CGFloat = 0
     /// Frame of each bubble in the chat coordinate space (for the tapback overlay).
     @State private var bubbleFrames: [UUID: CGRect] = [:]
+    /// Own-message receipt revealed by tap (auto-hides).
+    @State private var revealedReceiptID: UUID?
+    @State private var revealDismissTask: Task<Void, Never>?
 
     private var live: WorldConversation {
         app.worldConversations.first(where: { $0.id == conversationID })
@@ -45,9 +48,15 @@ struct WorldChatView: View {
             chatWallpaper
 
             VStack(spacing: 0) {
-                chatHeader
                 messageScroll
                 composer
+            }
+
+            // Floats over the thread so messages scroll underneath the glass bar.
+            VStack(spacing: 0) {
+                chatHeader
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
             }
 
             reactionOverlay
@@ -107,10 +116,11 @@ struct WorldChatView: View {
                     switch capture {
                     case .photo(let data):
                         app.stageWorldAttachment(WorldPendingAttachment(imageData: data))
-                    case .video(let poster, let label, _):
+                    case .video(let poster, let label, let url):
                         app.stageWorldAttachment(
                             WorldPendingAttachment(imageData: poster, isVideo: true,
-                                                   durationLabel: label))
+                                                   durationLabel: label,
+                                                   videoURL: ChatMediaOutbox.adopt(url)))
                     }
                 },
                 onCancel: { showCamera = false }
@@ -206,12 +216,10 @@ struct WorldChatView: View {
         }
     }
 
-    /// Writes the video to a temp file to grab a poster frame + duration.
+    /// Stores the picked movie and grabs a poster frame + duration from it.
+    /// The file is kept (not deleted) so the message can carry the real video.
     private static func videoAttachment(from data: Data) async -> WorldPendingAttachment? {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("world-video-\(UUID().uuidString).mov")
-        do { try data.write(to: url) } catch { return nil }
-        defer { try? FileManager.default.removeItem(at: url) }
+        guard let url = ChatMediaOutbox.store(data) else { return nil }
 
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
@@ -221,11 +229,15 @@ struct WorldChatView: View {
         guard let cg = try? generator.copyCGImage(
             at: CMTime(seconds: 0.1, preferredTimescale: 600), actualTime: nil),
               let poster = UIImage(cgImage: cg).jpegData(compressionQuality: 0.8)
-        else { return nil }
+        else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
 
         let seconds = (try? await asset.load(.duration)).map(CMTimeGetSeconds) ?? 0
         let label = String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60)
-        return WorldPendingAttachment(imageData: poster, isVideo: true, durationLabel: label)
+        return WorldPendingAttachment(imageData: poster, isVideo: true,
+                                      durationLabel: label, videoURL: url)
     }
 
     // MARK: Wallpaper
@@ -419,16 +431,18 @@ struct WorldChatView: View {
             .accessibilityLabel("Video call")
         }
         .padding(.horizontal, 6)
-        .padding(.bottom, 6)
+        .padding(.bottom, 8)
+        .padding(.top, 2)
+        .frame(maxWidth: .infinity)
         .background(
+            // Same clear fade as Home — no material shelf.
             LinearGradient(
-                colors: [IMColor.bg, IMColor.bg.opacity(0.92), IMColor.bg.opacity(0)],
+                colors: [IMColor.bg.opacity(0.96), IMColor.bg.opacity(0.72), IMColor.bg.opacity(0)],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: 90)
-            .ignoresSafeArea(edges: .top),
-            alignment: .top
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
         )
     }
 
@@ -470,7 +484,7 @@ struct WorldChatView: View {
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.top, 4)
+                .padding(.top, 88)
                 .padding(.bottom, 12)
                 .animation(.ggSnappy, value: live.messages.count)
             }
@@ -531,7 +545,7 @@ struct WorldChatView: View {
 
         default:
             let wide = msg.kind == .emoji || msg.kind == .sticker
-            bubbleLine(msg, spacing: wide ? 60 : 48, tailed: isLastInCluster)
+            bubbleLine(msg, index: index, spacing: wide ? 60 : 48, tailed: isLastInCluster)
         }
     }
 
@@ -564,7 +578,7 @@ struct WorldChatView: View {
 
     /// Shared incoming/outgoing alignment + reply snippet + reactions + receipt.
     private func bubbleLine(
-        _ msg: WorldMessage, spacing: CGFloat = 48, tailed: Bool
+        _ msg: WorldMessage, index: Int, spacing: CGFloat = 48, tailed: Bool
     ) -> some View {
         VStack(alignment: msg.fromUser ? .trailing : .leading, spacing: 3) {
             if !msg.fromUser, live.isGroup, let sender = msg.senderName {
@@ -583,9 +597,6 @@ struct WorldChatView: View {
                 bubbleContent(msg, tailed: tailed)
                     .opacity(app.worldReactionTarget == msg.id ? 0 : 1)
                     .background(
-                        // Only the long-pressed bubble reports its frame. Publishing
-                        // every bubble's rect re-rendered the whole thread on every
-                        // scroll frame, which is what made the chat feel heavy.
                         GeometryReader { proxy in
                             Color.clear.preference(
                                 key: BubbleFrameKey.self,
@@ -610,6 +621,12 @@ struct WorldChatView: View {
                                 }
                             }
                     )
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            guard msg.fromUser, msg.scheduledLabel == nil, msg.readLabel != nil else { return }
+                            revealReceipt(msg.id)
+                        }
+                    )
                 if !msg.fromUser { Spacer(minLength: spacing) }
             }
 
@@ -623,8 +640,9 @@ struct WorldChatView: View {
                 .foregroundStyle(IMColor.blue)
                 .padding(.trailing, msg.fromUser ? 4 : 0)
                 .transition(.opacity)
-            } else if let read = msg.readLabel {
-                Text(read)
+            } else if shouldShowReceipt(msg, at: index),
+                      let text = receiptText(for: msg) {
+                Text(text)
                     .font(.system(size: 11))
                     .foregroundStyle(IMColor.secondary)
                     .padding(.trailing, msg.fromUser ? 4 : 0)
@@ -633,6 +651,66 @@ struct WorldChatView: View {
             }
         }
         .padding(.vertical, msg.reactions.isEmpty ? 1 : 8)
+    }
+
+    // MARK: Receipts
+
+    private func receiptBucket(_ label: String?) -> String? {
+        guard let label else { return nil }
+        if label.hasPrefix("Read") { return "Read" }
+        if label.hasPrefix("Delivered") { return "Delivered" }
+        return label
+    }
+
+    /// Last bubble of a same-status run, or temporarily when tapped.
+    private func shouldShowReceipt(_ msg: WorldMessage, at index: Int) -> Bool {
+        guard msg.fromUser, msg.scheduledLabel == nil, msg.readLabel != nil else { return false }
+        if revealedReceiptID == msg.id { return true }
+
+        let bucket = receiptBucket(msg.readLabel)
+        let nextOutgoing = live.messages[(index + 1)...]
+            .first { $0.fromUser && $0.kind.isBubble && $0.scheduledLabel == nil }
+        if let next = nextOutgoing {
+            return bucket != receiptBucket(next.readLabel)
+        }
+        return true
+    }
+
+    private func receiptText(for msg: WorldMessage) -> String? {
+        guard let label = msg.readLabel else { return nil }
+        if receiptBucket(label) == "Read" {
+            if let at = msg.readAt {
+                return "Read \(Self.formatReadAt(at))"
+            }
+            return "Read"
+        }
+        return "Delivered"
+    }
+
+    /// Today → time · yesterday → "Yesterday 3:42 PM" · older → "Jul 12, 3:42 PM".
+    private static func formatReadAt(_ date: Date) -> String {
+        let cal = Calendar.current
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(date) { return time }
+        if cal.isDateInYesterday(date) { return "Yesterday \(time)" }
+        if cal.component(.year, from: date) == cal.component(.year, from: Date()) {
+            return date.formatted(.dateTime.month(.abbreviated).day()) + ", \(time)"
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().year()) + ", \(time)"
+    }
+
+    private func revealReceipt(_ id: UUID) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        revealDismissTask?.cancel()
+        withAnimation(.ggSnappy) {
+            revealedReceiptID = revealedReceiptID == id ? nil : id
+        }
+        guard revealedReceiptID == id else { return }
+        revealDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled, revealedReceiptID == id else { return }
+            withAnimation(.ggSnappy) { revealedReceiptID = nil }
+        }
     }
 
     /// Quoted snippet shown above an inline reply, iMessage-style.
@@ -680,6 +758,7 @@ struct WorldChatView: View {
 
     private func photoBubble(_ msg: WorldMessage) -> some View {
         MediaImage(url: msg.imageURL, data: msg.imageData, cornerRadius: 18)
+            .onTapGesture { openViewer(msg.mediaItems, at: 0) }
             .frame(maxWidth: 240)
             .frame(height: 260)
             .overlay {
@@ -708,7 +787,16 @@ struct WorldChatView: View {
     }
 
     private func carouselBubble(_ msg: WorldMessage) -> some View {
-        ChatCarouselBubble(items: msg.carouselItems)
+        ChatCarouselBubble(items: msg.carouselItems) { index in
+            openViewer(msg.mediaItems, at: index)
+        }
+    }
+
+    /// Opens the full-screen viewer (save / share / send to another chat).
+    private func openViewer(_ items: [ChatMediaItem], at index: Int) {
+        guard !items.isEmpty else { return }
+        focused = false
+        app.openWorldMediaViewer(items, at: index)
     }
 
     /// Stickers render bare, like iMessage — no bubble, no tail.
@@ -1174,6 +1262,7 @@ private extension WorldMessageKind {
 
 private struct ChatCarouselBubble: View {
     let items: [WorldCarouselItem]
+    var onOpen: (Int) -> Void = { _ in }
     @State private var page = 0
 
     private let width: CGFloat = 240
@@ -1207,6 +1296,7 @@ private struct ChatCarouselBubble: View {
                         }
                     }
                     .tag(index)
+                    .onTapGesture { onOpen(index) }
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))

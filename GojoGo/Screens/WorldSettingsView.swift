@@ -62,13 +62,16 @@ struct WorldSettingsView: View {
             HStack {
                 Spacer()
                 Button("Done") { app.worldSheet = nil }
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(IMColor.blue)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .glassCapsule(interactive: true)
             }
         }
         .padding(.horizontal, 18)
-        .padding(.top, 18)
-        .padding(.bottom, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
     }
 
     // MARK: Profile
@@ -134,13 +137,16 @@ struct WorldSettingsView: View {
                         .padding(.vertical, 13)
                         .background(Capsule().fill(IMColor.blue))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableStyle())
                 .disabled(app.worldSettingsBusy)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if app.worldSettingsSaved {
                 Label("Saved", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color(red: 0.2, green: 0.78, blue: 0.35))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .glassCapsule(interactive: false)
                     .transition(.opacity)
             }
         }
@@ -159,23 +165,24 @@ struct WorldSettingsView: View {
                     if let pickedData, let ui = UIImage(data: pickedData) {
                         Image(uiImage: ui).resizable().scaledToFill()
                     } else if let savedURL {
-                        MediaImage(url: savedURL, cornerRadius: 48)
+                        MediaImage(url: savedURL, cornerRadius: 50)
                     } else {
                         ZStack {
-                            Circle().fill(IMColor.chrome)
+                            Circle().fill(IMColor.chrome.opacity(0.8))
                             Text(initial)
                                 .font(.system(size: 34, weight: .bold))
                                 .foregroundStyle(IMColor.secondary)
                         }
                     }
                 }
-                .frame(width: 96, height: 96)
+                .frame(width: 100, height: 100)
                 .clipShape(Circle())
+                .overlay(Circle().strokeBorder(IMColor.label.opacity(0.12), lineWidth: 1))
 
                 Image(systemName: "camera.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 32, height: 32)
                     .background(Circle().fill(IMColor.blue))
                     .overlay(Circle().strokeBorder(IMColor.sheetBG, lineWidth: 3))
             }
@@ -228,7 +235,7 @@ struct WorldSettingsView: View {
                             .foregroundStyle(IMColor.secondary)
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableStyle())
             }
             .background(card)
         }
@@ -240,21 +247,21 @@ struct WorldSettingsView: View {
         section("NEW CHAT WALLPAPER") {
             VStack(alignment: .leading, spacing: 10) {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 14) {
                         ForEach(WorldChatBackground.allCases) { bg in
                             Button {
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 withAnimation(.ggSnappy) { app.worldDefaultBackground = bg }
                             } label: {
-                                VStack(spacing: 6) {
+                                VStack(spacing: 7) {
                                     swatch(bg)
                                     Text(bg.title)
-                                        .font(.system(size: 11, weight: .medium))
+                                        .font(.system(size: 11, weight: .semibold))
                                         .foregroundStyle(app.worldDefaultBackground == bg
                                                          ? IMColor.label : IMColor.secondary)
                                 }
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressableStyle())
                         }
                     }
                     .padding(.horizontal, 14)
@@ -271,7 +278,8 @@ struct WorldSettingsView: View {
     }
 
     private func swatch(_ bg: WorldChatBackground) -> some View {
-        ZStack {
+        let selected = app.worldDefaultBackground == bg
+        return ZStack {
             if bg == .none {
                 Circle().fill(IMColor.bg)
                     .overlay(Circle().strokeBorder(IMColor.separator, lineWidth: 1))
@@ -286,11 +294,20 @@ struct WorldSettingsView: View {
                                    startPoint: .topLeading, endPoint: .bottomTrailing))
             }
         }
-        .frame(width: 54, height: 54)
+        .frame(width: 56, height: 56)
         .overlay(
-            Circle().strokeBorder(app.worldDefaultBackground == bg ? IMColor.blue : .clear,
-                                  lineWidth: 2.5)
+            Circle().strokeBorder(selected ? IMColor.blue : IMColor.label.opacity(0.08),
+                                  lineWidth: selected ? 2.5 : 0.5)
         )
+        .overlay(alignment: .bottomTrailing) {
+            if selected {
+                Image(systemName: "checkmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, IMColor.blue)
+                    .font(.system(size: 16))
+                    .offset(x: 2, y: 2)
+            }
+        }
     }
 
     // MARK: Storage
@@ -314,7 +331,7 @@ struct WorldSettingsView: View {
                 } label: {
                     HStack {
                         Text("Clear voice notes & stickers cache")
-                            .font(.system(size: 16))
+                            .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(cacheSize > 0 ? IMColor.blue : IMColor.secondary)
                         Spacer()
                     }
@@ -341,7 +358,10 @@ struct WorldSettingsView: View {
                 .foregroundStyle(IMColor.secondary.opacity(0.7))
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 8)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .glass(cornerRadius: 16, interactive: false)
+        .padding(.top, 4)
     }
 
     private static var appVersion: String {
@@ -354,12 +374,21 @@ struct WorldSettingsView: View {
     // MARK: Building blocks
 
     private var card: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous).fill(IMColor.chrome)
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(IMColor.chrome.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(IMColor.label.opacity(0.08), lineWidth: 0.5)
+            )
     }
 
     private var divider: some View {
         Rectangle()
-            .fill(IMColor.separator.opacity(0.5))
+            .fill(IMColor.separator.opacity(0.45))
             .frame(height: 0.5)
             .padding(.leading, 52)
     }
@@ -383,8 +412,11 @@ struct WorldSettingsView: View {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(tint))
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tint)
+                )
             Text(title)
                 .font(.system(size: 16))
                 .foregroundStyle(IMColor.label)
@@ -401,8 +433,11 @@ struct WorldSettingsView: View {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(tint))
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tint)
+                )
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 16))

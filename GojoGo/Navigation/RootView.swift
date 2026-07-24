@@ -76,7 +76,20 @@ struct MainAppView: View {
                     .transition(.opacity)
                     .zIndex(50)
             }
+
+            // Chat attachment opened full screen. Hosted here (not in the chat
+            // view) so it covers the dock and the immersive chrome.
+            if !app.worldMediaViewerItems.isEmpty {
+                ChatMediaViewer(items: app.worldMediaViewerItems,
+                                startIndex: app.worldMediaViewerIndex) {
+                    app.closeWorldMediaViewer()
+                }
+                .environmentObject(app)
+                .transition(.opacity)
+                .zIndex(60)
+            }
         }
+        .animation(.ggOverlay, value: app.worldMediaViewerItems.isEmpty)
         .animation(.ggOverlay, value: app.storyOverlayActive)
         // Don't ignore keyboard — composer must sit above it when open.
         .animation(.ggOverlay, value: app.isComposing)

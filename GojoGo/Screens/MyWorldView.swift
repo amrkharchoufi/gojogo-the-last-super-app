@@ -71,7 +71,12 @@ private struct WorldMessagesList: View {
             topBar
             listContent
         }
-        .task { await app.refreshWorldConversations() }
+        .task {
+            if app.worldConversations.isEmpty && !app.worldConversationsLoaded {
+                app.worldConversationsLoading = true
+            }
+            await app.refreshWorldConversations()
+        }
         .onReceive(tick) { now in
             clock = now
             Task { await app.refreshWorldConversations() }
@@ -274,7 +279,9 @@ private struct WorldMessagesList: View {
                         .padding(.leading, 86)
                 }
 
-                if app.worldFilteredConversations.isEmpty {
+                if app.shouldShowWorldConversationShimmer {
+                    conversationShimmerList
+                } else if app.worldFilteredConversations.isEmpty {
                     emptyState
                 }
 
@@ -309,6 +316,59 @@ private struct WorldMessagesList: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 56)
+    }
+
+    /// Placeholder rows while the first conversation fetch is in flight.
+    private var conversationShimmerList: some View {
+        VStack(spacing: 0) {
+            ForEach(0..<7, id: \.self) { i in
+                conversationShimmerRow(widePreview: i % 2 == 0)
+                if i < 6 {
+                    Rectangle()
+                        .fill(IMColor.separator.opacity(0.45))
+                        .frame(height: 0.33)
+                        .padding(.leading, 86)
+                }
+            }
+        }
+        .padding(.top, 4)
+        .accessibilityLabel("Loading conversations")
+    }
+
+    private func conversationShimmerRow(widePreview: Bool) -> some View {
+        HStack(alignment: .center, spacing: 0) {
+            Color.clear
+                .frame(width: 10, height: 10)
+                .padding(.leading, 10)
+                .padding(.trailing, 8)
+
+            Circle()
+                .fill(IMColor.chrome)
+                .frame(width: 52, height: 52)
+                .shimmering()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Capsule()
+                        .fill(IMColor.chrome)
+                        .frame(width: 118, height: 12)
+                        .shimmering()
+                    Spacer(minLength: 12)
+                    Capsule()
+                        .fill(IMColor.chrome)
+                        .frame(width: 28, height: 10)
+                        .shimmering()
+                }
+                Capsule()
+                    .fill(IMColor.chrome)
+                    .frame(width: widePreview ? 210 : 150, height: 10)
+                    .shimmering()
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 14)
+        }
+        .padding(.vertical, 14)
+        .allowsHitTesting(false)
     }
 
     // MARK: Pinned (iMessage big avatars)

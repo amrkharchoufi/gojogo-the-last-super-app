@@ -26,6 +26,16 @@ extension AppState {
             withAnimation(.ggSnappy) { self?.worldRealtimeConnected = connected }
         }
         await loadWorldProfile()
+
+        // Show shimmer on My World until this first list lands — otherwise the
+        // empty state flashes while connectBackend is still mid-flight.
+        let showLoading = worldConversations.isEmpty
+        if showLoading { worldConversationsLoading = true }
+        defer {
+            worldConversationsLoading = false
+            worldConversationsLoaded = true
+        }
+
         do {
             let live = try await MessagingStore.shared.fetchConversations()
             mergeLiveConversations(live)
@@ -56,7 +66,20 @@ extension AppState {
     }
 
     func refreshWorldConversations() async {
-        guard backendConnected else { return }
+        guard backendConnected else {
+            // Don't clear the shimmer here — connectBackend owns the first-load
+            // lifecycle. Returning early used to flash empty before the connect.
+            return
+        }
+        let showLoading = worldConversations.isEmpty && !worldConversationsLoaded
+        if showLoading {
+            worldConversationsLoading = true
+            await Task.yield()
+        }
+        defer {
+            worldConversationsLoading = false
+            worldConversationsLoaded = true
+        }
         do {
             let live = try await MessagingStore.shared.fetchConversations()
             mergeLiveConversations(live)
@@ -73,6 +96,11 @@ extension AppState {
     /// Only gates when connected — offline falls back to the local demo.
     var needsWorldSetup: Bool {
         backendConnected && worldSetupLoaded && !worldSetupComplete
+    }
+
+    /// Shimmer until the first conversation fetch finishes — never flash empty first.
+    var shouldShowWorldConversationShimmer: Bool {
+        worldFilteredConversations.isEmpty && !worldConversationsLoaded
     }
 
     func loadWorldProfile() async {
@@ -346,15 +374,28 @@ extension AppState {
                 var mediaItems: [WorldMediaItemDTO]? = nil
                 switch msg.kind {
                 case .photo:
-                    if let data = msg.imageData, let url = try await uploadWorldImage(data) {
+                    // A forwarded photo already lives on the CDN — reuse that
+                    // object instead of uploading the same bytes again.
+                    if let existing = msg.imageURL {
+                        mediaItems = [WorldMediaItemDTO(imageUrl: existing, videoUrl: nil,
+                                                        isVideo: false, durationLabel: nil)]
+                    } else if let data = msg.imageData, let url = try await uploadWorldImage(data) {
                         mediaItems = [WorldMediaItemDTO(imageUrl: url, videoUrl: nil,
                                                         isVideo: false, durationLabel: nil)]
                     }
                 case .video:
-                    // Upload the poster frame so the recipient's bubble renders
-                    // (streamable in-chat playback = Phase 3 UGC video pipeline).
-                    if let data = msg.imageData, let url = try await uploadWorldImage(data) {
-                        mediaItems = [WorldMediaItemDTO(imageUrl: url, videoUrl: nil,
+                    // Poster *and* the movie itself, so the other side can open it.
+                    var poster = msg.imageURL
+                    if poster == nil, let data = msg.imageData {
+                        poster = try await uploadWorldImage(data)
+                    }
+                    var movie = msg.videoURL
+                    if movie == nil, let local = msg.localVideoURL {
+                        movie = try await uploadWorldVideo(local)
+                        if let movie { adoptUploadedVideo(movie, for: msg.id, in: conversationId) }
+                    }
+                    if poster != nil || movie != nil {
+                        mediaItems = [WorldMediaItemDTO(imageUrl: poster, videoUrl: movie,
                                                         isVideo: true, durationLabel: msg.durationLabel)]
                     }
                 case .sticker:
@@ -381,11 +422,18 @@ extension AppState {
                 case .carousel:
                     var items: [WorldMediaItemDTO] = []
                     for slide in msg.carouselItems {
-                        if let url = try await uploadWorldImage(slide.imageData) {
-                            items.append(WorldMediaItemDTO(imageUrl: url, videoUrl: nil,
-                                                           isVideo: slide.isVideo,
-                                                           durationLabel: slide.durationLabel))
+                        var poster = slide.imageURL
+                        if poster == nil, !slide.imageData.isEmpty {
+                            poster = try await uploadWorldImage(slide.imageData)
                         }
+                        var movie = slide.videoURL
+                        if movie == nil, let local = slide.localVideoURL {
+                            movie = try await uploadWorldVideo(local)
+                        }
+                        guard poster != nil || movie != nil else { continue }
+                        items.append(WorldMediaItemDTO(imageUrl: poster, videoUrl: movie,
+                                                       isVideo: slide.isVideo,
+                                                       durationLabel: slide.durationLabel))
                     }
                     mediaItems = items.isEmpty ? nil : items
                 default:
@@ -436,6 +484,53 @@ extension AppState {
               let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
         else { return }
         worldConversations[i].messages[j].audioURL = url
+    }
+
+    private func adoptUploadedVideo(_ url: String, for messageID: UUID, in conversationId: UUID) {
+        guard let i = worldConversations.firstIndex(where: { $0.id == conversationId }),
+              let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
+        else { return }
+        worldConversations[i].messages[j].videoURL = url
+    }
+
+    /// Uploads a picked/captured movie. Videos are big and the upload can fail
+    /// on a bad connection — returning nil keeps the message (and its poster)
+    /// rather than dropping the send entirely.
+    private func uploadWorldVideo(_ url: URL) async throws -> String? {
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+        do {
+            return try await APIClient.shared.uploadMedia(
+                data, contentType: ChatMediaOutbox.contentType(for: url))
+        } catch {
+            #if DEBUG
+            print("Video upload failed: \(error.localizedDescription)")
+            #endif
+            return nil
+        }
+    }
+
+    // MARK: Forwarding
+
+    /// Sends an attachment on to another conversation. Media already on the CDN
+    /// is referenced by URL rather than re-uploaded.
+    func forwardWorldMedia(_ item: ChatMediaItem, to conversationID: UUID) {
+        let message = WorldMessage(
+            kind: item.isVideo ? .video : .photo,
+            text: "",
+            fromUser: true,
+            readLabel: "Delivered",
+            imageData: item.imageData,
+            imageURL: item.imageURL,
+            durationLabel: item.durationLabel,
+            videoURL: item.videoURL,
+            localVideoURL: item.localVideoURL)
+
+        deliverWorldMessage(message,
+                            preview: item.isVideo ? "You: 📹 Video" : "You: 📷 Photo",
+                            in: conversationID)
+
+        let title = worldConversations.first { $0.id == conversationID }?.title ?? "chat"
+        showWorldNotice("Sent to \(title)")
     }
 
     private func uploadWorldImage(_ data: Data) async throws -> String? {
@@ -695,8 +790,18 @@ extension AppState {
     private func applyReadReceipt(_ event: WorldSocketEvent) {
         guard let convoId = event.conversationId,
               let i = worldConversations.firstIndex(where: { $0.id == convoId }) else { return }
-        if let last = worldConversations[i].messages.lastIndex(where: { $0.fromUser }) {
-            worldConversations[i].messages[last].readLabel = "Read"
+        let cutoff = event.lastReadMessageId
+            .flatMap { id in worldConversations[i].messages.firstIndex(where: { $0.id == id }) }
+            ?? worldConversations[i].messages.lastIndex(where: { $0.fromUser })
+        guard let cutoff else { return }
+        let now = Date()
+        withAnimation(.ggSnappy) {
+            for j in 0...cutoff where worldConversations[i].messages[j].fromUser {
+                worldConversations[i].messages[j].readLabel = "Read"
+                if worldConversations[i].messages[j].readAt == nil {
+                    worldConversations[i].messages[j].readAt = now
+                }
+            }
         }
     }
 

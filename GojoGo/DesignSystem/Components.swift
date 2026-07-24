@@ -183,6 +183,43 @@ struct MonoChip: View {
     }
 }
 
+// MARK: - Shimmer
+
+/// Soft moving highlight for loading placeholders.
+struct ShimmeringModifier: ViewModifier {
+    @State private var phase: CGFloat = -0.6
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                LinearGradient(
+                    colors: [
+                        .clear,
+                        Color.white.opacity(0.22),
+                        .clear
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .rotationEffect(.degrees(12))
+                .offset(x: phase * 220)
+                .blendMode(.plusLighter)
+            }
+            .mask(content)
+            .onAppear {
+                withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
+                    phase = 1.2
+                }
+            }
+    }
+}
+
+extension View {
+    func shimmering() -> some View {
+        modifier(ShimmeringModifier())
+    }
+}
+
 // MARK: - Section header
 
 struct SectionHeader: View {

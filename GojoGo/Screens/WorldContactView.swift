@@ -53,16 +53,23 @@ struct WorldContactView: View {
         VStack(spacing: 0) {
             navBar
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 18) {
+                VStack(spacing: 20) {
                     hero
                     quickActions
                     tabPicker
                     tabBody
                 }
-                .padding(.bottom, 40)
+                .padding(.bottom, 48)
             }
         }
-        .background(IMColor.bg.ignoresSafeArea())
+        .background {
+            IMColor.bg.ignoresSafeArea()
+            RadialGradient(
+                colors: [IMColor.blue.opacity(0.14), .clear],
+                center: .top, startRadius: 20, endRadius: 320)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        }
         .confirmationDialog("Delete this conversation?",
                             isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button(isGroup ? "Leave Conversation" : "Delete Conversation", role: .destructive) {
@@ -80,12 +87,13 @@ struct WorldContactView: View {
         HStack {
             Button { app.closeWorldContact() } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(IMColor.blue)
                     .frame(width: 40, height: 40)
-                    .contentShape(Rectangle())
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .glass(cornerRadius: 20, interactive: true)
 
             Spacer()
 
@@ -96,34 +104,38 @@ struct WorldContactView: View {
                                         avatarURL: avatarURL, avatarGradient: gradient)
                 } label: {
                     Text("Profile")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(IMColor.label)
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(Capsule().fill(IMColor.chrome))
+                        .padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
+                .glassCapsule(interactive: true)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
     }
 
     private var hero: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Group {
                 if isGroup {
                     Circle()
-                        .fill(IMColor.chrome)
-                        .frame(width: 92, height: 92)
+                        .fill(IMColor.chrome.opacity(0.7))
+                        .frame(width: 100, height: 100)
                         .overlay(
                             Image(systemName: "person.2.fill")
-                                .font(.system(size: 34))
-                                .foregroundStyle(IMColor.label.opacity(0.75))
+                                .font(.system(size: 36))
+                                .foregroundStyle(IMColor.label.opacity(0.8))
                         )
+                        .overlay(Circle().strokeBorder(IMColor.label.opacity(0.1), lineWidth: 0.5))
                 } else {
-                    UserAvatar(size: 92, gradient: gradient,
+                    UserAvatar(size: 100, gradient: gradient,
                                letter: String(displayName.prefix(1)), imageURL: avatarURL)
+                        .overlay(Circle().strokeBorder(IMColor.label.opacity(0.12), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.25), radius: 18, y: 10)
                 }
             }
 
@@ -139,7 +151,7 @@ struct WorldContactView: View {
                     .foregroundStyle(IMColor.secondary)
             } else if let handle {
                 Text("@\(handle)")
-                    .font(.system(size: 15))
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(IMColor.secondary)
             }
 
@@ -153,23 +165,26 @@ struct WorldContactView: View {
             }
 
             if let profile, profile.postCount > 0 || profile.followerCount > 0 {
-                HStack(spacing: 18) {
+                HStack(spacing: 8) {
                     publicStat(profile.postCount, "posts")
                     publicStat(profile.followerCount, "followers")
                 }
-                .padding(.top, 2)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .glassCapsule(interactive: false)
+                .padding(.top, 4)
             }
         }
-        .padding(.top, 4)
+        .padding(.top, 8)
     }
 
     private func publicStat(_ value: Int, _ label: String) -> some View {
         HStack(spacing: 4) {
             Text(Self.compact(value))
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(IMColor.label)
             Text(label)
-                .font(.system(size: 14))
+                .font(.system(size: 13))
                 .foregroundStyle(IMColor.secondary)
         }
     }
@@ -177,7 +192,7 @@ struct WorldContactView: View {
     // MARK: Quick actions
 
     private var quickActions: some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 22) {
             actionButton("phone.fill", "Call", enabled: phone != nil) {
                 open(scheme: "tel")
             }
@@ -191,7 +206,7 @@ struct WorldContactView: View {
                 app.toggleWorldMute(id)
             }
         }
-        .padding(.top, 4)
+        .padding(.top, 2)
     }
 
     private var isMuted: Bool {
@@ -215,42 +230,48 @@ struct WorldContactView: View {
     private func actionButton(_ icon: String, _ label: String,
                               enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(enabled ? IMColor.label : IMColor.secondary.opacity(0.5))
-                    .frame(width: 56, height: 56)
-                    .background(Circle().fill(IMColor.chrome))
+                    .foregroundStyle(enabled ? IMColor.label : IMColor.secondary.opacity(0.55))
+                    .frame(width: 58, height: 58)
+                    .glass(cornerRadius: 29, interactive: enabled)
+                    .opacity(enabled ? 1 : 0.72)
                 Text(label)
-                    .font(.system(size: 12))
-                    .foregroundStyle(enabled ? IMColor.secondary : IMColor.secondary.opacity(0.5))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(enabled ? IMColor.secondary : IMColor.secondary.opacity(0.55))
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .disabled(!enabled)
         .accessibilityLabel(label)
     }
 
     private var tabPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 ForEach(ContactTab.allCases) { t in
+                    let selected = tab == t
                     Button {
-                        withAnimation(.easeOut(duration: 0.2)) { tab = t }
+                        withAnimation(.ggSnappy) { tab = t }
                     } label: {
                         Text(t.rawValue)
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(tab == t ? IMColor.label : IMColor.secondary)
+                            .foregroundStyle(selected ? IMColor.label : IMColor.secondary)
                             .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule().fill(tab == t ? IMColor.chrome : .clear)
-                            )
+                            .padding(.vertical, 9)
+                            .background {
+                                if selected {
+                                    Capsule().fill(Color.clear)
+                                }
+                            }
                     }
                     .buttonStyle(.plain)
+                    .modifier(SelectedTabGlass(active: selected))
                 }
             }
             .padding(.horizontal, 16)
+            .padding(.vertical, 2)
         }
     }
 
@@ -521,7 +542,7 @@ struct WorldContactView: View {
                 .padding(14)
             }
             .background(cardShape)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -713,7 +734,16 @@ struct WorldContactView: View {
     // MARK: Shared bits
 
     private var cardShape: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous).fill(IMColor.chrome)
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(IMColor.chrome.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(IMColor.label.opacity(0.08), lineWidth: 0.5)
+            )
     }
 
     private var rowDivider: some View {
@@ -741,6 +771,20 @@ struct WorldContactView: View {
         case ..<1_000: return "\(value)"
         case ..<1_000_000: return String(format: "%.1fK", Double(value) / 1_000)
         default: return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
+    }
+}
+
+/// Applies liquid glass only when a contact tab chip is selected.
+private struct SelectedTabGlass: ViewModifier {
+    var active: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if active {
+            content.glassCapsule(interactive: true, dense: true)
+        } else {
+            content
         }
     }
 }

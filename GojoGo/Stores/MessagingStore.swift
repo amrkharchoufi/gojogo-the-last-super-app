@@ -188,12 +188,14 @@ final class MessagingStore {
         // Audio rides in the media item's file slot; a pin rides there as a geo: URI.
         let audioURL = kind == .audio ? dto.mediaItems?.first?.videoUrl : nil
         let place = kind == .location ? WorldLocationPayload(dto.mediaItems?.first) : nil
+        let movieURL = kind == .video ? firstVideo?.videoUrl : nil
         let carousel = (dto.mediaItems ?? []).map {
-            // Poster (imageUrl) is what renders in the bubble for both photo and
-            // video items; the video file (videoUrl) is for future playback.
+            // Poster (imageUrl) renders in the bubble; videoUrl is the movie the
+            // viewer plays when the slide is opened.
             WorldCarouselItem(imageData: Data(), isVideo: $0.isVideo,
                               durationLabel: $0.durationLabel,
-                              imageURL: $0.imageUrl ?? $0.videoUrl)
+                              imageURL: $0.imageUrl,
+                              videoURL: $0.isVideo ? $0.videoUrl : nil)
         }
         let reactions = dto.reactions.map {
             WorldReaction(tapback: WorldTapback(rawValue: $0.tapback) ?? .heart,
@@ -216,6 +218,7 @@ final class MessagingStore {
             replyTo: reply,
             poll: dto.poll.map { poll(from: $0, in: dto.conversationId) },
             audioURL: audioURL,
+            videoURL: movieURL,
             latitude: place?.latitude,
             longitude: place?.longitude)
     }

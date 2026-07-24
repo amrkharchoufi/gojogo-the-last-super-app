@@ -79,6 +79,9 @@ final class AppState: ObservableObject {
     @Published var worldRealtimeConnected: Bool = false
     /// The person (or group) behind the open thread, for the contact page.
     @Published var worldContactProfile: WorldContactProfile? = nil
+    /// Attachment(s) open in the full-screen media viewer.
+    @Published var worldMediaViewerItems: [ChatMediaItem] = []
+    @Published var worldMediaViewerIndex: Int = 0
     /// Threads muted on this device (no local alert; server push is a global toggle).
     @Published var worldMutedConversations: Set<UUID> = WorldPreference.mutedConversations
 
@@ -116,6 +119,11 @@ final class AppState: ObservableObject {
     @Published var worldSetupComplete: Bool = false
     /// Whether `worldSetupComplete` reflects a real backend answer yet.
     @Published var worldSetupLoaded: Bool = false
+    /// True while conversation list fetch is in flight (avoids empty-flash).
+    /// Starts true because the list begins empty until the first fetch lands.
+    @Published var worldConversationsLoading: Bool = true
+    /// Becomes true after the first connected fetch attempt finishes (success or fail).
+    @Published var worldConversationsLoaded: Bool = false
     @Published var worldSetupStep: WorldSetupStep = .intro
     @Published var worldSetupPhone: String = ""
     @Published var worldSetupCode: String = ""
@@ -543,6 +551,11 @@ final class AppState: ObservableObject {
             navMode = .myWorld
             navBarExpanded = false
         }
+        // Always shimmer on empty until the first fetch completes — don't wait
+        // for backendConnected (that's what caused empty → shimmer → chats).
+        if worldConversations.isEmpty && !worldConversationsLoaded {
+            worldConversationsLoading = true
+        }
         schedulePersist()
     }
 
@@ -801,7 +814,8 @@ final class AppState: ObservableObject {
         if attachments.count >= 2 {
             let items = attachments.map {
                 WorldCarouselItem(imageData: $0.imageData, isVideo: $0.isVideo,
-                                  durationLabel: $0.durationLabel)
+                                  durationLabel: $0.durationLabel,
+                                  localVideoURL: $0.videoURL)
             }
             let hasVideo = attachments.contains(where: \.isVideo)
             let preview = hasVideo
@@ -818,7 +832,8 @@ final class AppState: ObservableObject {
             deliverWorldMessage(
                 WorldMessage(kind: att.isVideo ? .video : .photo, text: "",
                              fromUser: true, readLabel: "Delivered",
-                             imageData: att.imageData, durationLabel: att.durationLabel),
+                             imageData: att.imageData, durationLabel: att.durationLabel,
+                             localVideoURL: att.videoURL),
                 preview: att.isVideo ? "You: 📹 Video" : "You: 📷 Photo")
             worldPendingAttachments = []
         }
@@ -951,17 +966,11 @@ final class AppState: ObservableObject {
     /// Appends an outgoing message to the open thread and schedules the canned reply.
     /// When `scheduled` is true the bubble first appears in a pending state and is
     /// "sent" a few seconds later (demo stand-in for Send Later).
-    private func deliverWorldMessage(_ msg: WorldMessage, preview: String, scheduled: Bool = false,
+    func deliverWorldMessage(_ msg: WorldMessage, preview: String, scheduled: Bool = false,
                                      replyToId: UUID? = nil, scheduledAt: Date? = nil,
                                      in conversationID: UUID? = nil) {
         guard let id = conversationID ?? selectedWorldConversationID,
               let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
-        // Only the newest outgoing message carries a receipt label.
-        if !scheduled {
-            for j in worldConversations[i].messages.indices where worldConversations[i].messages[j].fromUser {
-                worldConversations[i].messages[j].readLabel = nil
-            }
-        }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.68)) {
             worldConversations[i].messages.append(msg)
             if !scheduled { worldConversations[i].preview = preview }
@@ -995,10 +1004,6 @@ final class AppState: ObservableObject {
             else { return }
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                for k in self.worldConversations[i].messages.indices
-                where self.worldConversations[i].messages[k].fromUser {
-                    self.worldConversations[i].messages[k].readLabel = nil
-                }
                 self.worldConversations[i].messages[j].scheduledLabel = nil
                 self.worldConversations[i].messages[j].readLabel = "Delivered"
                 self.worldConversations[i].preview = preview
@@ -1155,9 +1160,15 @@ final class AppState: ObservableObject {
     private func receiveWorldReply(in id: UUID) {
         if worldTypingConversationID == id { worldTypingConversationID = nil }
         guard let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
-        // Mark the latest outgoing message as read.
-        if let last = worldConversations[i].messages.lastIndex(where: { $0.fromUser && $0.readLabel != nil }) {
-            worldConversations[i].messages[last].readLabel = "Read just now"
+        // Mark every outgoing bubble as read (demo stand-in for a real receipt).
+        let now = Date()
+        for j in worldConversations[i].messages.indices
+        where worldConversations[i].messages[j].fromUser
+              && worldConversations[i].messages[j].scheduledLabel == nil {
+            worldConversations[i].messages[j].readLabel = "Read"
+            if worldConversations[i].messages[j].readAt == nil {
+                worldConversations[i].messages[j].readAt = now
+            }
         }
         // Sometimes the other side tapbacks the last thing you sent, like iMessage.
         if Int.random(in: 0..<3) == 0,
@@ -1223,6 +1234,20 @@ final class AppState: ObservableObject {
         (convo?.messages ?? [])
             .filter { $0.kind == .location && $0.latitude != nil }
             .reversed()
+    }
+
+    /// Opens a chat attachment full screen.
+    func openWorldMediaViewer(_ items: [ChatMediaItem], at index: Int) {
+        guard !items.isEmpty else { return }
+        ChatAudioPlayer.shared.stop()
+        showWorldAppsMenu = false
+        worldMediaViewerIndex = min(max(index, 0), items.count - 1)
+        worldMediaViewerItems = items
+    }
+
+    func closeWorldMediaViewer() {
+        worldMediaViewerItems = []
+        worldMediaViewerIndex = 0
     }
 
     func openWorldContact() {
@@ -1563,6 +1588,8 @@ final class AppState: ObservableObject {
         PushRegistrar.shared.reset()
         worldSetupComplete = false
         worldSetupLoaded = false
+        worldConversationsLoading = true
+        worldConversationsLoaded = false
         worldSetupStep = .intro
         worldSetupPhone = ""; worldSetupCode = ""; worldSetupName = ""
         worldSetupAvatarData = nil; worldSetupAvatarURL = nil; worldPhone = nil

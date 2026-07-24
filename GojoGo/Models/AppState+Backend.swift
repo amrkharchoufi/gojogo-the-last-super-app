@@ -24,6 +24,11 @@ extension AppState {
             SocialStore.shared.myHandle = profile.handle
             applyProfile(profile)
             backendConnected = true
+            // Messaging fetch is next — start shimmer early so My World never
+            // flashes the empty state while connectMessaging is still running.
+            if worldConversations.isEmpty {
+                worldConversationsLoading = true
+            }
             await refreshSocial()
             await refreshOwnCounts()
             await refreshEconomy()
@@ -32,7 +37,9 @@ extension AppState {
             enablePushNotifications()
             schedulePersist()
         } catch {
-            // Offline or cold backend — keep cached UI; next launch retries.
+            // Offline or cold backend — stop shimmer so My World can show empty/demo.
+            worldConversationsLoading = false
+            worldConversationsLoaded = true
             #if DEBUG
             print("Backend connect failed: \(error.localizedDescription)")
             #endif

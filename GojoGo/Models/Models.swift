@@ -683,12 +683,17 @@ struct WorldCarouselItem: Identifiable, Equatable {
     var durationLabel: String?
     /// Remote URL for live (backend) messages; local `imageData` wins when set.
     var imageURL: String?
+    /// The movie file behind a video slide (remote, then on-device).
+    var videoURL: String?
+    var localVideoURL: URL?
 
     init(id: UUID = UUID(), imageData: Data, isVideo: Bool = false,
-         durationLabel: String? = nil, imageURL: String? = nil) {
+         durationLabel: String? = nil, imageURL: String? = nil,
+         videoURL: String? = nil, localVideoURL: URL? = nil) {
         self.id = id; self.imageData = imageData
         self.isVideo = isVideo; self.durationLabel = durationLabel
         self.imageURL = imageURL
+        self.videoURL = videoURL; self.localVideoURL = localVideoURL
     }
 }
 
@@ -698,10 +703,15 @@ struct WorldPendingAttachment: Identifiable {
     var imageData: Data
     var isVideo: Bool
     var durationLabel: String?
+    /// The picked movie itself, kept on disk so it can be uploaded and played
+    /// back — `imageData` is only its poster frame.
+    var videoURL: URL?
 
-    init(id: UUID = UUID(), imageData: Data, isVideo: Bool = false, durationLabel: String? = nil) {
+    init(id: UUID = UUID(), imageData: Data, isVideo: Bool = false,
+         durationLabel: String? = nil, videoURL: URL? = nil) {
         self.id = id; self.imageData = imageData
         self.isVideo = isVideo; self.durationLabel = durationLabel
+        self.videoURL = videoURL
     }
 }
 
@@ -713,6 +723,8 @@ struct WorldMessage: Identifiable {
     var fileName: String?
     var fileMeta: String?
     var readLabel: String?
+    /// When the other side read this message (used for "Read 3:42 PM" etc.).
+    var readAt: Date?
     var imageData: Data?
     /// Remote URL for live (backend) photo/video messages; `imageData` wins when set.
     var imageURL: String?
@@ -731,26 +743,33 @@ struct WorldMessage: Identifiable {
     var audioURL: String?
     /// On-device recording, playable before/while the upload finishes.
     var localAudioURL: URL?
+    /// Movie behind a `.video` message — `imageData`/`imageURL` is its poster.
+    var videoURL: String?
+    var localVideoURL: URL?
     /// Coordinates for `.location` messages — real fix, openable in Maps.
     var latitude: Double?
     var longitude: Double?
 
     init(id: UUID = UUID(), kind: WorldMessageKind = .text, text: String,
          fromUser: Bool = false, fileName: String? = nil, fileMeta: String? = nil,
-         readLabel: String? = nil, imageData: Data? = nil, imageURL: String? = nil,
+         readLabel: String? = nil, readAt: Date? = nil,
+         imageData: Data? = nil, imageURL: String? = nil,
          durationLabel: String? = nil,
          senderName: String? = nil, carouselItems: [WorldCarouselItem] = [],
          reactions: [WorldReaction] = [], replyTo: WorldReplySnippet? = nil,
          poll: WorldPoll? = nil, scheduledLabel: String? = nil,
          audioURL: String? = nil, localAudioURL: URL? = nil,
+         videoURL: String? = nil, localVideoURL: URL? = nil,
          latitude: Double? = nil, longitude: Double? = nil) {
         self.id = id; self.kind = kind; self.text = text; self.fromUser = fromUser
-        self.fileName = fileName; self.fileMeta = fileMeta; self.readLabel = readLabel
+        self.fileName = fileName; self.fileMeta = fileMeta
+        self.readLabel = readLabel; self.readAt = readAt
         self.imageData = imageData; self.imageURL = imageURL; self.durationLabel = durationLabel
         self.senderName = senderName; self.carouselItems = carouselItems
         self.reactions = reactions; self.replyTo = replyTo
         self.poll = poll; self.scheduledLabel = scheduledLabel
         self.audioURL = audioURL; self.localAudioURL = localAudioURL
+        self.videoURL = videoURL; self.localVideoURL = localVideoURL
         self.latitude = latitude; self.longitude = longitude
     }
 
@@ -761,6 +780,14 @@ struct WorldMessage: Identifiable {
             return localAudioURL
         }
         return audioURL.flatMap(URL.init(string:))
+    }
+
+    /// Same rule for video: the file we still hold beats the network copy.
+    var playableVideoURL: URL? {
+        if let localVideoURL, FileManager.default.fileExists(atPath: localVideoURL.path) {
+            return localVideoURL
+        }
+        return videoURL.flatMap(URL.init(string:))
     }
 
     /// One-line description used for reply snippets & list previews.
