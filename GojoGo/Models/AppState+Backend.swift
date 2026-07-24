@@ -32,6 +32,7 @@ extension AppState {
             await refreshSocial()
             await refreshOwnCounts()
             await refreshEconomy()
+            await refreshDelivery()
             await connectMessaging()
             await refreshNotifications()
             enablePushNotifications()
@@ -74,6 +75,9 @@ extension AppState {
                 stories = rings
                 savedPostIDs = Set(page.posts.filter(\.bookmarked).map(\.id))
             }
+            // Decode the first screenful of media up front so the feed is "already
+            // there" the instant the user looks — no per-cell spinner on refresh.
+            prefetchFeedImages(from: 0, count: 8)
             commentsByPost = commentsByPost.filter { !SocialStore.shared.remotePostIds.contains($0.key) }
         } catch {
             #if DEBUG
@@ -89,13 +93,18 @@ extension AppState {
         await refreshOwnCounts()
     }
 
-    /// Fetches the next feed page when the given post is near the bottom.
+    /// Fetches the next feed page when the given post is near the bottom, and
+    /// warms the images just below the current scroll position. Triggers 6 rows
+    /// out (not 3) so the next page is in hand before the user reaches it — the
+    /// scroll should never hit a "loading more" gap.
     func loadMoreFeedIfNeeded(after postID: UUID) {
+        // Look-ahead: decode the next few posts' media before they scroll on.
+        prefetchAround(postID: postID)
         guard backendConnected,
               !feedLoadingMore,
               let cursor = feedNextBefore,
               let index = posts.firstIndex(where: { $0.id == postID }),
-              index >= posts.count - 3 else { return }
+              index >= posts.count - 6 else { return }
         feedLoadingMore = true
         Task {
             defer { feedLoadingMore = false }
@@ -103,13 +112,40 @@ extension AppState {
                 let page = try await SocialStore.shared.fetchFeed(before: cursor)
                 feedNextBefore = page.nextBefore
                 let existing = Set(posts.map(\.id))
-                posts.append(contentsOf: page.posts.filter { !existing.contains($0.id) })
+                let fresh = page.posts.filter { !existing.contains($0.id) }
+                let startIndex = posts.count
+                posts.append(contentsOf: fresh)
+                // Warm the whole freshly-arrived page immediately.
+                prefetchFeedImages(from: startIndex, count: fresh.count)
             } catch {
                 #if DEBUG
                 print("Feed page load failed: \(error.localizedDescription)")
                 #endif
             }
         }
+    }
+
+    // MARK: Image prefetch
+
+    /// Warms `ImageCache` for a window of posts (post media + author avatar).
+    func prefetchFeedImages(from index: Int, count: Int) {
+        guard count > 0, index < posts.count else { return }
+        let end = min(index + count, posts.count)
+        guard index < end else { return }
+        let urls: [URL] = posts[index..<end].flatMap { post -> [URL] in
+            var out: [URL] = []
+            if let s = post.imageURL, let u = URL(string: s) { out.append(u) }
+            if let a = post.avatarURL, let u = URL(string: a) { out.append(u) }
+            return out
+        }
+        guard !urls.isEmpty else { return }
+        Task { await ImagePrefetcher.shared.prefetch(urls) }
+    }
+
+    /// Look-ahead warm for the ~6 posts after the one currently appearing.
+    func prefetchAround(postID: UUID) {
+        guard let idx = posts.firstIndex(where: { $0.id == postID }) else { return }
+        prefetchFeedImages(from: idx + 1, count: 6)
     }
 
     /// Requests notification permission and registers for APNs. The device

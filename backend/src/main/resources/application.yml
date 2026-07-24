@@ -49,6 +49,18 @@ gojogo:
     dev-otp-code: ${WORLD_OTP_DEV_CODE:}
     sms-sender-id: ${WORLD_SMS_SENDER_ID:GojoGo}
     sms-enabled: ${WORLD_SMS_ENABLED:true}
+  # Food delivery. There is no dispatch module yet (Phase 3), so an order walks
+  # a timeline instead of being offered to a real courier: these offsets, all
+  # measured from the moment the order was placed, are the whole "kitchen +
+  # courier". Shorten them to demo the tracking screen, lengthen for realism.
+  delivery:
+    service-fee-cents: ${DELIVERY_SERVICE_FEE_CENTS:99}
+    fulfilment-poll-ms: ${DELIVERY_FULFILMENT_POLL_MS:10000}
+    timeline:
+      preparing-seconds: ${DELIVERY_PREPARING_SECONDS:20}
+      pickup-seconds: ${DELIVERY_PICKUP_SECONDS:75}
+      delivering-seconds: ${DELIVERY_DELIVERING_SECONDS:150}
+      delivered-seconds: ${DELIVERY_DELIVERED_SECONDS:330}
   # APNs push (activity notifications). All empty → push disabled (sender
   # no-ops). key-base64 is the base64 of the Apple .p8 token-auth key file.
   apns:

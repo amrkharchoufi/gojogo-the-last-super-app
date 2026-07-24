@@ -105,6 +105,11 @@ final class APIClient {
         var put = URLRequest(url: url)
         put.httpMethod = "PUT"
         put.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        // Replay the signed Cache-Control so the object is written cacheable-forever
+        // (content-addressed keys never change). Must match the presign byte-for-byte.
+        if let cacheControl = presign.cacheControl {
+            put.setValue(cacheControl, forHTTPHeaderField: "Cache-Control")
+        }
         let (_, response) = try await URLSession.shared.upload(for: put, from: data)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw APIError.http(status: (response as? HTTPURLResponse)?.statusCode ?? -1,

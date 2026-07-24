@@ -89,6 +89,50 @@ final class ImageCache {
     }
 }
 
+// MARK: - Prefetch
+
+/// Warms `ImageCache` for images the user is *about* to see, so a feed cell has
+/// its photo decoded before it scrolls on screen — the reason posts feel
+/// "already there" instead of flashing a spinner. Bounded concurrency (so a
+/// burst of look-ahead requests can't starve the visible cell's own load),
+/// in-flight de-duplication, and a free skip for anything already in memory.
+actor ImagePrefetcher {
+    static let shared = ImagePrefetcher()
+
+    private var inFlight: Set<String> = []
+    private var pending: [URL] = []
+    private var active = 0
+    private let maxConcurrent = 4
+
+    /// Queue a look-ahead warm for these URLs. Already-cached or already-queued
+    /// URLs are dropped; the rest fetch newest-request-first-ish via a small pool.
+    func prefetch(_ urls: [URL]) {
+        for url in urls {
+            let key = url.absoluteString
+            if inFlight.contains(key) { continue }
+            if ImageCache.shared.memoryImage(for: url) != nil { continue }
+            inFlight.insert(key)
+            pending.append(url)
+        }
+        pump()
+    }
+
+    private func pump() {
+        while active < maxConcurrent, !pending.isEmpty {
+            let url = pending.removeFirst()
+            active += 1
+            Task { await self.run(url) }
+        }
+    }
+
+    private func run(_ url: URL) async {
+        _ = try? await ImageCache.shared.image(for: url)
+        active -= 1
+        inFlight.remove(url.absoluteString)
+        pump()
+    }
+}
+
 // MARK: - View
 
 enum CachedImagePhase {

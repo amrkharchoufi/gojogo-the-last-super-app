@@ -19,6 +19,12 @@ class PresignService {
 
     private static final Duration EXPIRY = Duration.ofMinutes(15);
 
+    // Uploaded keys are content-addressed (media/{profile}/{randomUUID}.{ext}),
+    // so an object never changes once written — cache it forever at every layer
+    // (OS/URLCache, and CloudFront once the account is verified). Stamped at PUT
+    // time; the client must replay this exact header (it is a signed header).
+    static final String MEDIA_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
     private static final Map<String, String> EXTENSION_BY_CONTENT_TYPE = Map.of(
         "image/jpeg", "jpg",
         "image/png", "png",
@@ -50,6 +56,7 @@ class PresignService {
             .bucket(properties.bucket())
             .key(key)
             .contentType(contentType)
+            .cacheControl(MEDIA_CACHE_CONTROL)
             .build();
         String uploadUrl = presigner.presignPutObject(PutObjectPresignRequest.builder()
                 .signatureDuration(EXPIRY)
@@ -60,7 +67,8 @@ class PresignService {
         String publicUrl = "https://" + properties.cdnDomain() + "/" + key;
         // Record the key so the cleanup sweep can tell whether it is ever referenced.
         references.recordUpload(key, profileId, contentType);
-        return new PresignResponse(uploadUrl, key, publicUrl, contentType, EXPIRY.toSeconds());
+        return new PresignResponse(uploadUrl, key, publicUrl, contentType,
+            EXPIRY.toSeconds(), MEDIA_CACHE_CONTROL);
     }
 
     @PreDestroy

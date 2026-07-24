@@ -126,7 +126,9 @@
             "tasks.apprunner.amazonaws.com",
             "build.apprunner.amazonaws.com",
             "cloudformation.amazonaws.com",
-            "cognito-idp.amazonaws.com"
+            "cognito-idp.amazonaws.com",
+            "ecs.amazonaws.com",
+            "ecs-tasks.amazonaws.com"
           ]
         }
       }
@@ -195,7 +197,22 @@
         "ec2:DisassociateRouteTable",
         "ec2:CreateNetworkInterface",
         "ec2:DeleteNetworkInterface",
-        "ec2:CreateNetworkInterfacePermission"
+        "ec2:CreateNetworkInterfacePermission",
+        "ec2:CreateInternetGateway",
+        "ec2:AttachInternetGateway",
+        "ec2:DetachInternetGateway",
+        "ec2:DeleteInternetGateway",
+        "ec2:CreateNatGateway",
+        "ec2:DeleteNatGateway",
+        "ec2:DescribeNatGateways",
+        "ec2:AllocateAddress",
+        "ec2:ReleaseAddress",
+        "ec2:DescribeAddresses",
+        "ec2:CreateVpcEndpoint",
+        "ec2:DeleteVpcEndpoints",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:ModifyVpcEndpoint",
+        "ec2:DescribePrefixLists"
       ],
       "Resource": "*"
     },
@@ -203,6 +220,19 @@
       "Sid": "Ec2DescribeVpcAttribute",
       "Effect": "Allow",
       "Action": "ec2:DescribeVpcAttribute",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcsFargateAlbAcmRoute53ForBackend",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:*",
+        "elasticloadbalancing:*",
+        "acm:*",
+        "route53:*",
+        "logs:*",
+        "application-autoscaling:*"
+      ],
       "Resource": "*"
     },
     {

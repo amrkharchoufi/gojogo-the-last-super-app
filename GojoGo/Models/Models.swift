@@ -1081,6 +1081,9 @@ struct DeliveryRestaurant: Identifiable {
     var reviews: String
     var etaMinutes: Int
     var feeLabel: String
+    /// What the delivery fee actually is, in cents — `feeLabel` is its display
+    /// form. The server prices the order, so this only drives the cart preview.
+    var feeCents: Int
     var imageURL: String?
     var tags: [String]
     var promo: String?
@@ -1090,15 +1093,46 @@ struct DeliveryRestaurant: Identifiable {
     var longitude: Double
 
     init(id: UUID = UUID(), name: String, cuisine: String, rating: Double,
-         reviews: String, etaMinutes: Int, feeLabel: String, imageURL: String? = nil,
+         reviews: String, etaMinutes: Int, feeLabel: String, feeCents: Int = 149,
+         imageURL: String? = nil,
          tags: [String] = [], promo: String? = nil, categories: [String] = [],
          menu: [DeliveryMenuSection] = [],
          latitude: Double = 33.5731, longitude: Double = -7.5898) {
         self.id = id; self.name = name; self.cuisine = cuisine
         self.rating = rating; self.reviews = reviews; self.etaMinutes = etaMinutes
-        self.feeLabel = feeLabel; self.imageURL = imageURL; self.tags = tags
+        self.feeLabel = feeLabel; self.feeCents = feeCents
+        self.imageURL = imageURL; self.tags = tags
         self.promo = promo; self.categories = categories; self.menu = menu
         self.latitude = latitude; self.longitude = longitude
+    }
+}
+
+/// A saved delivery address (backed by the `delivery` module).
+struct DeliveryAddress: Identifiable, Equatable {
+    let id: UUID
+    var label: String
+    var line1: String
+    var note: String
+    var latitude: Double?
+    var longitude: Double?
+    var isDefault: Bool
+
+    init(id: UUID = UUID(), label: String, line1: String, note: String = "",
+         latitude: Double? = nil, longitude: Double? = nil, isDefault: Bool = false) {
+        self.id = id; self.label = label; self.line1 = line1; self.note = note
+        self.latitude = latitude; self.longitude = longitude; self.isDefault = isDefault
+    }
+
+    /// "Home · 12 Rue Atlas"
+    var display: String { line1.isEmpty ? label : "\(label) · \(line1)" }
+
+    /// House / office / pin, picked from the label the user chose.
+    var icon: String {
+        switch label.lowercased() {
+        case "home":  return "house.fill"
+        case "work", "office": return "building.2.fill"
+        default:      return "mappin.circle.fill"
+        }
     }
 }
 

@@ -3,6 +3,7 @@ import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apprunner from 'aws-cdk-lib/aws-apprunner';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as rds from 'aws-cdk-lib/aws-rds';
@@ -19,6 +20,10 @@ export interface GojoGoAppStackProps extends cdk.StackProps {
   mediaCdnDomain: string;
   messagingTable: dynamodb.Table;
   webSocketStage: apigwv2.WebSocketStage;
+  /** VPC the backend joins so it can reach the now-private RDS. */
+  vpc: ec2.Vpc;
+  /** SG the connector attaches to (allowed into the RDS security group). */
+  appRunnerSecurityGroup: ec2.SecurityGroup;
 }
 
 export class GojoGoAppStack extends cdk.Stack {
@@ -83,8 +88,40 @@ export class GojoGoAppStack extends cdk.Stack {
       'arn:aws:secretsmanager:us-east-1:578109959809:secret:gojogo/apns-key-cmCUid');
     apnsSecret.grantRead(instanceRole);
 
+    // Explicit autoscaling so the service's warm floor / burst ceiling / per-
+    // instance concurrency are codified and tunable (the AWS default is an
+    // opaque min=1/max=25/concurrency=100). App Runner keeps `minSize`
+    // instances provisioned (billed at the reduced idle-memory rate), so a
+    // request never waits on a from-zero cold start; raise `minSize` before a
+    // launch spike if you want more always-warm headroom.
+    const autoScaling = new apprunner.CfnAutoScalingConfiguration(this, 'AutoScaling', {
+      autoScalingConfigurationName: 'gojogo-backend',
+      minSize: 1,           // always-warm instances (idle-billed) — no cold start
+      maxSize: 4,           // burst ceiling
+      maxConcurrency: 80,   // requests per instance before scaling out
+    });
+
+    // VPC connector: puts the backend inside the VPC so it can reach the private
+    // RDS. App Runner VPC egress routes ALL outbound through here; the connector's
+    // PRIVATE_WITH_EGRESS subnets have a NAT default route so Cognito/Apple/APNs
+    // still resolve. (S3 + DynamoDB use the VPC's free gateway endpoints.)
+    const vpcConnector = new apprunner.CfnVpcConnector(this, 'VpcConnector', {
+      vpcConnectorName: 'gojogo-backend',
+      subnets: props.vpc.selectSubnets({
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      }).subnetIds,
+      securityGroups: [props.appRunnerSecurityGroup.securityGroupId],
+    });
+
     const service = new apprunner.CfnService(this, 'Service', {
       serviceName: 'gojogo-backend',
+      autoScalingConfigurationArn: autoScaling.attrAutoScalingConfigurationArn,
+      networkConfiguration: {
+        egressConfiguration: {
+          egressType: 'VPC',
+          vpcConnectorArn: vpcConnector.attrVpcConnectorArn,
+        },
+      },
       sourceConfiguration: {
         authenticationConfiguration: { accessRoleArn: ecrAccessRole.roleArn },
         autoDeploymentsEnabled: false,
@@ -128,6 +165,10 @@ export class GojoGoAppStack extends cdk.Stack {
               { name: 'APNS_TEAM_ID', value: 'T8348X4CNY' },
               { name: 'APNS_BUNDLE_ID', value: 'com.gojo.gojogo' },
               { name: 'APNS_PRODUCTION', value: 'true' },
+              // Exposes /actuator/health/liveness (+ /readiness) — the liveness
+              // group excludes the DB indicator, so App Runner's health probe
+              // gates on "app is up", not DB latency. See healthCheckConfiguration.
+              { name: 'MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED', value: 'true' },
             ],
             runtimeEnvironmentSecrets: [
               // ":password::" extracts just that JSON key from the RDS-generated
@@ -145,13 +186,19 @@ export class GojoGoAppStack extends cdk.Stack {
         memory: '2048',
         instanceRoleArn: instanceRole.roleArn,
       },
+      // Probe the LIVENESS group, not the full health. The full /actuator/health
+      // includes a DataSource indicator that blocks up to 30s (Hikari timeout)
+      // whenever the DB is briefly slow, returning 503 and forcing App Runner to
+      // roll the deployment back — which is exactly what broke the private-RDS
+      // cutover. Liveness reflects only "is the app process up", so the deploy
+      // gate no longer depends on DB latency. Requires the probes group env below.
       healthCheckConfiguration: {
         protocol: 'HTTP',
-        path: '/actuator/health',
+        path: '/actuator/health/liveness',
         interval: 10,
         timeout: 5,
         healthyThreshold: 1,
-        unhealthyThreshold: 5,
+        unhealthyThreshold: 8,
       },
     });
 

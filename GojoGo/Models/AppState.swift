@@ -252,6 +252,21 @@ final class AppState: ObservableObject {
     @Published var deliveryOrderTotalLabel: String = ""
     @Published var deliveryOrderSummary: String = ""
     private var deliveryTask: Task<Void, Never>?
+    /// Non-nil while a server-backed order is in flight. The SampleData catalog
+    /// still runs the on-device simulation below; a live order's fulfilment is
+    /// owned by the backend and only mirrored here (see AppState+Delivery).
+    var deliveryLiveOrderID: UUID? = nil
+    var deliveryPollTask: Task<Void, Never>?
+    /// Restaurants whose menu is being fetched, so a re-open doesn't re-request.
+    var deliveryMenuLoading: Set<UUID> = []
+    /// Saved delivery addresses (server-backed) + the one this order goes to.
+    @Published var deliveryAddresses: [DeliveryAddress] = []
+    @Published var selectedDeliveryAddressID: UUID? = nil
+    @Published var showDeliveryAddressSheet: Bool = false
+    /// Transient message shown over GojoDelivery — a failed order, a refused
+    /// cancel. Cleared automatically; `deliveryNoticeTask` owns the timer.
+    @Published var deliveryNotice: String? = nil
+    var deliveryNoticeTask: Task<Void, Never>?
 
     // Partner (Become a driver / delivery partner)
     /// Roles the user has fully onboarded into (can go online).
@@ -401,6 +416,9 @@ final class AppState: ObservableObject {
         onboardingStep = 3
         topUpSeedContent()
         refreshSampleMediaFromSeed()
+        // Warm the restored feed's media on launch so the first screenful is
+        // decoded before the live refresh even returns — instant cold start.
+        prefetchFeedImages(from: 0, count: 8)
         // Rewrite durable relative video refs after migration.
         schedulePersist()
     }
@@ -1585,6 +1603,13 @@ final class AppState: ObservableObject {
         AuthSession.shared.clear()
         SocialStore.shared.reset()
         ProfileStore.shared.reset()
+        DeliveryStore.shared.reset()
+        deliveryPollTask?.cancel()
+        deliveryLiveOrderID = nil
+        deliveryNoticeTask?.cancel()
+        deliveryNotice = nil
+        deliveryAddresses = []
+        selectedDeliveryAddressID = nil
         WorldSocket.shared.disconnect()
         MessagingStore.shared.reset()
         PushRegistrar.shared.reset()
@@ -2908,6 +2933,8 @@ final class AppState: ObservableObject {
     }
 
     func openDeliveryRestaurant(_ id: UUID) {
+        // Browse returns restaurants without their menus — pull this one's now.
+        loadDeliveryMenuIfNeeded(id)
         withAnimation(.easeInOut(duration: 0.28)) { selectedDeliveryRestaurantID = id }
     }
 
@@ -2926,7 +2953,7 @@ final class AppState: ObservableObject {
     var deliveryFeeAmount: Double {
         guard let rid = deliveryCartRestaurantID,
               let r = deliveryRestaurants.first(where: { $0.id == rid }) else { return 1.49 }
-        return r.feeLabel == "Free" ? 0 : 1.49
+        return Double(r.feeCents) / 100
     }
 
     var deliveryServiceFee: Double { deliveryCart.isEmpty ? 0 : 0.99 }
@@ -2981,6 +3008,12 @@ final class AppState: ObservableObject {
 
     func placeDeliveryOrder() {
         guard !deliveryCart.isEmpty, let rid = deliveryCartRestaurantID else { return }
+        // A live restaurant means a real order: the backend prices it and owns
+        // the fulfilment timeline. Everything below is the offline demo.
+        if backendConnected, DeliveryStore.shared.isRemote(rid) {
+            placeLiveDeliveryOrder(merchantID: rid)
+            return
+        }
         deliveryOrderRestaurantID = rid
         deliveryOrderTotalLabel = String(format: "$%.2f", deliveryCartTotal)
         deliveryOrderSummary = deliveryCart
@@ -3038,6 +3071,10 @@ final class AppState: ObservableObject {
     }
 
     func cancelDeliveryOrder() {
+        if let orderID = deliveryLiveOrderID {
+            cancelLiveDeliveryOrder(orderID)
+            return
+        }
         deliveryTask?.cancel()
         deliveryCourier = nil
         deliveryCourierProgress = 0
@@ -3046,6 +3083,10 @@ final class AppState: ObservableObject {
     }
 
     func finishDeliveryOrder() {
+        if let orderID = deliveryLiveOrderID {
+            finishLiveDeliveryOrder(orderID)
+            return
+        }
         deliveryTask?.cancel()
         if let r = deliveryOrderRestaurant {
             deliveryPastOrders.insert(DeliveryPastOrder(

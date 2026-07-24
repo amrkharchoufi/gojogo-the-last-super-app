@@ -25,6 +25,16 @@ struct GojoDeliveryView: View {
                 DeliveryBrowseView()
                     .transition(.opacity)
             }
+
+            if let notice = app.deliveryNotice {
+                DeliveryNoticeBanner(message: notice) { app.dismissDeliveryNotice() }
+                    .padding(.horizontal, 16)
+                    // Clears the section header / map chrome rather than
+                    // sitting on top of the wordmark.
+                    .padding(.top, 66)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
         .animation(.ggOverlay, value: app.selectedDeliveryRestaurantID)
         .animation(.ggOverlay, value: app.deliveryStatus != nil)
@@ -35,6 +45,47 @@ struct GojoDeliveryView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(GGColor.sheetBG)
         }
+        .sheet(isPresented: $app.showDeliveryAddressSheet) {
+            DeliveryAddressSheet()
+                .environmentObject(app)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
+    }
+}
+
+// MARK: - Notice
+//
+// The delivery screens are optimistic — the tracking view opens before the
+// order lands. This is how a failure (or a refused cancel) gets said out loud.
+
+private struct DeliveryNoticeBanner: View {
+    let message: String
+    var onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+            Text(message)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(GGColor.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .glass(cornerRadius: 18, tint: GGColor.ink(0.10), floating: true)
     }
 }
 
@@ -108,6 +159,7 @@ private struct DeliveryBrowseView: View {
     private var addressRow: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            app.showDeliveryAddressSheet = true
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "location.fill")
@@ -116,9 +168,10 @@ private struct DeliveryBrowseView: View {
                 Text("Deliver to")
                     .font(.system(size: 13))
                     .foregroundStyle(GGColor.textSecondary)
-                Text("Home · 12 Rue Atlas")
+                Text(app.deliveryAddressLabel)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(GGColor.textPrimary)
+                    .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(GGColor.textTertiary)
@@ -622,10 +675,17 @@ private struct DeliveryCartBar: View {
 
 private struct DeliveryCheckoutSheet: View {
     @EnvironmentObject var app: AppState
+    /// The address sheet is presented from here rather than through AppState so
+    /// it stacks over checkout instead of fighting the root view's sheet slot.
+    @State private var showAddresses = false
 
     private var restaurant: DeliveryRestaurant? {
         guard let id = app.deliveryCartRestaurantID else { return nil }
         return app.deliveryRestaurants.first(where: { $0.id == id })
+    }
+
+    private var needsAddress: Bool {
+        app.deliveryNeedsAddress(for: app.deliveryCartRestaurantID)
     }
 
     var body: some View {
@@ -635,7 +695,14 @@ private struct DeliveryCheckoutSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     cartLines
                     feeBreakdown
-                    detailRow(icon: "location.fill", title: "Deliver to", value: "Home · 12 Rue Atlas")
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        showAddresses = true
+                    } label: {
+                        detailRow(icon: "location.fill", title: "Deliver to",
+                                  value: app.deliveryAddressLabel)
+                    }
+                    .buttonStyle(PressableStyle())
                     detailRow(icon: "creditcard.fill", title: "Paying with", value: "Apple Pay")
                 }
                 .padding(.horizontal, 18)
@@ -644,6 +711,13 @@ private struct DeliveryCheckoutSheet: View {
             placeOrderButton
         }
         .background(GGColor.sheetBG.ignoresSafeArea())
+        .sheet(isPresented: $showAddresses) {
+            DeliveryAddressSheet()
+                .environmentObject(app)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
     }
 
     private var header: some View {
@@ -772,10 +846,16 @@ private struct DeliveryCheckoutSheet: View {
     private var placeOrderButton: some View {
         Button {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            app.placeDeliveryOrder()
+            // Nowhere to deliver to yet — ask for that first instead of
+            // bouncing off the backend.
+            if needsAddress {
+                showAddresses = true
+            } else {
+                app.placeDeliveryOrder()
+            }
         } label: {
             HStack {
-                Text("Place order")
+                Text(needsAddress ? "Add a delivery address" : "Place order")
                     .font(.system(size: 16, weight: .bold))
                 Spacer()
                 Text(String(format: "$%.2f", app.deliveryCartTotal))

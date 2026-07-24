@@ -166,6 +166,10 @@ struct PresignDTO: Decodable {
     var publicUrl: String
     var contentType: String
     var expiresSeconds: Int
+    // Signed Cache-Control the backend stamped on the presigned PUT — must be
+    // replayed verbatim on the upload or S3 rejects the signature. Optional so
+    // older backends (no field) still decode.
+    var cacheControl: String?
 }
 
 // MARK: - Notifications (activity feed)

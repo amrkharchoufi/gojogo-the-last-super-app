@@ -66,22 +66,59 @@ class PostService {
         return decorate(List.of(post), me).getFirst();
     }
 
+    // --- Feed ranking weights (see rank()) ---
+    // Recency still dominates for fresh content, but a genuinely hot post
+    // (lots of likes/comments) or one from someone you follow can jump the
+    // visible window. Tuned so a ~12h-old post has ~37% of a brand-new one's
+    // recency term, and a post with ~20 likes earns roughly one extra "fresh".
+    private static final double RANK_HALF_LIFE_HOURS = 12.0;
+    private static final double W_RECENCY = 1.0;
+    private static final double W_ENGAGEMENT = 0.35;
+    private static final double W_AFFINITY = 0.6;
+
     @Transactional(readOnly = true)
     FeedResponse feed(UUID me, OffsetDateTime before, int limit) {
         OffsetDateTime cursor = before == null ? OffsetDateTime.now().plusMinutes(1) : before;
         int size = Math.clamp(limit, 1, 50);
-        Set<UUID> followees = new java.util.HashSet<>(follows.followeeIds(me));
+        // followed excludes me — reused for both affinity scoring and decoration
+        // (decoration must not mark my own posts as "following").
+        Set<UUID> followed = follows.followeeIds(me);
         List<Post> page;
-        if (followees.isEmpty()) {
+        if (followed.isEmpty()) {
             // Following no one yet: recency-based discovery feed.
             page = posts.feedGlobal(cursor, PageRequest.of(0, size));
         } else {
-            followees.add(me);
-            page = posts.feedByAuthors(followees, cursor, PageRequest.of(0, size));
+            Set<UUID> authors = new java.util.HashSet<>(followed);
+            authors.add(me);
+            page = posts.feedByAuthors(authors, cursor, PageRequest.of(0, size));
         }
-        List<PostResponse> items = decorate(page, me);
+        // The keyset cursor stays on createdAt (stable pagination — no skips or
+        // dupes across pages); ranking re-orders *within* each fetched window so
+        // the next page still continues from the oldest post by time.
         OffsetDateTime nextBefore = page.size() < size ? null : page.getLast().getCreatedAt();
+        List<Post> ranked = rank(page, followed);
+        List<PostResponse> items = decorate(ranked, me, followed);
         return new FeedResponse(items, nextBefore);
+    }
+
+    /// Re-ranks a recency window by score = recency-decay + engagement + affinity.
+    /// Pure in-memory reorder of the page — no extra queries, no post dropped.
+    private List<Post> rank(List<Post> page, Set<UUID> followees) {
+        if (page.size() < 2) {
+            return page;
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        return page.stream()
+            .sorted(java.util.Comparator.comparingDouble((Post p) -> score(p, now, followees)).reversed())
+            .toList();
+    }
+
+    private double score(Post post, OffsetDateTime now, Set<UUID> followees) {
+        double ageHours = Math.max(0, java.time.Duration.between(post.getCreatedAt(), now).toMinutes()) / 60.0;
+        double recency = Math.exp(-ageHours / RANK_HALF_LIFE_HOURS);
+        double engagement = Math.log1p(post.getLikeCount() + 2.0 * post.getCommentCount());
+        double affinity = followees.contains(post.getAuthorId()) ? 1.0 : 0.0;
+        return W_RECENCY * recency + W_ENGAGEMENT * engagement + W_AFFINITY * affinity;
     }
 
     @Transactional(readOnly = true)
@@ -144,6 +181,12 @@ class PostService {
     }
 
     List<PostResponse> decorate(List<Post> page, UUID me) {
+        // feed() already has the followee set — this path (create/get/byAuthor)
+        // fetches it once here.
+        return decorate(page, me, follows.followeeIds(me));
+    }
+
+    List<PostResponse> decorate(List<Post> page, UUID me, Set<UUID> followed) {
         if (page.isEmpty()) {
             return List.of();
         }
@@ -152,7 +195,6 @@ class PostService {
         Map<UUID, ProfileDto> authors = profiles.findByIds(authorIds);
         Set<UUID> liked = likes.likedPostIds(me, postIds);
         Set<UUID> bookmarked = bookmarks.bookmarkedPostIds(me, postIds);
-        Set<UUID> followed = follows.followeeIds(me);
         return page.stream().map(post -> {
             ProfileDto author = authors.get(post.getAuthorId());
             return new PostResponse(
