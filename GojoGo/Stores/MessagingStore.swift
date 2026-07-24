@@ -59,7 +59,7 @@ final class MessagingStore {
     }
 
     func fetchMessages(_ conversationId: UUID, before: String? = nil, limit: Int = 30) async throws
-        -> (messages: [WorldMessage], nextBefore: String?) {
+        -> (messages: [WorldMessage], nextBefore: String?, peerReadMessageId: UUID?) {
         var path = "/v1/conversations/\(conversationId.uuidString.lowercased())/messages?limit=\(limit)"
         if let before,
            let encoded = before.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
@@ -67,7 +67,7 @@ final class MessagingStore {
         }
         let page: MessagesPageDTO = try await APIClient.shared.get(path)
         // Server returns newest-first; the chat renders oldest-first.
-        return (page.messages.reversed().map { map($0) }, page.nextBefore)
+        return (page.messages.reversed().map { map($0) }, page.nextBefore, page.peerReadMessageId)
     }
 
     @discardableResult

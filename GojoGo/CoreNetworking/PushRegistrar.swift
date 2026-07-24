@@ -15,6 +15,15 @@ final class PushRegistrar {
     private var authenticated = false
     private var lastSent: String?
     private var muted = false
+    private var _activeConversationID: UUID?
+
+    /// The conversation the user currently has open, if any. Kept in sync by
+    /// AppState so a foreground message push for the thread you're already
+    /// reading can be suppressed instead of banner-ing over it.
+    var activeConversationID: UUID? {
+        get { queue.sync { _activeConversationID } }
+        set { queue.async { self._activeConversationID = newValue } }
+    }
 
     /// APNs delivered a device token (hex).
     func updateToken(_ hexToken: String) {

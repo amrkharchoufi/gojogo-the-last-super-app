@@ -571,6 +571,7 @@ final class AppState: ObservableObject {
         showWorldContact = false
         showWorldFilters = false
         selectedWorldConversationID = id
+        PushRegistrar.shared.activeConversationID = id
         if let i = worldConversations.firstIndex(where: { $0.id == id }) {
             worldConversations[i].unread = 0
         }
@@ -581,6 +582,7 @@ final class AppState: ObservableObject {
         ChatAudioPlayer.shared.stop()
         clearWorldNotice()
         selectedWorldConversationID = nil
+        PushRegistrar.shared.activeConversationID = nil
         worldDraft = ""
         worldPendingAttachments = []
         showWorldAppsMenu = false

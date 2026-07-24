@@ -97,6 +97,9 @@ struct MessageDTO: Decodable {
 struct MessagesPageDTO: Decodable {
     var messages: [MessageDTO]
     var nextBefore: String?
+    /// Newest message every other participant has read up to — the "Read"
+    /// high-water mark for the caller's own messages. Nil until everyone reads.
+    var peerReadMessageId: UUID?
 }
 
 struct ConversationDTO: Decodable {

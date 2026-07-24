@@ -42,6 +42,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                                 willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions {
         PushRegistrar.shared.onPushReceived?()
+        // Stay quiet for a message push about the thread the user is already
+        // reading — the bubble is already on screen. Other chats still banner.
+        let info = notification.request.content.userInfo
+        if info["type"] as? String == "message",
+           let idString = info["conversationId"] as? String,
+           let conversationID = UUID(uuidString: idString),
+           conversationID == PushRegistrar.shared.activeConversationID {
+            return []
+        }
         return [.banner, .badge, .sound]
     }
 

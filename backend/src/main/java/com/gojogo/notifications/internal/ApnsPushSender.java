@@ -83,6 +83,43 @@ class ApnsPushSender {
         });
     }
 
+    /** Best-effort push for a chat message (title = sender, body = preview). */
+    void notifyMessage(UUID recipientId, String title, String body, UUID conversationId) {
+        if (!props.enabled() || keyBroken) return;
+        executor.submit(() -> {
+            try {
+                deliverMessage(recipientId, title, body, conversationId);
+            } catch (Exception e) {
+                log.debug("APNs message push failed: {}", e.toString());
+            }
+        });
+    }
+
+    private void deliverMessage(UUID recipientId, String title, String body, UUID conversationId)
+            throws Exception {
+        var devices = tokens.findByProfileId(recipientId);
+        if (devices.isEmpty()) return;
+        byte[] payload = messagePayload(title, body, conversationId);
+        String jwt = jwt();
+        for (DeviceToken device : devices) {
+            send(device, jwt, payload);
+        }
+    }
+
+    private byte[] messagePayload(String title, String body, UUID conversationId) throws Exception {
+        Map<String, Object> alert = new LinkedHashMap<>();
+        alert.put("title", title);
+        alert.put("body", body);
+        Map<String, Object> aps = new LinkedHashMap<>();
+        aps.put("alert", alert);
+        aps.put("sound", "default");
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("aps", aps);
+        root.put("type", "message");
+        if (conversationId != null) root.put("conversationId", conversationId.toString());
+        return json.writeValueAsBytes(root);
+    }
+
     private void deliver(UUID recipientId, UUID actorId, String type, UUID postId) throws Exception {
         var devices = tokens.findByProfileId(recipientId);
         if (devices.isEmpty()) return;

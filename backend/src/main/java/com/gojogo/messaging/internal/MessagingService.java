@@ -5,8 +5,10 @@ import com.gojogo.messaging.internal.MessagingRepository.Membership;
 import com.gojogo.messaging.internal.MessagingRepository.StoredMessage;
 import com.gojogo.messaging.internal.MessagingRepository.WorldProfile;
 import com.gojogo.media.MediaApi;
+import com.gojogo.messaging.MessageSent;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -34,12 +36,15 @@ class MessagingService {
     private final ProfileApi profiles;
     private final Fanout fanout;
     private final MediaApi media;
+    private final ApplicationEventPublisher events;
 
-    MessagingService(MessagingRepository repo, ProfileApi profiles, Fanout fanout, MediaApi media) {
+    MessagingService(MessagingRepository repo, ProfileApi profiles, Fanout fanout, MediaApi media,
+                     ApplicationEventPublisher events) {
         this.repo = repo;
         this.profiles = profiles;
         this.fanout = fanout;
         this.media = media;
+        this.events = events;
     }
 
     // ---- conversations ----------------------------------------------------
@@ -107,7 +112,7 @@ class MessagingService {
     // ---- messages ---------------------------------------------------------
 
     MessagesResponse listMessages(UUID userId, UUID convId, Instant before, int limit) {
-        requireParticipant(userId, convId);
+        ConversationMeta meta = requireParticipant(userId, convId);
         int capped = Math.min(Math.max(limit, 1), 50);
         List<StoredMessage> stored = repo.listMessages(convId, before, capped);
         List<UUID> senderIds = stored.stream().map(StoredMessage::senderId).toList();
@@ -116,7 +121,35 @@ class MessagingService {
         List<MessageDto> messages = stored.stream().map(sm -> toMessageDto(sm, authors, worlds)).toList();
         Instant nextBefore = stored.size() == capped && !stored.isEmpty()
             ? stored.get(stored.size() - 1).createdAt() : null;
-        return new MessagesResponse(messages, nextBefore);
+        UUID peerReadMessageId = peerReadCutoff(userId, convId, meta);
+        return new MessagesResponse(messages, nextBefore, peerReadMessageId);
+    }
+
+    /**
+     * The newest message every OTHER participant has read up to — i.e. the "Read"
+     * high-water mark for the caller's own messages. Null while anyone still has
+     * the caller's messages unread, so a group only shows "Read" once everyone has
+     * seen it. Read state lives in each participant's membership row, so this is a
+     * cheap point lookup per peer; it lets the receipt survive a reload instead of
+     * relying on a live socket event the sender may have been offline for.
+     */
+    private UUID peerReadCutoff(UUID userId, UUID convId, ConversationMeta meta) {
+        Instant slowest = null;
+        UUID slowestId = null;
+        for (UUID participant : meta.participants()) {
+            if (participant.equals(userId)) continue;
+            UUID lastRead = repo.getMembership(participant, convId)
+                .map(Membership::lastReadMessageId).orElse(null);
+            if (lastRead == null) return null; // this peer has read nothing yet
+            Instant at = repo.getMessage(convId, lastRead)
+                .map(StoredMessage::createdAt).orElse(null);
+            if (at == null) continue; // pointer to a message we can't see; treat as caught up
+            if (slowest == null || at.isBefore(slowest)) {
+                slowest = at;
+                slowestId = lastRead;
+            }
+        }
+        return slowestId;
     }
 
     MessageDto sendMessage(UUID userId, UUID convId, SendMessageRequest req) {
@@ -150,7 +183,16 @@ class MessagingService {
         MessageDto dto = toMessageDto(msg, profiles.findByIds(List.of(userId)),
             repo.worldProfilesByIds(List.of(userId)));
         fanout.publish(meta.participants(), Map.of("type", "message", "message", dto));
+        notifyRecipients(meta, msg);
         return dto;
+    }
+
+    /** Fire a push to everyone but the sender (offline devices the socket missed). */
+    private void notifyRecipients(ConversationMeta meta, StoredMessage msg) {
+        List<UUID> recipients = otherThan(meta.participants(), msg.senderId());
+        if (recipients.isEmpty()) return;
+        events.publishEvent(new MessageSent(msg.conversationId(), msg.senderId(),
+            worldName(msg.senderId()), snippet(msg), recipients));
     }
 
     private ReplySnippetDto buildReply(UUID convId, UUID replyToMessageId) {
@@ -182,6 +224,7 @@ class MessagingService {
             MessageDto dto = toMessageDto(delivered, profiles.findByIds(List.of(m.senderId())),
                 repo.worldProfilesByIds(List.of(m.senderId())));
             fanout.publish(meta.participants(), Map.of("type", "message", "message", dto));
+            notifyRecipients(meta, delivered);
         }
     }
 

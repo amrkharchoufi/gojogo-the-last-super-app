@@ -331,7 +331,11 @@ extension AppState {
             let pendingLocal = worldConversations[i].messages.filter {
                 !serverIds.contains($0.id) && $0.fromUser && $0.kind != .timestamp
             }
-            let next = reconciled + pendingLocal
+            var next = reconciled + pendingLocal
+            // Persisted "Read" high-water mark: the receipt survives a reload even
+            // if we were offline when the peer read it (the live event only fires
+            // for connected senders).
+            applyReadCutoff(page.peerReadMessageId, to: &next)
             if !messagesEqual(worldConversations[i].messages, next) {
                 worldConversations[i].messages = next
             }
@@ -352,7 +356,28 @@ extension AppState {
         if merged.imageData == nil { merged.imageData = local.imageData }
         if merged.localAudioURL == nil { merged.localAudioURL = local.localAudioURL }
         if merged.carouselItems.isEmpty { merged.carouselItems = local.carouselItems }
+        // Read state is client-side only — the server copy always defaults our own
+        // messages to "Delivered". Carry over a "Read" the peer already acked so a
+        // reload doesn't revert the receipt. The fetched peer cutoff re-applies it
+        // on top; this covers the live-event case between fetches.
+        if local.readAt != nil {
+            merged.readAt = local.readAt
+            merged.readLabel = local.readLabel
+        }
         return merged
+    }
+
+    /// Marks our own messages up to (and including) `cutoffId` as "Read". Mirrors
+    /// the live read-receipt event, but sourced from the server's persisted
+    /// high-water mark so the receipt survives reloads and offline gaps.
+    private func applyReadCutoff(_ cutoffId: UUID?, to messages: inout [WorldMessage]) {
+        guard let cutoffId,
+              let cutoff = messages.firstIndex(where: { $0.id == cutoffId }) else { return }
+        let now = Date()
+        for j in 0...cutoff where messages[j].fromUser {
+            messages[j].readLabel = "Read"
+            if messages[j].readAt == nil { messages[j].readAt = now }
+        }
     }
 
     /// Cheap identity check so a poll that changed nothing doesn't rebuild the list.

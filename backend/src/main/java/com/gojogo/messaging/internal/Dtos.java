@@ -99,5 +99,5 @@ record ConversationDto(
     boolean muted) {
 }
 
-record MessagesResponse(List<MessageDto> messages, Instant nextBefore) {
+record MessagesResponse(List<MessageDto> messages, Instant nextBefore, UUID peerReadMessageId) {
 }
