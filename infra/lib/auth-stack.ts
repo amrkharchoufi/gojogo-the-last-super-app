@@ -41,7 +41,7 @@ export class GojoGoAuthStack extends cdk.Stack {
     // Plain Node (built-in crypto + runtime-bundled AWS SDK) — no build step.
     const authTriggers = new lambda.Function(this, 'AuthTriggers', {
       functionName: 'gojogo-auth-triggers',
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'auth-triggers')),
       timeout: cdk.Duration.seconds(10),

@@ -58,7 +58,7 @@ export class GojoGoMessagingStack extends cdk.Stack {
     // $connect authorizer: validates the Cognito ID token from ?token=.
     const authorizerFn = new lambda.Function(this, 'WsAuthorizer', {
       functionName: 'gojogo-ws-authorizer',
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'authorizer.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'ws')),
       timeout: cdk.Duration.seconds(10),
@@ -71,7 +71,7 @@ export class GojoGoMessagingStack extends cdk.Stack {
     // $connect / $disconnect handler: maintains the connection registry.
     const connectionFn = new lambda.Function(this, 'WsConnections', {
       functionName: 'gojogo-ws-connections',
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'ws')),
       timeout: cdk.Duration.seconds(10),
