@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 /**
@@ -92,18 +93,33 @@ export class GojoGoAuthStack extends cdk.Stack {
       cognitoDomain: { domainPrefix: authDomainPrefix },
     });
 
-    // Google identity provider (Hosted UI federation). Credentials come from
-    // CDK context so they never land in source control.
-    const googleClientId =
-      (this.node.tryGetContext('googleClientId') as string | undefined) ?? 'REPLACE_GOOGLE_CLIENT_ID';
-    const googleClientSecret =
-      (this.node.tryGetContext('googleClientSecret') as string | undefined) ??
-      'REPLACE_GOOGLE_CLIENT_SECRET';
+    // Google identity provider (Hosted UI federation). Credentials are read at
+    // deploy time from a Secrets Manager secret holding the JSON
+    //   { "clientId": "...", "clientSecret": "..." }
+    // The values live ONLY in Secrets Manager — never in source, CDK context, or
+    // the synthesized template, which carries a {{resolve:secretsmanager:...}}
+    // dynamic reference resolved by CloudFormation at deploy time. This also
+    // means a flag-less `cdk deploy` can no longer clobber the live credentials
+    // (the previous context-with-placeholder-default approach silently reset
+    // them to REPLACE_... on any deploy that forgot the -c flags).
+    //
+    // Seed or rotate the secret, then redeploy this stack so Cognito picks up the
+    // new value (the reference is resolved at deploy time, not read live):
+    //   aws secretsmanager put-secret-value --secret-id gojogo/google-oauth \
+    //     --secret-string '{"clientId":"...","clientSecret":"..."}'
+    // Override the secret name with `-c googleSecretName=...`.
+    const googleSecretName =
+      (this.node.tryGetContext('googleSecretName') as string | undefined) ?? 'gojogo/google-oauth';
+    const googleSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'GoogleOAuthSecret',
+      googleSecretName,
+    );
 
     const googleIdp = new cognito.UserPoolIdentityProviderGoogle(this, 'GoogleIdp', {
       userPool: this.userPool,
-      clientId: googleClientId,
-      clientSecretValue: cdk.SecretValue.unsafePlainText(googleClientSecret),
+      clientId: googleSecret.secretValueFromJson('clientId').unsafeUnwrap(),
+      clientSecretValue: googleSecret.secretValueFromJson('clientSecret'),
       scopes: ['openid', 'email', 'profile'],
       // Map Google's profile onto the Cognito user's standard attributes.
       attributeMapping: {
