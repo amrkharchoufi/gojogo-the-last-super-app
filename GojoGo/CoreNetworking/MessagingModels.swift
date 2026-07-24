@@ -102,6 +102,18 @@ struct MessagesPageDTO: Decodable {
     var peerReadMessageId: UUID?
 }
 
+/// A vertical's reference card on a conversation (a listing today; a delivery
+/// order or ride later). The messaging module carries it opaquely; `kind`/`refId`
+/// let the client resolve the real object, and title/subtitle/imageUrl are the
+/// pre-rendered card so no cross-module read is needed to draw it.
+struct ConversationContextDTO: Decodable {
+    var kind: String
+    var refId: String
+    var title: String
+    var subtitle: String?
+    var imageUrl: String?
+}
+
 struct ConversationDTO: Decodable {
     var id: UUID
     var type: String
@@ -115,6 +127,7 @@ struct ConversationDTO: Decodable {
     var unread: Int
     var pinned: Bool
     var muted: Bool
+    var context: ConversationContextDTO?
 }
 
 // MARK: - Request bodies

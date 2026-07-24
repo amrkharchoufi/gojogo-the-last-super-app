@@ -161,6 +161,56 @@ extension AppState {
         worldDraft = draft
     }
 
+    /// Opens the listing a thread's context card points at. The listing may not
+    /// be in the loaded catalog page (the seller's own item, or a rotated browse
+    /// page), so fetch it and seed the catalog before presenting the detail —
+    /// `ProductDetailView` resolves through `liveProduct(id:)`. Falls back to a
+    /// card-derived product if the fetch fails, so the tap is never dead.
+    func openListingContext(_ context: WorldListingContext) {
+        guard let id = context.listingID else { return }
+        if let existing = liveProduct(id: id) {
+            openProduct(existing)
+            return
+        }
+        Task {
+            do {
+                let product = try await EconomyStore.shared.get(id)
+                seedCatalog(product)
+                openProduct(product)
+            } catch {
+                #if DEBUG
+                print("Listing context fetch failed: \(error.localizedDescription)")
+                #endif
+                let fallback = productFromContext(context, id: id)
+                seedCatalog(fallback)
+                openProduct(fallback)
+            }
+        }
+    }
+
+    /// Inserts a fetched listing into the catalog (idempotent) so `liveProduct`
+    /// can resolve it for the detail sheet without disturbing browse order.
+    private func seedCatalog(_ product: Product) {
+        guard featuredProduct.id != product.id,
+              !products.contains(where: { $0.id == product.id }) else { return }
+        products.append(product)
+    }
+
+    private func productFromContext(_ context: WorldListingContext, id: UUID) -> Product {
+        Product(
+            id: id,
+            name: context.title,
+            price: context.subtitle ?? "—",
+            meta: "",
+            gradient: SocialStore.gradient(for: context.title),
+            imageURL: context.imageURL,
+            category: "Marketplace",
+            seller: "",
+            condition: "",
+            distance: "",
+            description: "")
+    }
+
     /// Opens a thread parked while the caller finished My World setup.
     func resumePendingSellerConversation() {
         guard let pending = pendingSellerConversation, !needsWorldSetup else { return }

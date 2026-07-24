@@ -2,6 +2,7 @@ package com.gojogo.messaging.internal;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gojogo.messaging.ConversationContext;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Repository;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
@@ -70,7 +71,8 @@ class MessagingRepository {
 
     record ConversationMeta(UUID id, String type, String title, List<UUID> participants,
                             UUID circleId, String background, UUID createdBy,
-                            Instant createdAt, Instant lastActivityAt, String preview) {}
+                            Instant createdAt, Instant lastActivityAt, String preview,
+                            ConversationContext context) {}
 
     record Membership(UUID conversationId, int unread, boolean pinned, boolean muted,
                       UUID lastReadMessageId, Instant lastActivityAt, String preview,
@@ -104,7 +106,8 @@ class MessagingRepository {
             it.containsKey("createdBy") ? UUID.fromString(it.get("createdBy").s()) : null,
             Instant.parse(it.get("createdAt").s()),
             Instant.parse(it.get("lastActivityAt").s()),
-            attr(it, "preview"));
+            attr(it, "preview"),
+            readJson(it, "contextJson", new TypeReference<ConversationContext>() {}));
     }
 
     /** Creates the conversation meta + one membership row per participant (+ a
@@ -128,6 +131,7 @@ class MessagingRepository {
         metaItem.put("createdAt", s(meta.createdAt().toString()));
         metaItem.put("lastActivityAt", s(meta.lastActivityAt().toString()));
         putIfPresent(metaItem, "preview", meta.preview());
+        putJson(metaItem, "contextJson", meta.context());
         writes.add(TransactWriteItem.builder().put(Put.builder()
             .tableName(table).item(metaItem).build()).build());
 
@@ -150,6 +154,16 @@ class MessagingRepository {
 
         db.transactWriteItems(TransactWriteItemsRequest.builder()
             .transactItems(writes).build());
+    }
+
+    /** Overwrites the reference card on an existing conversation (the reuse path:
+     *  a buyer re-opens a thread from a different listing). */
+    void updateContext(UUID convId, ConversationContext context) {
+        db.updateItem(r -> r.tableName(table)
+            .key(Map.of("pk", s("CONV#" + convId), "sk", s("META")))
+            .updateExpression("SET contextJson = :c")
+            .conditionExpression("attribute_exists(sk)")
+            .expressionAttributeValues(Map.of(":c", s(writeJson(context)))));
     }
 
     private Map<String, AttributeValue> membershipItem(

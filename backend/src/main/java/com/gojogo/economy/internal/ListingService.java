@@ -2,6 +2,7 @@ package com.gojogo.economy.internal;
 
 import com.gojogo.economy.ListingCreated;
 import com.gojogo.media.MediaApi;
+import com.gojogo.messaging.ConversationContext;
 import com.gojogo.messaging.MessagingApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
@@ -114,8 +115,22 @@ class ListingService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "That's your own listing");
         }
-        UUID conversationId = messaging.openDirectConversation(me, seller);
+        UUID conversationId = messaging.openDirectConversation(me, seller, listingContext(listing));
         return new ListingChatResponse(conversationId, seller, opener(listing));
+    }
+
+    /** The card the messaging module carries on the thread — a pre-rendered
+     *  pointer back to this listing that both buyer and seller see, and that a
+     *  future checkout resolves via {@code kind}/{@code refId}. */
+    private static ConversationContext listingContext(Listing listing) {
+        String subtitle = listing.getPriceCents() == null
+            ? "On ask"
+            : priceLabel(listing.getPriceCents(), listing.getCurrency());
+        String image = listing.getMedia().isEmpty()
+            ? null
+            : listing.getMedia().getFirst().getImageUrl();
+        return new ConversationContext(
+            "listing", listing.getId().toString(), listing.getTitle(), subtitle, image);
     }
 
     /** "Hi — is the Leica M6 (12,000 MAD) still available?" */

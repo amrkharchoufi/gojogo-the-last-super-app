@@ -177,7 +177,17 @@ final class MessagingStore {
             avatarGradient: SocialStore.gradient(for: handleSeed),
             messages: [],
             lastActivityAt: BackendDate.parse(dto.lastActivityAt) ?? Date(),
-            background: WorldChatBackground(rawValue: dto.background ?? "none") ?? .none)
+            background: WorldChatBackground(rawValue: dto.background ?? "none") ?? .none,
+            listingContext: dto.context.map(listingContext))
+    }
+
+    private func listingContext(_ dto: ConversationContextDTO) -> WorldListingContext {
+        WorldListingContext(
+            kind: dto.kind,
+            listingID: dto.kind == "listing" ? UUID(uuidString: dto.refId) : nil,
+            title: dto.title,
+            subtitle: dto.subtitle,
+            imageURL: dto.imageUrl)
     }
 
     func map(_ dto: MessageDTO) -> WorldMessage {

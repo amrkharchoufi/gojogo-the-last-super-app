@@ -41,6 +41,14 @@ final class EconomyStore {
         return (page.listings.map(map), page.nextBefore)
     }
 
+    /// Fetches a single listing (e.g. the one a thread's context card points at,
+    /// which may not be in the currently loaded catalog page).
+    func get(_ listingId: UUID) async throws -> Product {
+        let dto: ListingDTO = try await APIClient.shared.get("/v1/economy/listings/\(listingId)")
+        track([dto])
+        return map(dto)
+    }
+
     func saved(limit: Int = 50) async throws -> [Product] {
         let dtos: [ListingDTO] = try await APIClient.shared.get("/v1/economy/saved?limit=\(limit)")
         track(dtos)

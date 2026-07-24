@@ -5,6 +5,7 @@ import com.gojogo.messaging.internal.MessagingRepository.Membership;
 import com.gojogo.messaging.internal.MessagingRepository.StoredMessage;
 import com.gojogo.messaging.internal.MessagingRepository.WorldProfile;
 import com.gojogo.media.MediaApi;
+import com.gojogo.messaging.ConversationContext;
 import com.gojogo.messaging.MessageSent;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
@@ -60,6 +61,11 @@ class MessagingService {
     }
 
     ConversationDto createConversation(UUID userId, CreateConversationRequest req) {
+        return createConversation(userId, req, null);
+    }
+
+    ConversationDto createConversation(UUID userId, CreateConversationRequest req,
+                                       ConversationContext context) {
         Set<UUID> participants = new LinkedHashSet<>(req.participantIds());
         participants.add(userId);
         if (participants.size() < 2) {
@@ -79,11 +85,18 @@ class MessagingService {
                 .flatMap(repo::getConversation)
                 .filter(meta -> meta.participants().contains(userId));
             if (reusable.isPresent()) {
+                // A thread reused from a listing refreshes its card to the one the
+                // buyer is asking about now; both sides see the update on next fetch.
                 ConversationMeta meta = reusable.get();
+                if (context != null) {
+                    repo.updateContext(meta.id(), context);
+                    meta = withContext(meta, context);
+                }
+                ConversationMeta resolved = meta;
                 // Re-opening a thread you left puts it back in your list.
-                Membership m = repo.getMembership(userId, meta.id())
-                    .orElseGet(() -> repo.rejoin(userId, meta));
-                return toConversationDto(meta, m);
+                Membership m = repo.getMembership(userId, resolved.id())
+                    .orElseGet(() -> repo.rejoin(userId, resolved));
+                return toConversationDto(resolved, m);
             }
         }
 
@@ -98,7 +111,8 @@ class MessagingService {
             userId,
             now,
             now,
-            null);
+            null,
+            context);
         repo.createConversation(meta);
         Membership m = repo.getMembership(userId, meta.id()).orElseThrow(() -> gone(meta.id()));
 
@@ -343,7 +357,14 @@ class MessagingService {
         return new ConversationDto(
             meta.id(), meta.type().toLowerCase(), meta.title(), isGroup,
             participants, meta.circleId(), meta.background(),
-            m.preview(), m.lastActivityAt(), m.unread(), m.pinned(), m.muted());
+            m.preview(), m.lastActivityAt(), m.unread(), m.pinned(), m.muted(),
+            meta.context());
+    }
+
+    private static ConversationMeta withContext(ConversationMeta meta, ConversationContext context) {
+        return new ConversationMeta(meta.id(), meta.type(), meta.title(), meta.participants(),
+            meta.circleId(), meta.background(), meta.createdBy(), meta.createdAt(),
+            meta.lastActivityAt(), meta.preview(), context);
     }
 
     private MessageDto toMessageDto(StoredMessage sm, Map<UUID, ProfileDto> authors,

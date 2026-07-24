@@ -18,4 +18,13 @@ public interface MessagingApi {
      * when there is one, and returns its id. The caller must be one of the two.
      */
     UUID openDirectConversation(UUID callerId, UUID otherId);
+
+    /**
+     * As {@link #openDirectConversation(UUID, UUID)}, but stamps a
+     * {@link ConversationContext} card onto the thread. When an existing thread
+     * is reused the context is refreshed to the one supplied, so the card always
+     * reflects what the caller is currently asking about. Pass {@code null} for
+     * no context (equivalent to the two-argument overload).
+     */
+    UUID openDirectConversation(UUID callerId, UUID otherId, ConversationContext context);
 }

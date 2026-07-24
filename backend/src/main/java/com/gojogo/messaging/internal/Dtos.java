@@ -96,7 +96,8 @@ record ConversationDto(
     Instant lastActivityAt,
     int unread,
     boolean pinned,
-    boolean muted) {
+    boolean muted,
+    com.gojogo.messaging.ConversationContext context) {
 }
 
 record MessagesResponse(List<MessageDto> messages, Instant nextBefore, UUID peerReadMessageId) {

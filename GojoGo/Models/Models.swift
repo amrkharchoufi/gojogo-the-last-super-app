@@ -846,6 +846,18 @@ struct WorldCircle: Identifiable {
     }
 }
 
+/// A marketplace (or, later, delivery/ride) reference card pinned to a thread —
+/// the buyer and seller both see what the conversation is about. `listingID` is
+/// parsed from the backend `refId` when `kind == "listing"`, so a tap can open
+/// the live listing; the rest is the pre-rendered card.
+struct WorldListingContext: Equatable {
+    var kind: String
+    var listingID: UUID?
+    var title: String
+    var subtitle: String?
+    var imageURL: String?
+}
+
 struct WorldConversation: Identifiable {
     let id: UUID
     var contactID: UUID?
@@ -864,19 +876,23 @@ struct WorldConversation: Identifiable {
     var lastActivityAt: Date
     /// Chat wallpaper chosen in the contact's Backgrounds tab.
     var background: WorldChatBackground
+    /// The listing (or other vertical object) this thread was started from, if any.
+    var listingContext: WorldListingContext?
 
     init(id: UUID = UUID(), contactID: UUID? = nil, circleID: UUID? = nil,
          title: String, preview: String, timeAgo: String, unread: Int = 0,
          isGroup: Bool = false, pinned: Bool = false, avatarURL: String? = nil,
          avatarGradient: [Color] = [Color(hex: "26303F"), Color(hex: "141821")],
          messages: [WorldMessage] = [], filterBadge: String? = nil,
-         lastActivityAt: Date = Date(), background: WorldChatBackground = .none) {
+         lastActivityAt: Date = Date(), background: WorldChatBackground = .none,
+         listingContext: WorldListingContext? = nil) {
         self.id = id; self.contactID = contactID; self.circleID = circleID
         self.title = title; self.preview = preview; self.timeAgo = timeAgo
         self.unread = unread; self.isGroup = isGroup; self.pinned = pinned
         self.avatarURL = avatarURL; self.avatarGradient = avatarGradient
         self.messages = messages; self.filterBadge = filterBadge
         self.lastActivityAt = lastActivityAt; self.background = background
+        self.listingContext = listingContext
     }
 }
 

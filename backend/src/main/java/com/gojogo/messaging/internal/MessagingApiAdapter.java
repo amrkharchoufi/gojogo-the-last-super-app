@@ -1,5 +1,6 @@
 package com.gojogo.messaging.internal;
 
+import com.gojogo.messaging.ConversationContext;
 import com.gojogo.messaging.MessagingApi;
 import org.springframework.stereotype.Component;
 
@@ -23,7 +24,12 @@ class MessagingApiAdapter implements MessagingApi {
 
     @Override
     public UUID openDirectConversation(UUID callerId, UUID otherId) {
+        return openDirectConversation(callerId, otherId, null);
+    }
+
+    @Override
+    public UUID openDirectConversation(UUID callerId, UUID otherId, ConversationContext context) {
         return messaging.createConversation(
-            callerId, new CreateConversationRequest(List.of(otherId), null, null, null)).id();
+            callerId, new CreateConversationRequest(List.of(otherId), null, null, null), context).id();
     }
 }

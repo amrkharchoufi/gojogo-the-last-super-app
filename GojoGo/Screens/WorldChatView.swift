@@ -55,6 +55,9 @@ struct WorldChatView: View {
             // Floats over the thread so messages scroll underneath the glass bar.
             VStack(spacing: 0) {
                 chatHeader
+                if let ctx = live.listingContext {
+                    listingContextBar(ctx)
+                }
                 Spacer(minLength: 0)
                     .allowsHitTesting(false)
             }
@@ -446,6 +449,65 @@ struct WorldChatView: View {
         )
     }
 
+    /// The listing this thread was started from — a pinned card both buyer and
+    /// seller see. Tapping opens the live listing detail. Opaque so messages
+    /// scroll underneath it, not through it.
+    private func listingContextBar(_ ctx: WorldListingContext) -> some View {
+        Button {
+            app.openListingContext(ctx)
+        } label: {
+            HStack(spacing: 10) {
+                Group {
+                    if let url = ctx.imageURL {
+                        MediaImage(url: url, cornerRadius: 8)
+                    } else {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(IMColor.chrome)
+                            .overlay(
+                                Image(systemName: "tag.fill")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(IMColor.secondary))
+                    }
+                }
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(ctx.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(IMColor.label)
+                        .lineLimit(1)
+                    if let subtitle = ctx.subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(IMColor.blue)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Text("View")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(IMColor.blue)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(IMColor.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(IMColor.chrome.opacity(0.55))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(IMColor.separator).frame(height: 0.5)
+            }
+            .background(IMColor.bg)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 2)
+    }
+
     @ViewBuilder
     private func avatar(size: CGFloat) -> some View {
         if live.isGroup {
@@ -484,7 +546,7 @@ struct WorldChatView: View {
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.top, 88)
+                .padding(.top, live.listingContext == nil ? 88 : 150)
                 .padding(.bottom, 12)
                 .animation(.ggSnappy, value: live.messages.count)
             }
