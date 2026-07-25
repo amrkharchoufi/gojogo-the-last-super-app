@@ -1,4 +1,4 @@
-# GojoGo — System Architecture & Build Plan.
+# GojoGo — System Architecture & Build Plan..
 
 Status: **Phase 1 complete** (auth / profile / social / media live); **Phase 2 · Milestones 1–3 deployed** — M1 My World messaging (+ WhatsApp-style setup), M2 platform notifications (activity feed, first consumer of social domain events), M3 APNs push (**activated** — key in Secrets Manager, verified authenticating to Apple; device delivery pending a physical-device test) + messaging polish (reply-linking, typing) — `messaging` module + DynamoDB + WebSocket infra + iOS wiring live in prod (two-user REST + real-time fan-out green), plus a **WhatsApp-style My World setup**: its own phone-verified identity (OTP over SNS + dev-code fallback) and World name/avatar, gated on first entry, separate from the app/social account. See [PROGRESS.md](PROGRESS.md) for deploy URLs, API surface, and known issues.
 Stack: Spring Boot (modular monolith, Spring Modulith) · AWS · Postgres · iOS/SwiftUI client
