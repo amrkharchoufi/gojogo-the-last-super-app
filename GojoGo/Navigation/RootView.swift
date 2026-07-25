@@ -77,6 +77,23 @@ struct MainAppView: View {
                     .zIndex(50)
             }
 
+            // Story notices ride above the viewer — a failed post or a sent
+            // reply has to be readable while the story is still on screen.
+            if let notice = app.storyNotice {
+                Text(notice)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+                    .glassCapsule(tint: Color.black.opacity(0.55))
+                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 66)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onTapGesture { app.dismissStoryNotice() }
+                    .zIndex(70)
+            }
+
             // Chat attachment opened full screen. Hosted here (not in the chat
             // view) so it covers the dock and the immersive chrome.
             if !app.worldMediaViewerItems.isEmpty {
@@ -108,6 +125,28 @@ struct MainAppView: View {
                 .environmentObject(app)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        }
+        // These also open from inside the stories browser and the profile,
+        // which are themselves sheets — a sheet can't be presented from here
+        // while one of those is up, so each of them declares its own copy and
+        // this one stands down. Same shape as the post viewer above.
+        .fullScreenCover(isPresented: Binding(
+            get: { app.showStoryComposer && !app.showStoriesBrowser },
+            set: { app.showStoryComposer = $0 }
+        )) {
+            StoryComposer().environmentObject(app)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.showStoryArchive && !app.showStoriesBrowser && !app.showProfile },
+            set: { app.showStoryArchive = $0 }
+        )) {
+            StoryArchiveView().environmentObject(app)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.showCloseFriends && !app.showStoriesBrowser },
+            set: { app.showCloseFriends = $0 }
+        )) {
+            CloseFriendsView().environmentObject(app)
         }
         .sheet(isPresented: Binding(
             get: { app.commentingPostID != nil },

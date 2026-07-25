@@ -186,6 +186,8 @@ struct ProfileView: View {
                         .padding(.horizontal, 14)
                         .padding(.top, 12)
 
+                    highlightsRow
+
                     Section {
                         if selectedTab == .home {
                             ProfileHomeTab(isOwn: isOwn, blocks: homeBlocks)
@@ -212,9 +214,19 @@ struct ProfileView: View {
                 app.ensureOtherProfileHome(handle: profile.handle, posts: profilePosts)
             }
         }
+        .task(id: profile.handle) {
+            // Someone else's highlights need their id; your own is the default.
+            let owner = isOwn ? nil : SocialStore.shared.profileId(forHandle: profile.handle)
+            guard isOwn || owner != nil else { return }
+            await app.refreshHighlights(for: owner)
+        }
         // These open from inside this sheet, so they must present from here.
         .sheet(isPresented: $app.showEditProfile) {
             EditProfileSheet().environmentObject(app)
+        }
+        // "New highlight" opens from this sheet, so it presents from here.
+        .sheet(isPresented: $app.showStoryArchive) {
+            StoryArchiveView().environmentObject(app)
         }
         .sheet(isPresented: Binding(
             get: { app.dmPeer != nil },
@@ -389,6 +401,58 @@ struct ProfileView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 4)
+    }
+
+    // MARK: Story highlights
+
+    /// Highlights sit between the bio and the content tabs, as on Instagram.
+    /// Hidden entirely when there's nothing to show and it isn't your profile —
+    /// an empty "New" bubble on someone else's page is noise.
+    @ViewBuilder
+    private var highlightsRow: some View {
+        if !app.storyHighlights.isEmpty || isOwn {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    if isOwn {
+                        Button { app.showStoryArchive = true } label: {
+                            VStack(spacing: 6) {
+                                ZStack {
+                                    Circle()
+                                        .strokeBorder(GGColor.ink(0.25),
+                                                      style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                                        .frame(width: 62, height: 62)
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 18, weight: .medium))
+                                        .foregroundStyle(GGColor.textSecondary)
+                                }
+                                Text("New")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(GGColor.textSecondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    ForEach(app.storyHighlights) { highlight in
+                        Button { app.openHighlight(highlight) } label: {
+                            StoryHighlightBubble(highlight: highlight)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            if isOwn {
+                                Button(role: .destructive) {
+                                    app.deleteHighlight(highlight.id)
+                                } label: {
+                                    Label("Delete highlight", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .padding(.top, 16)
+        }
     }
 
     private func stat(_ value: String, _ label: String) -> some View {

@@ -261,11 +261,27 @@ struct CachedInterest: Codable {
     var accent: [String]?
 }
 
+/// Everything past `seen` is optional so a cache written by an older build
+/// still decodes — the rail would otherwise vanish on the upgrade launch.
 struct CachedStoryFrame: Codable {
     var id: UUID
     var imageURL: String?
     var imageData: Data?
     var seen: Bool
+    var kind: String?
+    var videoURL: String?
+    var durationMs: Int?
+    var caption: String?
+    var background: String?
+    var overlays: String?
+    var audience: String?
+    var musicTrackID: UUID?
+    var musicTitle: String?
+    var musicArtist: String?
+    var musicArtworkURL: String?
+    var musicAudioURL: String?
+    var musicStartMs: Int?
+    var musicDurationMs: Int?
 }
 
 struct CachedStory: Codable {
@@ -275,6 +291,8 @@ struct CachedStory: Codable {
     var gradient: [String]
     var frames: [CachedStoryFrame]
     var isYou: Bool
+    var avatarURL: String?
+    var muted: Bool?
 }
 
 struct CachedPost: Codable {
@@ -481,23 +499,58 @@ extension CachedInterest {
     }
 }
 
+extension CachedStoryFrame {
+    /// Rebuilt only from a complete snapshot — a partial one would draw a music
+    /// sticker with nothing to play.
+    var cachedMusic: StoryMusic? {
+        guard let musicTrackID, let musicAudioURL, let musicTitle,
+              let musicStartMs, let musicDurationMs else { return nil }
+        return StoryMusic(trackID: musicTrackID, title: musicTitle,
+                          artist: musicArtist ?? "Unknown artist",
+                          artworkURL: musicArtworkURL, audioURL: musicAudioURL,
+                          startMs: musicStartMs, durationMs: musicDurationMs)
+    }
+}
+
 extension CachedStory {
     init(from s: Story) {
         id = s.id; name = s.name; letter = s.letter
         gradient = s.gradient.map(SessionColor.hex)
         frames = s.frames.map {
-            CachedStoryFrame(id: $0.id, imageURL: $0.imageURL, imageData: $0.imageData, seen: $0.seen)
+            CachedStoryFrame(id: $0.id, imageURL: $0.imageURL, imageData: $0.imageData,
+                             seen: $0.seen, kind: $0.kind.rawValue, videoURL: $0.videoURL,
+                             durationMs: $0.durationMs, caption: $0.caption,
+                             background: $0.background.token, overlays: $0.overlays.storyJSON,
+                             audience: $0.audience.rawValue,
+                             musicTrackID: $0.music?.trackID,
+                             musicTitle: $0.music?.title,
+                             musicArtist: $0.music?.artist,
+                             musicArtworkURL: $0.music?.artworkURL,
+                             musicAudioURL: $0.music?.audioURL,
+                             musicStartMs: $0.music?.startMs,
+                             musicDurationMs: $0.music?.durationMs)
         }
         isYou = s.isYou
+        avatarURL = s.avatarURL
+        muted = s.muted
     }
 
     func asDomain() -> Story {
         Story(id: id, name: name, letter: letter,
               gradient: SessionColor.colors(from: gradient),
               frames: frames.map {
-                  StoryFrame(id: $0.id, imageURL: $0.imageURL, imageData: $0.imageData, seen: $0.seen)
+                  StoryFrame(id: $0.id, kind: StoryMediaKind(wire: $0.kind),
+                             imageURL: $0.imageURL, imageData: $0.imageData,
+                             videoURL: $0.videoURL, durationMs: $0.durationMs,
+                             caption: $0.caption,
+                             background: StoryBackground.named($0.background),
+                             overlays: [StoryOverlay].fromStoryJSON($0.overlays),
+                             audience: StoryAudience(wire: $0.audience),
+                             music: $0.cachedMusic, seen: $0.seen)
               },
-              isYou: isYou)
+              isYou: isYou,
+              avatarURL: avatarURL,
+              muted: muted ?? false)
     }
 }
 

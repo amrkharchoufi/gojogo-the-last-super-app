@@ -72,11 +72,11 @@ class ApnsPushSender {
     }
 
     /** Best-effort push for a freshly recorded notification. */
-    void notify(UUID recipientId, UUID actorId, String type, UUID postId) {
+    void notify(UUID recipientId, UUID actorId, String type, UUID postId, UUID storyFrameId) {
         if (!props.enabled() || keyBroken) return;
         executor.submit(() -> {
             try {
-                deliver(recipientId, actorId, type, postId);
+                deliver(recipientId, actorId, type, postId, storyFrameId);
             } catch (Exception e) {
                 log.debug("APNs push failed: {}", e.toString());
             }
@@ -120,7 +120,8 @@ class ApnsPushSender {
         return json.writeValueAsBytes(root);
     }
 
-    private void deliver(UUID recipientId, UUID actorId, String type, UUID postId) throws Exception {
+    private void deliver(UUID recipientId, UUID actorId, String type, UUID postId,
+                         UUID storyFrameId) throws Exception {
         var devices = tokens.findByProfileId(recipientId);
         if (devices.isEmpty()) return;
         ProfileDto actor = profiles.findById(actorId).orElse(null);
@@ -128,7 +129,7 @@ class ApnsPushSender {
             ? (actor.displayName() != null ? actor.displayName() : "@" + actor.handle())
             : "GojoGo";
         String body = phrase(type);
-        byte[] payload = payload(title, body, type, postId);
+        byte[] payload = payload(title, body, type, postId, storyFrameId);
         String jwt = jwt();
         for (DeviceToken device : devices) {
             send(device, jwt, payload);
@@ -160,7 +161,8 @@ class ApnsPushSender {
         }
     }
 
-    private byte[] payload(String title, String body, String type, UUID postId) throws Exception {
+    private byte[] payload(String title, String body, String type, UUID postId,
+                           UUID storyFrameId) throws Exception {
         Map<String, Object> alert = new LinkedHashMap<>();
         alert.put("title", title);
         alert.put("body", body);
@@ -171,6 +173,7 @@ class ApnsPushSender {
         root.put("aps", aps);
         root.put("type", type);
         if (postId != null) root.put("postId", postId.toString());
+        if (storyFrameId != null) root.put("storyFrameId", storyFrameId.toString());
         return json.writeValueAsBytes(root);
     }
 
@@ -211,6 +214,8 @@ class ApnsPushSender {
             case "follow" -> "started following you";
             case "like" -> "liked your post";
             case "comment" -> "commented on your post";
+            case "story_reaction" -> "reacted to your story";
+            case "story_reply" -> "replied to your story";
             default -> "sent you an update";
         };
     }

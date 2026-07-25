@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -176,12 +177,140 @@ class StoryController {
     @PostMapping("/v1/stories")
     @ResponseStatus(HttpStatus.CREATED)
     List<StoryFrameDto> create(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody CreateStoryRequest request) {
-        return stories.create(current.require(jwt).id(), request.frameImageUrls());
+        return stories.create(current.require(jwt).id(), request);
     }
 
     @PostMapping("/v1/stories/frames/{frameId}/seen")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     void markSeen(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID frameId) {
         stories.markSeen(current.require(jwt).id(), frameId);
+    }
+
+    @DeleteMapping("/v1/stories/frames/{frameId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void delete(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID frameId) {
+        stories.delete(current.require(jwt).id(), frameId);
+    }
+}
+
+/** Reactions, replies, the viewers list and muting — see StoryEngagementService. */
+@RestController
+class StoryEngagementController {
+
+    private final StoryEngagementService engagement;
+    private final CurrentProfiles current;
+
+    StoryEngagementController(StoryEngagementService engagement, CurrentProfiles current) {
+        this.engagement = engagement;
+        this.current = current;
+    }
+
+    @PutMapping("/v1/stories/frames/{frameId}/reaction")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void react(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID frameId,
+               @Valid @RequestBody StoryReactionRequest request) {
+        engagement.react(current.require(jwt).id(), frameId, request.emoji());
+    }
+
+    @DeleteMapping("/v1/stories/frames/{frameId}/reaction")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void unreact(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID frameId) {
+        engagement.unreact(current.require(jwt).id(), frameId);
+    }
+
+    @GetMapping("/v1/stories/frames/{frameId}/replies")
+    List<StoryCommentDto> replies(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID frameId) {
+        return engagement.replies(current.require(jwt).id(), frameId);
+    }
+
+    @PostMapping("/v1/stories/frames/{frameId}/replies")
+    @ResponseStatus(HttpStatus.CREATED)
+    StoryCommentDto reply(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID frameId,
+                          @Valid @RequestBody StoryReplyRequest request) {
+        return engagement.reply(current.require(jwt).id(), frameId, request.text());
+    }
+
+    @DeleteMapping("/v1/stories/replies/{replyId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void deleteReply(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID replyId) {
+        engagement.deleteReply(current.require(jwt).id(), replyId);
+    }
+
+    @GetMapping("/v1/stories/frames/{frameId}/viewers")
+    List<StoryViewerDto> viewers(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID frameId) {
+        return engagement.viewers(current.require(jwt).id(), frameId);
+    }
+
+    @PostMapping("/v1/stories/mute/{profileId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void mute(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId) {
+        engagement.mute(current.require(jwt).id(), profileId);
+    }
+
+    @DeleteMapping("/v1/stories/mute/{profileId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void unmute(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId) {
+        engagement.unmute(current.require(jwt).id(), profileId);
+    }
+}
+
+/** The archive, profile highlights and the close-friends list. */
+@RestController
+class StoryHighlightController {
+
+    private final StoryHighlightService highlights;
+    private final CurrentProfiles current;
+
+    StoryHighlightController(StoryHighlightService highlights, CurrentProfiles current) {
+        this.highlights = highlights;
+        this.current = current;
+    }
+
+    @GetMapping("/v1/stories/archive")
+    List<StoryFrameDto> archive(@AuthenticationPrincipal Jwt jwt) {
+        return highlights.archive(current.require(jwt).id());
+    }
+
+    /** Someone else's highlights when {@code profileId} is given, yours otherwise. */
+    @GetMapping("/v1/stories/highlights")
+    List<StoryHighlightDto> list(@AuthenticationPrincipal Jwt jwt,
+                                 @RequestParam(required = false) UUID profileId) {
+        UUID me = current.require(jwt).id();
+        return highlights.highlightsOf(profileId == null ? me : profileId);
+    }
+
+    @GetMapping("/v1/stories/highlights/{highlightId}")
+    StoryHighlightDetailDto get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID highlightId) {
+        return highlights.highlight(current.require(jwt).id(), highlightId);
+    }
+
+    @PostMapping("/v1/stories/highlights")
+    @ResponseStatus(HttpStatus.CREATED)
+    StoryHighlightDto create(@AuthenticationPrincipal Jwt jwt,
+                             @Valid @RequestBody SaveHighlightRequest request) {
+        return highlights.create(current.require(jwt).id(), request);
+    }
+
+    @PutMapping("/v1/stories/highlights/{highlightId}")
+    StoryHighlightDto update(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID highlightId,
+                             @Valid @RequestBody SaveHighlightRequest request) {
+        return highlights.update(current.require(jwt).id(), highlightId, request);
+    }
+
+    @DeleteMapping("/v1/stories/highlights/{highlightId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void delete(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID highlightId) {
+        highlights.delete(current.require(jwt).id(), highlightId);
+    }
+
+    @GetMapping("/v1/stories/close-friends")
+    List<CloseFriendDto> closeFriends(@AuthenticationPrincipal Jwt jwt) {
+        return highlights.closeFriendsOf(current.require(jwt).id());
+    }
+
+    @PutMapping("/v1/stories/close-friends")
+    List<CloseFriendDto> setCloseFriends(@AuthenticationPrincipal Jwt jwt,
+                                         @Valid @RequestBody CloseFriendsRequest request) {
+        return highlights.setCloseFriends(current.require(jwt).id(), request.profileIds());
     }
 }

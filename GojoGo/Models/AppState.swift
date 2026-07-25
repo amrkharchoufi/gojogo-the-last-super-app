@@ -152,7 +152,30 @@ final class AppState: ObservableObject {
     /// When true, story is shown as an in-app overlay (not a system cover).
     @Published var storyOverlayActive: Bool = false
     /// Frozen author order for the current viewer session (Instagram-style).
-    private var storyViewerRail: [UUID] = []
+    /// Empty while a highlight is playing — a highlight is a ring of one.
+    var storyViewerRail: [UUID] = []
+
+    // Stories — composing, engagement, and what outlives the 24 hours.
+    @Published var showStoryComposer: Bool = false
+    /// Set when the composer should open straight into the close-friends audience.
+    @Published var storyComposerAudience: StoryAudience = .everyone
+    /// Playing a highlight rather than a live ring — no expiry, its own title.
+    @Published var viewingHighlightTitle: String? = nil
+    @Published var storyArchive: [StoryFrame] = []
+    @Published var storyHighlights: [StoryHighlight] = []
+    @Published var closeFriends: [CloseFriend] = []
+    @Published var showStoryArchive: Bool = false
+    @Published var showCloseFriends: Bool = false
+    /// Replies and viewers for the frame currently open in the viewer.
+    @Published var storyReplies: [StoryReply] = []
+    @Published var storyViewers: [StoryViewerInfo] = []
+    @Published var storyInsightsLoading: Bool = false
+    /// Transient message over the story surfaces — same pattern as world/economy/delivery.
+    @Published var storyNotice: String? = nil
+    var storyNoticeTask: Task<Void, Never>? = nil
+    /// A highlight being played. It isn't one of the live rings, so the viewer's
+    /// ring lookups fall back to it — see `liveStory(id:)`.
+    var playingHighlightRing: Story? = nil
     @Published var messagingProduct: Product? = nil
     @Published var browsingProduct: Product? = nil
     @Published var sellerChat: [ChatMessage] = []
@@ -308,14 +331,18 @@ final class AppState: ObservableObject {
 
     var selectedInterestCount: Int { interests.filter(\.selected).count }
 
-    /// Stories tray order: You → unwatched → watched (like Instagram).
+    /// Stories tray order: You → unwatched → watched → muted (like Instagram).
+    /// The server sorts the live rings the same way; this keeps SampleData and
+    /// any optimistic local edit agreeing with it.
     var storyTray: [Story] {
         let you = stories.filter(\.isYou)
         let others = stories.filter { !$0.isYou }
-        let fresh = others.filter { $0.hasMedia && !$0.seen }
-        let done = others.filter { $0.hasMedia && $0.seen }
-        let empty = others.filter { !$0.hasMedia }
-        return you + fresh + done + empty
+        let heard = others.filter { !$0.muted }
+        let muted = others.filter(\.muted)
+        let fresh = heard.filter { $0.hasMedia && !$0.seen }
+        let done = heard.filter { $0.hasMedia && $0.seen }
+        let empty = heard.filter { !$0.hasMedia }
+        return you + fresh + done + muted + empty
     }
 
     var halfPosts: [Post] { posts.filter(\.isHalfWidth) }
@@ -1616,6 +1643,8 @@ final class AppState: ObservableObject {
         SessionStore.clear()
         AuthSession.shared.clear()
         SocialStore.shared.reset()
+        StoriesStore.shared.reset()
+        MusicStore.shared.reset()
         ProfileStore.shared.reset()
         EconomyStore.shared.reset()
         DeliveryStore.shared.reset()
@@ -2176,22 +2205,9 @@ final class AppState: ObservableObject {
         VideoLibrary.persist(source)
     }
 
+    /// Quick path — a bare photo with no editor. Same pipeline as the composer.
     func addStory(imageData: Data) {
-        let frame = StoryFrame(imageData: imageData, seen: false)
-        if let i = stories.firstIndex(where: \.isYou) {
-            stories[i].frames.insert(frame, at: 0)
-        } else {
-            stories.insert(
-                Story(name: "You", letter: String(user.name.prefix(1)),
-                      gradient: user.avatarGradient,
-                      frames: [frame],
-                      isYou: true),
-                at: 0)
-        }
-        if backendConnected {
-            syncNewStory(imageData: imageData, localFrameID: frame.id)
-        }
-        schedulePersist()
+        postStory([DraftStoryFrame(kind: .image, imageData: imageData)])
     }
 
     func openOwnProfile() {
@@ -2261,11 +2277,14 @@ final class AppState: ObservableObject {
             if let unseen = story.frames.firstIndex(where: { !$0.seen }) { return unseen }
             return start
         }()
+        playingHighlightRing = nil
+        viewingHighlightTitle = nil
         storyViewerRail = storyTray.filter(\.hasMedia).map(\.id)
         viewingFrameIndex = preferred
         viewingStory = stories.first(where: { $0.id == story.id }) ?? story
         // Overlay on Home avoids fullScreenCover fight with swipe-down.
         storyOverlayActive = !showStoriesBrowser
+        loadInsightsForCurrentFrame()
     }
 
     func closeStoryViewer() {
@@ -2273,11 +2292,17 @@ final class AppState: ObservableObject {
         viewingFrameIndex = 0
         storyViewerRail = []
         storyOverlayActive = false
+        playingHighlightRing = nil
+        viewingHighlightTitle = nil
+        storyReplies = []
+        storyViewers = []
         stories = storyTray
         schedulePersist()
     }
 
     func markFrameSeen(storyID: UUID, frameID: UUID) {
+        // A highlight replays frames whose seen-state was settled 24h ago.
+        guard playingHighlightRing == nil else { return }
         guard let si = stories.firstIndex(where: { $0.id == storyID }),
               let fi = stories[si].frames.firstIndex(where: { $0.id == frameID }) else { return }
         guard !stories[si].frames[fi].seen else { return }
@@ -2289,8 +2314,9 @@ final class AppState: ObservableObject {
         schedulePersist()
     }
 
-    private func liveStory(id: UUID) -> Story? {
-        stories.first(where: { $0.id == id })
+    func liveStory(id: UUID) -> Story? {
+        if let ring = playingHighlightRing, ring.id == id { return ring }
+        return stories.first(where: { $0.id == id })
     }
 
     /// Advance within the person, then to the next person. Returns false if finished.

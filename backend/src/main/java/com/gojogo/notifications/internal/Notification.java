@@ -35,6 +35,10 @@ class Notification {
     @Column(name = "comment_id")
     private UUID commentId;
 
+    /** Set instead of {@code postId} when the activity is about a story frame. */
+    @Column(name = "story_frame_id")
+    private UUID storyFrameId;
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
@@ -45,13 +49,14 @@ class Notification {
     }
 
     Notification(UUID recipientId, String type, UUID actorId, UUID postId, UUID commentId,
-                 OffsetDateTime createdAt) {
+                 UUID storyFrameId, OffsetDateTime createdAt) {
         this.id = UUID.randomUUID();
         this.recipientId = recipientId;
         this.type = type;
         this.actorId = actorId;
         this.postId = postId;
         this.commentId = commentId;
+        this.storyFrameId = storyFrameId;
         this.createdAt = createdAt;
         this.read = false;
     }
@@ -62,6 +67,7 @@ class Notification {
     UUID getActorId() { return actorId; }
     UUID getPostId() { return postId; }
     UUID getCommentId() { return commentId; }
+    UUID getStoryFrameId() { return storyFrameId; }
     OffsetDateTime getCreatedAt() { return createdAt; }
     boolean isRead() { return read; }
 }

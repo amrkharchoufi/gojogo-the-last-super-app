@@ -1,11 +1,9 @@
 import SwiftUI
-import PhotosUI
 
 /// Full stories directory — 3-column circle grid (Messages Favorites style).
 struct StoriesBrowserView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.dismiss) private var dismiss
-    @State private var storyPicker: PhotosPickerItem?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 28), count: 3)
 
@@ -20,7 +18,9 @@ struct StoriesBrowserView: View {
                             storyCell(story)
                         }
 
-                        PhotosPicker(selection: $storyPicker, matching: .images) {
+                        Button {
+                            app.showStoryComposer = true
+                        } label: {
                             VStack(spacing: 10) {
                                 ZStack {
                                     Circle()
@@ -42,6 +42,7 @@ struct StoriesBrowserView: View {
                                     .foregroundStyle(GGColor.textSecondary)
                             }
                         }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 28)
                     .padding(.top, 12)
@@ -51,6 +52,19 @@ struct StoriesBrowserView: View {
             .navigationTitle("Stories")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button { app.showStoryArchive = true } label: {
+                            Label("Archive", systemImage: "clock.arrow.circlepath")
+                        }
+                        Button { app.showCloseFriends = true } label: {
+                            Label("Close friends", systemImage: "person.2")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundStyle(GGColor.blue)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .fontWeight(.semibold)
@@ -58,14 +72,6 @@ struct StoriesBrowserView: View {
                 }
             }
             .preferredColorScheme(.dark)
-        }
-        .onChange(of: storyPicker) { _, item in
-            Task {
-                if let data = try? await item?.loadTransferable(type: Data.self) {
-                    app.addStory(imageData: data)
-                    storyPicker = nil
-                }
-            }
         }
         // Present viewer on top of this sheet — do not dismiss back to Home.
         .fullScreenCover(isPresented: Binding(
@@ -75,6 +81,18 @@ struct StoriesBrowserView: View {
             StoryViewer()
                 .environmentObject(app)
                 .interactiveDismissDisabled()
+        }
+        // The composer, archive and close-friends list open from this sheet, so
+        // they have to present from here — RootView's copies stand down while
+        // this browser is up.
+        .fullScreenCover(isPresented: $app.showStoryComposer) {
+            StoryComposer().environmentObject(app)
+        }
+        .sheet(isPresented: $app.showStoryArchive) {
+            StoryArchiveView().environmentObject(app)
+        }
+        .sheet(isPresented: $app.showCloseFriends) {
+            CloseFriendsView().environmentObject(app)
         }
     }
 
@@ -88,16 +106,18 @@ struct StoriesBrowserView: View {
                 imageURL: story.isYou && !story.hasMedia ? app.user.avatarURL : story.imageURL,
                 imageData: story.imageData
             )
+            .opacity(story.muted ? 0.55 : 1)
             .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
 
             Text(story.name)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(GGColor.textSecondary)
+                .foregroundStyle(story.muted ? GGColor.textTertiary : GGColor.textSecondary)
                 .lineLimit(1)
         }
 
         if story.isYou && !story.hasMedia {
-            PhotosPicker(selection: $storyPicker, matching: .images) { circle }
+            Button { app.showStoryComposer = true } label: { circle }
+                .buttonStyle(.plain)
         } else if story.hasMedia {
             Button {
                 app.openStory(story)
@@ -105,6 +125,14 @@ struct StoriesBrowserView: View {
                 circle
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                if !story.isYou {
+                    Button { app.toggleStoryMute(authorID: story.id) } label: {
+                        Label(story.muted ? "Unmute \(story.name)" : "Mute \(story.name)",
+                              systemImage: story.muted ? "bell" : "bell.slash")
+                    }
+                }
+            }
         } else {
             circle
         }

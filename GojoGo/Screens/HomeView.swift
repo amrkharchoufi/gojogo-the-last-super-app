@@ -4,7 +4,6 @@ import UIKit
 
 struct HomeView: View {
     @EnvironmentObject var app: AppState
-    @State private var storyPicker: PhotosPickerItem?
     @State private var hideChrome = false
 
     var body: some View {
@@ -131,14 +130,6 @@ struct HomeView: View {
             ScrollChromeControl.suppressTabBarJitter()
             hideChrome = false
         }
-        .onChange(of: storyPicker) { _, item in
-            Task {
-                if let data = try? await item?.loadTransferable(type: Data.self) {
-                    app.addStory(imageData: data)
-                    storyPicker = nil
-                }
-            }
-        }
     }
 
     // MARK: Stories — 3×3 circle grid (Messages Favorites style)
@@ -239,7 +230,7 @@ struct HomeView: View {
                 .lineLimit(1)
         }
         .frame(width: storyCircleSize)
-        // Keep empty space in the stories row from inheriting the PhotosPicker hit target.
+        // Keep empty space in the stories row from inheriting the cell's hit target.
         .contentShape(Rectangle())
         .fixedSize()
     }
@@ -264,11 +255,11 @@ struct HomeView: View {
             .offset(x: 1, y: 1)
             .allowsHitTesting(false)
 
-        // Keep the PhotosPicker hit target on the circle only; draw the + badge
-        // outside so it isn't clipped.
+        // Keep the tap target on the circle only; draw the + badge outside so
+        // it isn't clipped.
         ZStack(alignment: .bottomTrailing) {
             if story.isYou && !hasMedia {
-                PhotosPicker(selection: $storyPicker, matching: .images) { avatar }
+                Button { app.showStoryComposer = true } label: { avatar }
                     .buttonStyle(.plain)
                     .frame(width: storyCircleSize, height: storyCircleSize)
                     .contentShape(Circle())
@@ -277,6 +268,7 @@ struct HomeView: View {
                     .buttonStyle(.plain)
                     .frame(width: storyCircleSize, height: storyCircleSize)
                     .contentShape(Circle())
+                    .contextMenu { storyContextMenu(story) }
             } else {
                 avatar
                     .frame(width: storyCircleSize, height: storyCircleSize)
@@ -284,9 +276,44 @@ struct HomeView: View {
 
             if story.isYou {
                 plusBadge
+            } else if story.hasCloseFriendsFrame {
+                closeFriendsBadge
             }
         }
         .frame(width: storyCircleSize, height: storyCircleSize)
+    }
+
+    /// The palette is monochrome, so a close-friends ring is marked with a glyph
+    /// rather than Instagram's green.
+    private var closeFriendsBadge: some View {
+        Image(systemName: "person.2.fill")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(GGColor.onAccent)
+            .frame(width: 20, height: 20)
+            .background(Circle().fill(GGColor.accent))
+            .overlay(Circle().strokeBorder(GGColor.bg, lineWidth: 2))
+            .offset(x: 1, y: 1)
+            .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func storyContextMenu(_ story: Story) -> some View {
+        if story.isYou {
+            Button { app.showStoryComposer = true } label: {
+                Label("Add to your story", systemImage: "plus")
+            }
+            Button { app.showStoryArchive = true } label: {
+                Label("Archive", systemImage: "clock.arrow.circlepath")
+            }
+            Button { app.showCloseFriends = true } label: {
+                Label("Close friends", systemImage: "person.2")
+            }
+        } else {
+            Button { app.toggleStoryMute(authorID: story.id) } label: {
+                Label(story.muted ? "Unmute \(story.name)" : "Mute \(story.name)",
+                      systemImage: story.muted ? "bell" : "bell.slash")
+            }
+        }
     }
 }
 

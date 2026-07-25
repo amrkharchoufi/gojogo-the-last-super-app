@@ -2,6 +2,8 @@ package com.gojogo.notifications.internal;
 
 import com.gojogo.social.PostCommented;
 import com.gojogo.social.PostLiked;
+import com.gojogo.social.StoryReacted;
+import com.gojogo.social.StoryReplied;
 import com.gojogo.social.UserFollowed;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -44,5 +46,19 @@ class NotificationListeners {
     void onComment(PostCommented event) {
         notifications.record(event.postAuthorId(), "comment", event.commenterId(),
             event.postId(), event.commentId(), event.at());
+    }
+
+    @TransactionalEventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void onStoryReaction(StoryReacted event) {
+        notifications.record(event.storyAuthorId(), "story_reaction", event.reactorId(),
+            null, null, event.frameId(), event.at());
+    }
+
+    @TransactionalEventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void onStoryReply(StoryReplied event) {
+        notifications.record(event.storyAuthorId(), "story_reply", event.replierId(),
+            null, null, event.frameId(), event.at());
     }
 }

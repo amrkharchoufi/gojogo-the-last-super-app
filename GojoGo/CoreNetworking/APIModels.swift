@@ -136,11 +136,45 @@ struct CreateCommentBody: Encodable {
     var text: String
 }
 
+/// Every field past `id` is optional so a build of the app that predates a
+/// backend roll (or vice versa) still decodes the frame instead of dropping the
+/// whole rail.
 struct StoryFrameDTO: Decodable {
     var id: UUID
-    var imageUrl: String
+    var mediaType: String?
+    var imageUrl: String?
+    var videoUrl: String?
+    var durationMs: Int?
+    var caption: String?
+    var overlays: String?
+    var background: String?
+    var audience: String?
     var seen: Bool
-    var createdAt: String
+    var createdAt: String?
+    var expiresAt: String?
+    var viewerCount: Int?
+    var replyCount: Int?
+    var myReaction: String?
+    var music: StoryMusicDTO?
+}
+
+struct StoryMusicDTO: Decodable {
+    var trackId: UUID
+    var title: String
+    var artist: String?
+    var artworkUrl: String?
+    var audioUrl: String
+    var startMs: Int
+    var durationMs: Int
+}
+
+struct MusicTrackDTO: Decodable {
+    var id: UUID
+    var title: String
+    var artist: String?
+    var artworkUrl: String?
+    var audioUrl: String
+    var durationMs: Int
 }
 
 struct StoryRingDTO: Decodable {
@@ -149,11 +183,90 @@ struct StoryRingDTO: Decodable {
     var handle: String?
     var avatarUrl: String?
     var isYou: Bool
+    var muted: Bool?
     var frames: [StoryFrameDTO]
 }
 
+struct CreateStoryFrameBody: Encodable {
+    var mediaType: String
+    var imageUrl: String?
+    var videoUrl: String?
+    var durationMs: Int?
+    var caption: String?
+    var overlays: String?
+    var background: String?
+    var audience: String?
+    /// Only the id and the window — the server resolves everything displayed,
+    /// so a client can't post a frame claiming to be a song it isn't.
+    var musicTrackId: UUID?
+    var musicStartMs: Int?
+    var musicDurationMs: Int?
+}
+
 struct CreateStoryBody: Encodable {
-    var frameImageUrls: [String]
+    var frames: [CreateStoryFrameBody]
+}
+
+struct StoryReactionBody: Encodable {
+    var emoji: String
+}
+
+struct StoryReplyBody: Encodable {
+    var text: String
+}
+
+struct StoryReplyDTO: Decodable {
+    var id: UUID
+    var frameId: UUID
+    var authorId: UUID
+    var authorName: String?
+    var authorHandle: String?
+    var authorAvatarUrl: String?
+    var text: String
+    var createdAt: String?
+    var mine: Bool
+}
+
+struct StoryViewerDTO: Decodable {
+    var id: UUID
+    var name: String?
+    var handle: String?
+    var avatarUrl: String?
+    var reaction: String?
+    var viewedAt: String?
+}
+
+struct StoryHighlightDTO: Decodable {
+    var id: UUID
+    var ownerId: UUID
+    var title: String
+    var coverUrl: String?
+    var frameCount: Int
+}
+
+struct StoryHighlightDetailDTO: Decodable {
+    var id: UUID
+    var ownerId: UUID
+    var title: String
+    var coverUrl: String?
+    var frames: [StoryFrameDTO]
+}
+
+struct SaveHighlightBody: Encodable {
+    var title: String
+    var coverUrl: String?
+    var frameIds: [UUID]
+}
+
+struct CloseFriendsBody: Encodable {
+    var profileIds: [UUID]
+}
+
+struct CloseFriendDTO: Decodable {
+    var id: UUID
+    var name: String?
+    var handle: String?
+    var avatarUrl: String?
 }
 
 struct PresignBody: Encodable {

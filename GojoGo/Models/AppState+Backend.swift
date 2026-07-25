@@ -64,7 +64,7 @@ extension AppState {
         defer { feedLoading = false }
         do {
             let page = try await SocialStore.shared.fetchFeed()
-            var rings = try await SocialStore.shared.fetchStories()
+            var rings = try await StoriesStore.shared.fetchRings()
             if !rings.contains(where: \.isYou) {
                 rings.insert(Story(name: "You", letter: String((user.name.first ?? "g").uppercased()),
                                    gradient: user.avatarGradient, frames: [], isYou: true), at: 0)
@@ -587,32 +587,10 @@ extension AppState {
         return nil
     }
 
-    func syncNewStory(imageData: Data, localFrameID: UUID) {
-        Task {
-            do {
-                let payload = UIImage(data: imageData)?.jpegData(compressionQuality: 0.9) ?? imageData
-                let url = try await APIClient.shared.uploadMedia(payload, contentType: "image/jpeg")
-                let frames = try await SocialStore.shared.createStory(frameUrls: [url])
-                guard let server = frames.first,
-                      let si = stories.firstIndex(where: \.isYou),
-                      let fi = stories[si].frames.firstIndex(where: { $0.id == localFrameID })
-                else { return }
-                stories[si].frames[fi] = StoryFrame(
-                    id: server.id, imageURL: server.imageUrl,
-                    imageData: imageData, seen: false)
-                schedulePersist()
-            } catch {
-                #if DEBUG
-                print("Story sync failed: \(error.localizedDescription)")
-                #endif
-            }
-        }
-    }
-
     func syncFrameSeen(frameID: UUID) {
-        guard SocialStore.shared.remoteFrameIds.contains(frameID) else { return }
+        guard StoriesStore.shared.isLive(frameID) else { return }
         Task {
-            try? await SocialStore.shared.markFrameSeen(frameID)
+            try? await StoriesStore.shared.markSeen(frameID)
         }
     }
 

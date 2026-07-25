@@ -54,6 +54,11 @@ final class APIClient {
         try await request("PUT", path, body: try encoder.encode(body))
     }
 
+    /// PUT a JSON body to an endpoint that returns no content (204).
+    func putNoContent(_ path: String, body: some Encodable) async throws {
+        _ = try await raw("PUT", path, body: try encoder.encode(body))
+    }
+
     func delete(_ path: String) async throws {
         _ = try await raw("DELETE", path, body: nil)
     }

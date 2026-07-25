@@ -11,7 +11,6 @@ final class SocialStore {
     /// Server-backed content ids — AppState uses these to decide whether a
     /// mutation should hit the API or stay local (sample content).
     private(set) var remotePostIds: Set<UUID> = []
-    private(set) var remoteFrameIds: Set<UUID> = []
     private(set) var remoteCommentIds: Set<UUID> = []
     private(set) var authorIdByPost: [UUID: UUID] = [:]
     private(set) var profileIdByHandle: [String: UUID] = [:]
@@ -21,7 +20,6 @@ final class SocialStore {
 
     func reset() {
         remotePostIds = []
-        remoteFrameIds = []
         remoteCommentIds = []
         authorIdByPost = [:]
         profileIdByHandle = [:]
@@ -112,27 +110,6 @@ final class SocialStore {
         try await APIClient.shared.delete("/v1/comments/\(commentId.uuidString.lowercased())/like")
     }
 
-    // MARK: Stories
-
-    func fetchStories() async throws -> [Story] {
-        let rings: [StoryRingDTO] = try await APIClient.shared.get("/v1/stories")
-        return rings.map { map($0) }
-    }
-
-    @discardableResult
-    func createStory(frameUrls: [String]) async throws -> [StoryFrameDTO] {
-        let frames: [StoryFrameDTO] = try await APIClient.shared
-            .post("/v1/stories", body: CreateStoryBody(frameImageUrls: frameUrls))
-        for frame in frames {
-            remoteFrameIds.insert(frame.id)
-        }
-        return frames
-    }
-
-    func markFrameSeen(_ frameId: UUID) async throws {
-        try await APIClient.shared.post("/v1/stories/frames/\(frameId.uuidString.lowercased())/seen")
-    }
-
     // MARK: Mapping
 
     func map(_ dto: PostDTO) -> Post {
@@ -174,25 +151,6 @@ final class SocialStore {
             liked: dto.liked,
             likeCount: dto.likeCount,
             timeAgo: BackendDate.relative(dto.createdAt))
-    }
-
-    func map(_ ring: StoryRingDTO) -> Story {
-        if let handle = ring.handle {
-            profileIdByHandle[handle.lowercased()] = ring.authorId
-        }
-        for frame in ring.frames {
-            remoteFrameIds.insert(frame.id)
-        }
-        let display = ring.isYou ? "You" : (ring.handle ?? ring.name)
-        return Story(
-            id: ring.authorId,
-            name: display,
-            letter: String((ring.name.first ?? "g").uppercased()),
-            gradient: Self.gradient(for: ring.handle ?? ring.name),
-            frames: ring.frames.map {
-                StoryFrame(id: $0.id, imageURL: $0.imageUrl, seen: $0.seen)
-            },
-            isYou: ring.isYou)
     }
 
     private func register(_ author: AuthorSummaryDTO) {

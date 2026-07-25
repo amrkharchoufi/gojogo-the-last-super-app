@@ -18,6 +18,7 @@ record NotificationDto(
     ActorDto actor,
     UUID postId,
     UUID commentId,
+    UUID storyFrameId,
     String text,
     OffsetDateTime createdAt,
     boolean read) {

@@ -150,17 +150,88 @@ struct ProfileUser: Identifiable {
 
 // MARK: - Content models
 
+/// One frame of a story — a photo, a video, or a text card.
+///
+/// `imageData` / `localVideoURL` are the on-device copies that exist between
+/// posting and the upload landing; once the server answers, the URL fields take
+/// over. Counts and `myReaction` come from the server and are nil on frames
+/// that aren't yours (viewer analytics) or haven't synced yet.
 struct StoryFrame: Identifiable, Equatable {
     let id: UUID
+    var kind: StoryMediaKind
     var imageURL: String?
     var imageData: Data?
+    var videoURL: String?
+    var localVideoURL: URL?
+    var durationMs: Int?
+    var caption: String?
+    var background: StoryBackground
+    var overlays: [StoryOverlay]
+    var audience: StoryAudience
+    var music: StoryMusic?
     var seen: Bool
+    var viewerCount: Int?
+    var replyCount: Int?
+    var myReaction: String?
+    var createdAt: Date?
+    var expiresAt: Date?
 
-    init(id: UUID = UUID(), imageURL: String? = nil, imageData: Data? = nil, seen: Bool = false) {
+    init(id: UUID = UUID(), kind: StoryMediaKind = .image,
+         imageURL: String? = nil, imageData: Data? = nil,
+         videoURL: String? = nil, localVideoURL: URL? = nil,
+         durationMs: Int? = nil, caption: String? = nil,
+         background: StoryBackground = .ink, overlays: [StoryOverlay] = [],
+         audience: StoryAudience = .everyone, music: StoryMusic? = nil,
+         seen: Bool = false,
+         viewerCount: Int? = nil, replyCount: Int? = nil, myReaction: String? = nil,
+         createdAt: Date? = nil, expiresAt: Date? = nil) {
         self.id = id
+        self.kind = kind
         self.imageURL = imageURL
         self.imageData = imageData
+        self.videoURL = videoURL
+        self.localVideoURL = localVideoURL
+        self.durationMs = durationMs
+        self.caption = caption
+        self.background = background
+        self.overlays = overlays
+        self.audience = audience
+        self.music = music
         self.seen = seen
+        self.viewerCount = viewerCount
+        self.replyCount = replyCount
+        self.myReaction = myReaction
+        self.createdAt = createdAt
+        self.expiresAt = expiresAt
+    }
+
+    /// A text card is "renderable" with no media at all; the others need theirs.
+    var hasContent: Bool {
+        switch kind {
+        case .text: caption?.isEmpty == false
+        case .video: videoURL != nil || localVideoURL != nil
+        case .image: imageURL != nil || imageData != nil
+        }
+    }
+
+    /// Playable video source — the local file wins while an upload is in flight.
+    var playableVideo: String? {
+        if let localVideoURL { return localVideoURL.absoluteString }
+        return videoURL
+    }
+
+    /// How long this frame holds the screen. Instagram gives a still 5 seconds
+    /// and a video its own length, capped so one long clip can't stall the rail
+    /// — and a still carrying a sound plays for as long as the sound does, so
+    /// the clip isn't cut off mid-bar.
+    var displayDuration: Double {
+        if kind == .video, let durationMs, durationMs > 0 {
+            return min(Double(durationMs) / 1000, 60)
+        }
+        if let music {
+            return min(max(music.clipSeconds, 1), 15)
+        }
+        return 5
     }
 }
 
@@ -172,31 +243,31 @@ struct Story: Identifiable {
     let gradient: [Color]
     var frames: [StoryFrame]
     var isYou: Bool
+    /// The author's profile picture — what the ring and the viewer header show.
+    var avatarURL: String?
+    /// Muted rings sort last and render dimmed; they stay openable.
+    var muted: Bool
 
     var seen: Bool {
         frames.isEmpty || frames.allSatisfy(\.seen)
     }
 
-    var imageURL: String? { frames.first?.imageURL }
-    var imageData: Data? { frames.first?.imageData }
-    var hasMedia: Bool { frames.contains { $0.imageURL != nil || $0.imageData != nil } }
+    /// Cover art for the rail cell — the first frame that actually has a picture.
+    var imageURL: String? {
+        frames.first(where: { $0.imageURL != nil })?.imageURL
+    }
+    var imageData: Data? {
+        frames.first(where: { $0.imageData != nil })?.imageData
+    }
+    var hasMedia: Bool { frames.contains(where: \.hasContent) }
+    var hasCloseFriendsFrame: Bool { frames.contains { $0.audience == .closeFriends } }
 
     init(id: UUID = UUID(), name: String, letter: String, gradient: [Color],
-         frames: [StoryFrame] = [], isYou: Bool = false) {
+         frames: [StoryFrame] = [], isYou: Bool = false,
+         avatarURL: String? = nil, muted: Bool = false) {
         self.id = id; self.name = name; self.letter = letter
         self.gradient = gradient; self.frames = frames; self.isYou = isYou
-    }
-
-    /// Convenience for a single-frame story.
-    init(id: UUID = UUID(), name: String, letter: String, gradient: [Color],
-         imageURL: String? = nil, imageData: Data? = nil,
-         seen: Bool = false, isYou: Bool = false) {
-        var frames: [StoryFrame] = []
-        if imageURL != nil || imageData != nil {
-            frames = [StoryFrame(imageURL: imageURL, imageData: imageData, seen: seen)]
-        }
-        self.init(id: id, name: name, letter: letter, gradient: gradient,
-                  frames: frames, isYou: isYou)
+        self.avatarURL = avatarURL; self.muted = muted
     }
 }
 

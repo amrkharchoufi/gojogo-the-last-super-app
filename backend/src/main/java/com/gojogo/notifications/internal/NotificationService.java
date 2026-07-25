@@ -35,10 +35,16 @@ class NotificationService {
     @Transactional
     void record(UUID recipientId, String type, UUID actorId,
                 UUID postId, UUID commentId, OffsetDateTime at) {
+        record(recipientId, type, actorId, postId, commentId, null, at);
+    }
+
+    @Transactional
+    void record(UUID recipientId, String type, UUID actorId,
+                UUID postId, UUID commentId, UUID storyFrameId, OffsetDateTime at) {
         if (recipientId == null || recipientId.equals(actorId)) return;
-        repo.save(new Notification(recipientId, type, actorId, postId, commentId, at));
+        repo.save(new Notification(recipientId, type, actorId, postId, commentId, storyFrameId, at));
         // Best-effort APNs push (no-op unless a push key is configured).
-        apns.notify(recipientId, actorId, type, postId);
+        apns.notify(recipientId, actorId, type, postId, storyFrameId);
     }
 
     @Transactional
@@ -83,7 +89,8 @@ class NotificationService {
         ActorDto actor = new ActorDto(n.getActorId(), name,
             p != null ? p.handle() : null, p != null ? p.avatarUrl() : null);
         return new NotificationDto(n.getId(), n.getType(), actor,
-            n.getPostId(), n.getCommentId(), textFor(n.getType()), n.getCreatedAt(), n.isRead());
+            n.getPostId(), n.getCommentId(), n.getStoryFrameId(),
+            textFor(n.getType()), n.getCreatedAt(), n.isRead());
     }
 
     private static String textFor(String type) {
@@ -91,6 +98,8 @@ class NotificationService {
             case "follow" -> "started following you";
             case "like" -> "liked your post";
             case "comment" -> "commented on your post";
+            case "story_reaction" -> "reacted to your story";
+            case "story_reply" -> "replied to your story";
             default -> "";
         };
     }
