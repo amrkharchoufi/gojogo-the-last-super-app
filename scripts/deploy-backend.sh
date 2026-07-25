@@ -356,18 +356,16 @@ else
 fi
 IMAGE_REF="${ECR_REPO}:${IMAGE_TAG}"
 
-# Never overwrite a tag: a deployed revision points at it, so moving it would
-# silently change what that revision means.
+# A tag is never overwritten: a task definition revision may point at it, and
+# moving it would silently change what that revision means. But the tag already
+# existing is not an error — the tag *is* the commit, so the image already there
+# is byte-for-byte this code. Reuse it. That's what makes a deploy that failed
+# after the push (IAM, a stalled rollout) retryable on the same commit.
+IMAGE_ALREADY_PUSHED=0
 if aws_ ecr batch-get-image --repository-name "${ECR_REPO##*/}" \
         --image-ids "imageTag=$IMAGE_TAG" --query 'images[0]' --output text 2>/dev/null \
       | grep -qv '^None$'; then
-  die "$IMAGE_TAG is already in ECR — this commit has been deployed before.
-    Overwriting the tag would silently change what an existing task definition
-    revision means, so it's refused. Options:
-      --list                  find the revision running this image
-      --rollback <revision>   redeploy it without rebuilding
-      --allow-dirty           build a fresh, uniquely-tagged image
-    Or just commit your changes and deploy the new SHA."
+  IMAGE_ALREADY_PUSHED=1
 fi
 
 # Flyway runs inside the task at startup, against the private RDS this script
@@ -396,20 +394,24 @@ info "$IMAGE_REF"
 
 # Not routed through a helper: the ECR token is a live credential and must never
 # be echoed, so dry-run prints a redacted form and skips fetching one at all.
-if (( DRY_RUN )); then
+if (( IMAGE_ALREADY_PUSHED )); then
+  ok "Already in ECR — reusing it (same commit, same image); not rebuilding."
+elif (( DRY_RUN )); then
   printf '    %s[dry-run]%s mvn -B -f %s -DskipTests compile jib:build \\\n' \
     "$DIM" "$RESET" "$BACKEND_DIR/pom.xml"
-  printf '        -Djib.image=%s -Djib.to.tags=latest \\\n' "$IMAGE_REF"
+  printf '        -Djib.image=%s \\\n' "$IMAGE_REF"
   printf '        -Djib.to.auth.username=AWS -Djib.to.auth.password=<redacted>\n'
 else
   # Jib talks to the registry directly — no Docker daemon, no Dockerfile.
   ecr_password="$(aws_ ecr get-login-password)" \
     || die "Couldn't get an ECR token. Does this identity have ecr:GetAuthorizationToken?"
 
-  # `latest` rides along as a human convenience pointer. ECS does not use it.
+  # Deliberately the ONLY tag pushed. Co-tagging `latest` would move it under
+  # whatever task definition still references it — including, during the
+  # migration off `latest`, the live one. That is the exact mutability this
+  # script exists to remove, so `latest` is left frozen wherever it is.
   mvn -B -f "$BACKEND_DIR/pom.xml" -DskipTests compile jib:build \
       -Djib.image="$IMAGE_REF" \
-      -Djib.to.tags=latest \
       -Djib.to.auth.username=AWS \
       -Djib.to.auth.password="$ecr_password" \
     || die "Image build/push failed — nothing deployed."
@@ -425,8 +427,35 @@ if (( DRY_RUN )); then
   note "[dry-run] register a new revision of $(taskdef_family "$current_arn") with image $IMAGE_REF"
   new_arn="$current_arn"
 else
-  new_arn="$(register_revision_with_image "$current_arn" "$IMAGE_REF")" \
-    || die "register-task-definition failed."
+  register_err="$(mktemp "${TMPDIR:-/tmp}/gojogo-register-err.XXXXXX")"
+  if ! new_arn="$(register_revision_with_image "$current_arn" "$IMAGE_REF" 2>"$register_err")"; then
+    if grep -q 'iam:PassRole' "$register_err"; then
+      rm -f "$register_err"
+      die "Not allowed to register a task definition (iam:PassRole denied).
+
+    Registering a revision means handing ECS the task + execution roles, which
+    needs iam:PassRole with iam:PassedToService including ecs-tasks.amazonaws.com.
+    The old deploy path (force-new-deployment on a mutable tag) never passed a
+    role, so this permission was never needed before.
+
+    iam-policy-milestone1.json has the fix. Apply it as an ADMIN (the deploy
+    user cannot grant itself permissions):
+
+      aws iam create-policy-version \\
+        --policy-arn arn:aws:iam::${AWS_ACCOUNT}:policy/GojoGoMilestone1Policy \\
+        --policy-document file://iam-policy-milestone1.json --set-as-default
+
+    (If that reports the 5-version limit, delete the oldest non-default version
+    with: aws iam delete-policy-version --policy-arn <arn> --version-id vN)
+
+    The image is already pushed, so afterwards just re-run this script — it
+    reuses the image already in ECR instead of rebuilding it."
+    fi
+    cat "$register_err" >&2
+    rm -f "$register_err"
+    die "register-task-definition failed."
+  fi
+  rm -f "$register_err"
   ok "registered $(basename "$new_arn")"
 fi
 

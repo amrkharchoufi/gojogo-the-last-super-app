@@ -12,6 +12,7 @@ These are the only open items that require you personally; everything else in Ph
 4. **CI deploy** — add `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` GitHub repo secrets (the Actions workflow is untested).
 5. **Cost/scaling decisions** — RDS is publicly reachable (a NAT Gateway ~$32/mo removes that); App Runner bills ~24/7 (`aws apprunner pause-service` when idle). Your call.
 6. **Git** — nothing has been committed this session; commit when you're happy.
+7. **IAM for the new deploy path (blocks all backend deploys)** — `iam:PassRole` needs `ecs-tasks.amazonaws.com` before `scripts/deploy-backend.sh` (and therefore CI) can register a task definition. One admin command, in "Deploying the backend" below. Until it's applied, deploys fail after pushing the image; prod keeps running the old code.
 
 Rare/edge (decide if you care): account-linking is one-directional (Google-first → later email self-signup on the same address fails) and orphaned media uploads are never cleaned up — **both deployed 2026-07-23, pending behavioral E2E** (see Known issues): a clearer `PreSignUp_SignUp` error, and a report-only orphan sweep with reference tracking.
 
@@ -452,6 +453,18 @@ Both paths run the same script, so CI and a laptop deploy can't drift.
 **Automatic** — any push to `main` touching `backend/**` deploys it ([.github/workflows/deploy-backend.yml](.github/workflows/deploy-backend.yml), concurrency-limited to one at a time). The workflow previously ended with `apprunner start-deployment` against the service the Fargate migration destroyed, so pushes built an image and then silently failed to deploy it; it now just calls the script.
 
 **Manual** — `./scripts/deploy-backend.sh`. Preflight → `mvn test` → Jib push → new task definition revision → rollout wait → health check, stopping at the first failure.
+
+**⚠️ Blocked on an IAM change (2026-07-25) — needs an admin.** Registering a task definition hands ECS the task + execution roles, so it needs `iam:PassRole` with `iam:PassedToService` including `ecs-tasks.amazonaws.com`. The old deploy path (`force-new-deployment` on a mutable tag) never passed a role, so this was never needed. The first CI run failed exactly there — tests green, image `e0e1ad6` pushed, then `AccessDeniedException ... iam:PassRole`.
+
+`iam-policy-milestone1.json` now carries the fix. Two traps found while preparing it, both fixed in the file: it had drifted **behind** the applied policy (it was missing the live `CloudFrontForMediaCdn` and `S3ForUserMediaBuckets` statements, so applying it verbatim would have *revoked* media permissions), and it used a literal `ACCOUNT_ID` placeholder that the documented `create-policy-version` command would have installed as-is. The file is now a faithful mirror of the applied **v9** plus `ecs.amazonaws.com` / `ecs-tasks.amazonaws.com`, with real account ids. Apply as admin:
+
+```bash
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::578109959809:policy/GojoGoMilestone1Policy \
+  --policy-document file://iam-policy-milestone1.json --set-as-default
+```
+
+(On the 5-version limit: `aws iam delete-policy-version --policy-arn <arn> --version-id vN` for the oldest non-default.) Then re-run the deploy — it reuses the image already in ECR rather than rebuilding.
 
 **Images are pinned by immutable tag, and that's the point.** The service used to run `:latest`, which every deploy overwrote — so "roll back to the previous task definition" got you the same broken image, and rollback was effectively manual archaeology. Each deploy now pushes `<git-sha>` and registers a task definition revision pinned to it (`latest` still gets pushed, but nothing runs from it). Revision N-1 therefore still references exactly what it shipped:
 
