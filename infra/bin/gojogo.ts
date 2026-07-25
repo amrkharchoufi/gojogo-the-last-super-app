@@ -57,5 +57,10 @@ if (domainName && certificateArn) {
     databaseSecurityGroup: data.databaseSecurityGroup,
     domainName,
     certificateArn,
+    // Defaults to `latest` only so a first-time bootstrap works. Every real
+    // deploy pins an immutable tag via scripts/deploy-backend.sh — pass the
+    // running one (`--current`) on any later cdk deploy so this doesn't
+    // knock the service back onto a mutable tag.
+    imageTag: app.node.tryGetContext('imageTag') ?? 'latest',
   });
 }

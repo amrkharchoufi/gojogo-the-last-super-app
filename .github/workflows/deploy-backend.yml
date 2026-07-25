@@ -1,50 +1,58 @@
 name: Deploy backend
 
+# Auto-deploy: any push to main that touches the backend ships it.
+#
+# The job is a thin wrapper — scripts/deploy-backend.sh does the actual work, so
+# CI and a laptop deploy are the same code path and can't drift. That script runs
+# the tests, pushes an image tagged with the commit SHA, registers a new task
+# definition revision pinned to that tag, waits for the rollout, and health
+# checks. If any of it fails, so does this job.
+#
+# Rolling back is deliberately NOT automated — it needs a human deciding that
+# what's live is worse than what preceded it. From a checkout:
+#   ./scripts/deploy-backend.sh --list
+#   ./scripts/deploy-backend.sh --rollback
+
 on:
   push:
     branches: [main]
     paths:
       - 'backend/**'
+      - 'scripts/deploy-backend.sh'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
-env:
-  AWS_REGION: us-east-1
-  ECR_IMAGE: 578109959809.dkr.ecr.us-east-1.amazonaws.com/gojogo-backend:latest
+# One deploy at a time. Two overlapping runs would race on the ECS service and
+# could leave the older commit live; queue instead, and don't cancel a run
+# that's mid-rollout.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
+      # Sets JAVA_HOME, which the script verifies is 21 before building.
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: corretto
           java-version: '21'
           cache: maven
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: us-east-1
 
-      - name: Run tests
-        working-directory: backend
-        run: mvn -B test
+      - name: Deploy
+        run: ./scripts/deploy-backend.sh
 
-      - name: Build and push image (Jib)
-        working-directory: backend
-        run: |
-          mvn -B -DskipTests compile jib:build \
-            -Djib.image="$ECR_IMAGE" \
-            -Djib.to.auth.username=AWS \
-            -Djib.to.auth.password="$(aws ecr get-login-password --region "$AWS_REGION")"
-
-      - name: Trigger App Runner deployment
-        run: |
-          SERVICE_ARN=$(aws apprunner list-services \
-            --query "ServiceSummaryList[?ServiceName=='gojogo-backend'].ServiceArn" --output text)
-          aws apprunner start-deployment --service-arn "$SERVICE_ARN"
+      - name: Report what's live
+        if: always()
+        run: ./scripts/deploy-backend.sh --list

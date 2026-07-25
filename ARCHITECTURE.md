@@ -113,7 +113,7 @@ Shared infra:
 | `ShortsView`, `WatchView`, `GojoTVView`, `VideoItem`, `Short`, `TVShow` | Vertical on platform | `media` (+ later `watch` catalog) | `media` | Still SampleData on client; UGC HLS = later |
 | `GojoTravelView`, `TravelPlace`, `RideOption`, `TravelDriver` | Vertical | `travel` | `travel` | Uses platform `dispatch` + client Mapbox |
 | `GojoDeliveryView`, restaurant/cart/courier | Vertical | `delivery` | `delivery` | Own `AppTab`; **live** (M4) — catalog, server-priced orders, fulfilment state machine. Will use platform `dispatch` for real couriers (Phase 3) |
-| `EconomyView`, `Product` | Vertical | `economy` | `economy` | Marketplace listings |
+| `EconomyView`, `Product` | Vertical | `economy` | `economy` | Marketplace listings — **live**; `SellerListingsView` is the seller side (edit, pause, mark sold, delete, saves/views) |
 | `PartnerFlowView`, `PartnerDashboardView`, KYC/stake | Vertical | `partner` | `partner` | Driver/courier onboarding |
 | `MadeleineHomeView`, `MadeleineOrb` | Vertical | `assistant` | DynamoDB memory | Bedrock |
 | `SearchView` | Platform | `search` | OpenSearch | Event-indexed; not a domain owner |

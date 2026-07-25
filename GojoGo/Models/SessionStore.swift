@@ -348,6 +348,8 @@ struct CachedProduct: Codable {
     var condition: String?
     var distance: String?
     var description: String?
+    /// Optional so a cache written before listing status existed still decodes.
+    var status: String?
 }
 
 struct CachedPerson: Codable {
@@ -571,6 +573,7 @@ extension CachedProduct {
         imageURL = p.imageURL; saved = p.saved
         category = p.category; seller = p.seller
         condition = p.condition; distance = p.distance; description = p.description
+        status = p.status.rawValue
     }
 
     func asDomain() -> Product {
@@ -579,7 +582,8 @@ extension CachedProduct {
                 imageURL: imageURL, saved: saved,
                 category: category ?? "All", seller: seller ?? "seller",
                 condition: condition ?? "Good", distance: distance ?? "nearby",
-                description: description ?? "")
+                description: description ?? "",
+                status: status.map(ListingStatus.init(wire:)) ?? .active)
     }
 }
 

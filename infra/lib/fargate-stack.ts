@@ -30,6 +30,15 @@ export interface GojoGoFargateStackProps extends cdk.StackProps {
   domainName: string;
   /** ARN of a pre-validated ACM cert for domainName (DNS is external to AWS). */
   certificateArn: string;
+  /**
+   * Backend image tag to run. Day-to-day deploys are done by
+   * `scripts/deploy-backend.sh`, which registers a new task definition revision
+   * pinned to an immutable tag (the git SHA) — that is what makes `--rollback`
+   * work. A `cdk deploy` re-asserts the task definition and would otherwise
+   * knock the service back to a mutable `latest`, so pass the running tag:
+   *   cdk deploy GojoGoFargateStack -c imageTag=$(./scripts/deploy-backend.sh --current)
+   */
+  imageTag: string;
 }
 
 /**
@@ -93,7 +102,7 @@ export class GojoGoFargateStack extends cdk.Stack {
     });
 
     taskDef.addContainer('backend', {
-      image: ecs.ContainerImage.fromEcrRepository(props.repository, 'latest'),
+      image: ecs.ContainerImage.fromEcrRepository(props.repository, props.imageTag),
       portMappings: [{ containerPort: 8080 }],
       logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: 'app' }),
       environment: {

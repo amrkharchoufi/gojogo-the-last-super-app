@@ -160,6 +160,20 @@ final class AppState: ObservableObject {
     /// A listing thread waiting on My World setup — opened once it completes.
     var pendingSellerConversation: (id: UUID, draft: String)? = nil
     @Published var showSellSheet: Bool = false
+
+    // Economy — the seller's own shelf (Phase 2b · M5)
+    /// "Your listings" presented over Economy.
+    @Published var showSellerHub: Bool = false
+    /// Everything the signed-in user is selling, every status, newest first.
+    @Published var sellerListings: [SellerListing] = []
+    /// Server-computed totals — they cover every listing, not just the page.
+    @Published var sellerStats: SellerStatsDTO? = nil
+    @Published var sellerListingsLoading: Bool = false
+    /// Non-nil while the edit form is open on one of the user's own listings.
+    @Published var editingListing: SellerListing? = nil
+    /// Transient message shown over Economy — a refused edit, a failed relist.
+    @Published var economyNotice: String? = nil
+    var economyNoticeTask: Task<Void, Never>?
     @Published var selectedTVShow: TVShow? = nil
     @Published var tvShows: [TVShow] = SampleData.tvShows
     @Published var tvHero: TVShow = SampleData.tvHero
@@ -1603,7 +1617,14 @@ final class AppState: ObservableObject {
         AuthSession.shared.clear()
         SocialStore.shared.reset()
         ProfileStore.shared.reset()
+        EconomyStore.shared.reset()
         DeliveryStore.shared.reset()
+        showSellerHub = false
+        sellerListings = []
+        sellerStats = nil
+        editingListing = nil
+        economyNoticeTask?.cancel()
+        economyNotice = nil
         deliveryPollTask?.cancel()
         deliveryLiveOrderID = nil
         deliveryNoticeTask?.cancel()

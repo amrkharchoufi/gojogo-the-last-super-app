@@ -74,10 +74,29 @@ class ListingService {
         return new ListingPageResponse(items, nextBefore);
     }
 
+    /** The seller's own shelf — paused and sold listings included, since this is
+     *  the one place they're still visible. */
     @Transactional(readOnly = true)
     List<ListingResponse> mine(UUID me, int limit) {
         return decorate(listings.findBySellerIdOrderByCreatedAtDesc(me,
             PageRequest.of(0, Math.clamp(limit, 1, 100))), me);
+    }
+
+    @Transactional(readOnly = true)
+    SellerStatsResponse stats(UUID me) {
+        int total = 0, active = 0, paused = 0, sold = 0, saves = 0, views = 0;
+        for (ListingRepository.SellerStatusTotals row : listings.sellerTotals(me)) {
+            int count = (int) row.getListings();
+            total += count;
+            saves += (int) row.getSaves();
+            views += (int) row.getViews();
+            switch (row.getStatus()) {
+                case ACTIVE -> active += count;
+                case PAUSED -> paused += count;
+                case SOLD -> sold += count;
+            }
+        }
+        return new SellerStatsResponse(total, active, paused, sold, saves, views);
     }
 
     @Transactional(readOnly = true)
@@ -93,11 +112,57 @@ class ListingService {
         return decorate(ordered, me);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     ListingResponse get(UUID me, UUID listingId) {
         Listing listing = listings.findById(listingId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such listing"));
-        return decorate(List.of(listing), me).getFirst();
+        ListingResponse response = decorate(List.of(listing), me).getFirst();
+        if (!listing.getSellerId().equals(me)) {
+            // A seller browsing their own listing isn't interest. The response
+            // carries the pre-bump number — "Your listings" re-reads its own.
+            listings.bumpViewCount(listingId);
+        }
+        return response;
+    }
+
+    /** Saves a seller's edits. Status is untouched here — pausing and marking
+     *  sold go through {@link #updateStatus} so the edit form can't do it by
+     *  accident, and so a relist is one tap rather than a form round-trip. */
+    @Transactional
+    ListingResponse update(UUID me, UUID listingId, UpdateListingRequest request) {
+        Listing listing = own(me, listingId);
+        listing.edit(request.title().trim(), request.priceCents(),
+            blankTo(request.currency(), "USD"),
+            blankTo(request.category(), "Home"),
+            blankTo(request.condition(), "Good"),
+            blankTo(request.locationLabel(), "nearby"),
+            request.description());
+        List<String> images = request.imageUrls() == null ? List.of() : request.imageUrls().stream()
+            .filter(u -> u != null && !u.isBlank())
+            .toList();
+        listing.replaceMedia(images);
+        Listing saved = listings.save(listing);
+        if (!images.isEmpty()) {
+            media.markReferenced(images);
+        }
+        return decorate(List.of(saved), me).getFirst();
+    }
+
+    @Transactional
+    ListingResponse updateStatus(UUID me, UUID listingId, UpdateListingStatusRequest request) {
+        Listing listing = own(me, listingId);
+        listing.setStatus(ListingStatus.parse(request.status()));
+        return decorate(List.of(listings.save(listing)), me).getFirst();
+    }
+
+    /** Loads a listing the caller must own, or refuses. */
+    private Listing own(UUID me, UUID listingId) {
+        Listing listing = listings.findById(listingId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such listing"));
+        if (!listing.getSellerId().equals(me)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your listing");
+        }
+        return listing;
     }
 
     /**
@@ -156,12 +221,7 @@ class ListingService {
 
     @Transactional
     void delete(UUID me, UUID listingId) {
-        Listing listing = listings.findById(listingId)
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such listing"));
-        if (!listing.getSellerId().equals(me)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your listing");
-        }
-        listings.delete(listing);
+        listings.delete(own(me, listingId));
     }
 
     @Transactional
@@ -212,8 +272,11 @@ class ListingService {
                 l.getMedia().stream().map(ListingMedia::getImageUrl).toList(),
                 savedIds.contains(l.getId()),
                 l.getSellerId().equals(me),
+                l.getStatus().name(),
                 l.getSaveCount(),
-                l.getCreatedAt());
+                l.getViewCount(),
+                l.getCreatedAt(),
+                l.getUpdatedAt());
         }).toList();
     }
 

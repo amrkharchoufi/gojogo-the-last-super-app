@@ -24,6 +24,7 @@ Rare/edge (decide if you care): account-linking is one-directional (Google-first
 
 ## Milestone status
 
+- [x] **Phase 2b · Milestone 5 — Seller listing management** 🟡 **built + simulator-verified (2026-07-25), NOT deployed** — the seller's side of the marketplace. Listings gained a real lifecycle (`V10`: `status` ACTIVE/PAUSED/SOLD + `view_count` + `updated_at`, replacing the write-only `active` flag, which is left in place for rolling-deploy safety), plus owner-only `PUT` edit and `PUT` status, and a `/mine/stats` aggregate. iOS adds **"Your listings"** off a `Selling N` chip in the Economy chrome: stat tiles, status segments, and per-row edit / pause / mark-sold / relist / delete with optimistic moves that revert and explain themselves on failure. Browse now filters on status, so a sold item leaves the grid but stays on the seller's shelf and on a buyer's saved list (badged). Verified in the simulator **against the live pre-V10 backend** — which also proves the optional-decode forward-compat — but the mutation endpoints 404 until this is rolled. See the Phase 2b M5 section below for the deploy + the curl E2E it still needs.
 - [x] **Phase 2b · Milestone 4 — Delivery vertical** ✅ **deployed + verified (2026-07-25)**, plus a same-day follow-up (demo catalog dropped, real saved addresses, error surface — see below) — new backend `delivery` module (Postgres `delivery` schema, Flyway `V8__delivery.sql` + `V9__delivery_addresses.sql`): restaurant/menu catalog (**now empty — the demo seed was deleted; merchant onboarding is `partner`, later**), **server-priced orders** (the client sends item ids + quantities, never prices), a real fulfilment state machine, order history, cancel and rate. GojoDelivery was the last vertical still bound to an *empty* `SampleData` catalog; it now runs on live data end to end. Fulfilment is **simulated on a server-side timeline** until the platform `dispatch` module exists (Phase 3) — but it's server-authoritative, so the countdown, the assigned courier and the courier's progress survive a relaunch and match on a second device. Prod two-user curl E2E green (52/52) **plus a simulator pass on the live backend** — first milestone whose SwiftUI path is verified in a running app, not just by build + curl. See the Phase 2b M4 section below.
 - [x] **Phase 2b · Milestone 3 — Listing context on the thread** ✅ **deployed + verified (2026-07-24)** — a seller conversation now carries a **listing reference card**: `messaging` gained a generic public `ConversationContext` (kind/refId + pre-rendered title/subtitle/imageUrl — no messaging→economy dependency), stamped by `economy` in `openChat` and **refreshed on thread reuse** to whatever listing the buyer is asking about now. Surfaced on `ConversationDto`; iOS renders a tappable card pinned under the chat header (→ opens the live listing detail). This is the hook payments/orders will hang off. Two-user prod curl E2E green (buyer + seller both see the same card; reuse refreshes it; "on ask" → "On ask" subtitle). See the Phase 2b M3 section below.
 - [x] **Phase 2b · Milestone 2 — Seller chat over messaging** ✅ **deployed + verified (2026-07-24)** — new `MessagingApi` public interface (first cross-vertical use of the messaging module); `POST /v1/economy/listings/{id}/chat` opens/reuses the buyer↔seller 1:1 and returns a prefilled opener without posting anything; iOS "Message seller" now lands in the real My World thread. Two-user prod curl E2E green. See the Phase 2b M2 section below.
@@ -432,6 +433,8 @@ Three changes on top of M4, deployed together as `V9__delivery_addresses.sql`.
 
 ### Deploy runbook (executed 2026-07-25; the backend now runs on ECS/Fargate, **not** App Runner)
 
+**Superseded 2026-07-25 by [scripts/deploy-backend.sh](scripts/deploy-backend.sh)** — see "Deploying the backend" below. The hand-rolled version this milestone used was:
+
 ```
 export JAVA_HOME=/Users/mac/Library/Java/JavaVirtualMachines/corretto-21.0.5/Contents/Home
 cd backend && mvn -B -DskipTests compile jib:build \
@@ -440,7 +443,69 @@ cd backend && mvn -B -DskipTests compile jib:build \
 aws ecs update-service --cluster gojogo --service gojogo-backend --force-new-deployment --region us-east-1
 ```
 
-(Older milestone runbooks in this file end with `aws apprunner start-deployment` — that service is retired; use the ECS command above.)
+(Older milestone runbooks in this file end with `aws apprunner start-deployment` — that service is retired.)
+
+## Deploying the backend (2026-07-25)
+
+Both paths run the same script, so CI and a laptop deploy can't drift.
+
+**Automatic** — any push to `main` touching `backend/**` deploys it ([.github/workflows/deploy-backend.yml](.github/workflows/deploy-backend.yml), concurrency-limited to one at a time). The workflow previously ended with `apprunner start-deployment` against the service the Fargate migration destroyed, so pushes built an image and then silently failed to deploy it; it now just calls the script.
+
+**Manual** — `./scripts/deploy-backend.sh`. Preflight → `mvn test` → Jib push → new task definition revision → rollout wait → health check, stopping at the first failure.
+
+**Images are pinned by immutable tag, and that's the point.** The service used to run `:latest`, which every deploy overwrote — so "roll back to the previous task definition" got you the same broken image, and rollback was effectively manual archaeology. Each deploy now pushes `<git-sha>` and registers a task definition revision pinned to it (`latest` still gets pushed, but nothing runs from it). Revision N-1 therefore still references exactly what it shipped:
+
+```
+./scripts/deploy-backend.sh --list       # revisions, their images, which is live
+./scripts/deploy-backend.sh --rollback   # back one revision, no rebuild
+```
+
+Consequences worth knowing:
+
+- **A clean tree is required.** A dirty tree would tag an image with a commit that doesn't contain the code, which is exactly what breaks rollback later. `--allow-dirty` overrides and tags `<sha>-dirty-<timestamp>` so it can never be mistaken for the commit.
+- **Re-deploying an existing tag is refused** — moving a tag would silently change what a deployed revision means. Commit and deploy the new SHA, or `--rollback` to the revision already running it.
+- **`cdk deploy GojoGoFargateStack` re-asserts the task definition** and would knock the service back to a mutable tag. `imageTag` is now a required prop (context-driven, defaulting to `latest` for a cold bootstrap), so pass the running one:
+  ```
+  cdk deploy GojoGoFargateStack -c imageTag=$(./scripts/deploy-backend.sh --current) \
+    -c domainName=api.gojogo.app -c certificateArn=...
+  ```
+- **A failed deploy is not an outage.** `desiredCount 1` / `minHealthyPercent 100` means the new task must go healthy before the old drains, so a bad build (or a failed Flyway migration, which looks identical) stalls the rollout while the previous version keeps serving. The script times out at 10 minutes and prints the two commands that diagnose it, plus the rollback.
+
+## Phase 2b · Milestone 5 — seller listing management (built + simulator-verified 2026-07-25, NOT deployed)
+
+Selling was one-way: publish and hope. A seller could create a listing and delete it, and nothing else — no edit, no way to say "sold", and no sight of whether anyone was interested. This milestone is the seller's side of the marketplace: **"Your listings"**, reached from a `Selling N` chip in the Economy chrome (and from "Manage listing" on your own listing detail).
+
+**The status model is the core of it.** `active BOOLEAN` couldn't express this: *paused* and *sold* are both "not in browse" but mean opposite things to the seller, and to a buyer who saved the item. So `V10__economy_listing_management.sql` adds `status VARCHAR(16)` (`ACTIVE` / `PAUSED` / `SOLD`, CHECK-constrained), `view_count`, and `updated_at`, backfilling status from `active`. **`active` is deliberately left in place**, unread by the new code — dropping it would break the tasks still serving traffic mid-roll, whose entity maps the column. It keeps `NOT NULL DEFAULT true`, so inserts from either version succeed; a later migration can drop it once nothing maps it.
+
+Decisions worth keeping straight:
+
+- **Browse filters on status, everywhere.** The repository queries switched from `active = true` to `status = ACTIVE`, and `EconomyView.catalog` filters client-side too. That second filter is what makes it safe to *seed* a paused or sold listing into the catalog — which `openListingContext` (a thread's listing card) and "View in marketplace" both have to do, because `ProductDetailView` resolves through `liveProduct(id:)`.
+- **Editing is a full replacement.** `PUT` posts every field back, photos included, so a cleared description means cleared. Status is *not* in the edit form — pause/relist/mark-sold are row actions, which keeps a relist one tap instead of a form round-trip.
+- **Views count buyers, not the seller.** `GET /listings/{id}` bumps `view_count` only when the viewer isn't the owner. The response carries the pre-bump number; the shelf re-reads its own via `/mine`.
+- **Totals come from the server.** `/mine/stats` aggregates across *every* listing, so the tiles aren't limited to the page in hand. A stats failure can't take the shelf down — the tiles fall back to counting what loaded.
+- **Status changes move optimistically and revert.** The segment a row lives in is the whole point of the tap, so it moves immediately; a refused call puts the row and the catalog back *and says so*.
+
+**API surface** (all Bearer-authed, owner-only on the mutations):
+- `PUT /v1/economy/listings/{id}` — full replacement → the updated listing (403 non-owner, 404 gone)
+- `PUT /v1/economy/listings/{id}/status` `{status}` — ACTIVE / PAUSED / SOLD (400 on an unknown value)
+- `GET /v1/economy/listings/mine/stats` → `{total, active, paused, sold, saves, views}`
+- `GET /v1/economy/listings/mine` — unchanged, but now returns paused and sold listings too (it's the only place they appear), and every `ListingResponse` gained `status` / `viewCount` / `updatedAt`
+
+**iOS** — new [SellerListingsView.swift](GojoGo/Screens/SellerListingsView.swift): stat tiles (live / saves / views / sold), status segments with counts, and a row per listing carrying price, a status pill, saves + views, a one-tap primary action (Mark sold, or Relist when it's down), Edit, and an ellipsis menu (edit · view in marketplace · every other status · delete). Delete is alert-confirmed and says what makes it different from "sold". The edit form is the same sheet, swapped in with a transition — the pattern `DeliveryAddressSheet` already uses — with a multi-photo strip (upload to S3 first, cover badge on the first), title, price, category, condition, pickup area, and details. New `SellerListing` view model + `ListingStatus` enum in [EconomyModels.swift](GojoGo/Stores/EconomyModels.swift); shelf/edit/status wiring in [AppState+Economy.swift](GojoGo/Models/AppState+Economy.swift), which also reconciles all three surfaces a listing shows on (shelf, catalog, open detail) from the server's response.
+
+**Forward-compatible with the un-rolled backend:** `status` and `viewCount` are optional-decoded (same convention as the presign `cacheControl` field), so the app runs against the currently-deployed jar — which is exactly how it was verified below.
+
+**Verified (2026-07-25)** — backend `ModularityTests` green (Corretto 21, 1/1); iOS `xcodebuild -sdk iphonesimulator` → BUILD SUCCEEDED. **Simulator pass on the live (pre-V10) backend**, which doubles as the forward-compat test: signed in → Economy showed the `Selling` chip → the empty shelf rendered (0/0/0/0 + "Nothing listed yet") → published *Leica M6 rangefinder / $1,200* against prod → the chip became **`Selling 1`** and the shelf showed the row (LIVE pill, "Listed just now", 0 saves · 0 views) with the stat tiles at Live 1 → the edit form opened pre-filled, price round-tripped from cents as `1200` → "Mark sold" against the missing route **reverted the row to LIVE, left the counts untouched, and surfaced the failure banner** — the optimistic-rollback path, confirmed by a real failure rather than a mock.
+
+**Two bugs this pass caught and fixed:** the notice banner rendered only in `EconomyView`, i.e. *behind* the seller sheet, so a refused edit failed silently — the sheet now renders its own; and it overlapped the header and stat tiles, so it's in the layout rather than over it. Also added `listingMessage(from:fallback:)`, which suppresses a 404 body — a route miss or a deleted listing otherwise showed the seller raw Spring text ("No static resource v1/economy/listings/…").
+
+**Not covered / deferred:** photo *reordering* (you can add and remove; the first is the cover); no "price dropped" notification to people who saved the listing (`SOLD` would be a natural `notifications` consumer, alongside the existing `ListingCreated`); and the shelf is a single 100-item fetch with client-side filtering — fine now, but a seller past that needs the paged, server-filtered `/mine`.
+
+**To deploy:** V10 is non-destructive (adds columns, backfills, leaves `active`), so it's the standard roll — push the image, then
+```bash
+aws ecs update-service --cluster gojogo --service gojogo-backend --force-new-deployment --region us-east-1
+```
+The mutation endpoints (`PUT …/{id}`, `PUT …/{id}/status`, `GET …/mine/stats`) are **unverified against a real backend** — they 404 until this lands. A two-user curl E2E in the style of the earlier 2b milestones should follow the deploy: owner edits, non-owner gets 403, status round-trip ACTIVE→SOLD→ACTIVE, sold listing absent from browse but present in `/mine` and `/saved`, view count bumping for a non-owner and not for the owner.
 
 ## Username change — 2-month cooldown with grace (deployed + verified 2026-07-23)
 

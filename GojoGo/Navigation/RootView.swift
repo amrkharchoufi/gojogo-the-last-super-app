@@ -134,6 +134,16 @@ struct MainAppView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: Binding(
+            get: { app.showSellerHub },
+            set: { if !$0 { app.closeSellerHub() } }
+        )) {
+            SellerListingsView()
+                .environmentObject(app)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
+        .sheet(isPresented: Binding(
             get: { app.messagingProduct != nil },
             set: { if !$0 { app.closeSellerChat() } }
         )) {

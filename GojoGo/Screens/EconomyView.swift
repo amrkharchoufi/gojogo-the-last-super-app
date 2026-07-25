@@ -10,8 +10,12 @@ struct EconomyView: View {
     @State private var chromeHidden = false
     @FocusState private var searchFocused: Bool
 
+    /// Browse only ever shows live listings — a seller's paused or sold items
+    /// stay on their own shelf, even when something seeded them into the catalog
+    /// (a thread's listing card, "View in marketplace").
     private var catalog: [Product] {
-        ([app.featuredProduct] + app.products).filter { !$0.name.isEmpty }
+        ([app.featuredProduct] + app.products)
+            .filter { !$0.name.isEmpty && $0.status == .active }
     }
 
     private var filtered: [Product] {
@@ -90,18 +94,19 @@ struct EconomyView: View {
                         )
                         .padding(.top, 40)
                     } else {
-                        if !app.featuredProduct.name.isEmpty || !filtered.isEmpty {
+                        if !filtered.isEmpty {
                             dealBanner
                                 .padding(.horizontal, 16)
                                 .padding(.top, 18)
                                 .zIndex(0)
                         }
 
-                        if !app.savedProducts.isEmpty {
+                        let saved = catalog.filter(\.saved)
+                        if !saved.isEmpty {
                             productRail(
                                 title: "Keep shopping",
                                 subtitle: "From your saved list",
-                                products: app.savedProducts
+                                products: saved
                             )
                             .padding(.top, 22)
                         }
@@ -134,7 +139,18 @@ struct EconomyView: View {
 
             topChrome
                 .autoHideChrome(chromeHidden)
+
+            if let notice = app.economyNotice {
+                EconomyNoticeBanner(message: notice) { app.dismissEconomyNotice() }
+                    .padding(.horizontal, 16)
+                    // Clears the wordmark row rather than sitting on top of it.
+                    .padding(.top, 66)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(3)
+            }
         }
+        .animation(.ggOverlay, value: app.economyNotice)
     }
 
     // MARK: - Chrome
@@ -149,6 +165,9 @@ struct EconomyView: View {
                 Wordmark(size: 20, trailing: "economy")
             }
             Spacer(minLength: 0)
+            if app.canManageListings {
+                sellerHubButton
+            }
             Button {
                 app.showSellSheet = true
             } label: {
@@ -174,6 +193,29 @@ struct EconomyView: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
+    }
+
+    /// Way into the seller's own shelf. Carries the live count so a seller can
+    /// see at a glance that they still have something up, without opening it.
+    private var sellerHubButton: some View {
+        let live = app.sellerListings.filter { $0.status == .active }.count
+        return Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            app.openSellerHub()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(live > 0 ? "Selling \(live)" : "Selling")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(GGColor.textPrimary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .glassCapsule(interactive: false)
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel("Your listings")
     }
 
     private var locationRow: some View {
@@ -495,6 +537,43 @@ struct EconomyView: View {
     }
 }
 
+// MARK: - Notice
+//
+// The marketplace screens move optimistically (a paused listing leaves the grid
+// before the server confirms). This is how a refused edit or relist gets said
+// out loud instead of silently reverting.
+
+/// Not private: the seller hub is a sheet *over* Economy, so it has to render
+/// its own copy — a banner behind a sheet is a banner nobody reads.
+struct EconomyNoticeBanner: View {
+    let message: String
+    var onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+            Text(message)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(GGColor.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .glass(cornerRadius: 18, tint: GGColor.ink(0.10), floating: true)
+    }
+}
+
 // MARK: - Product detail
 
 struct ProductDetailView: View {
@@ -537,6 +616,22 @@ struct ProductDetailView: View {
                         MonoChip(text: product.category, active: true)
                         MonoChip(text: product.condition)
                         MonoChip(text: product.distance)
+                    }
+
+                    // A saved listing can go sold or come down under the buyer.
+                    if product.status != .active {
+                        HStack(spacing: 8) {
+                            Image(systemName: product.status.icon)
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(product.status == .sold
+                                 ? "Sold — this one's gone."
+                                 : "Taken down by the seller for now.")
+                                .font(.system(size: 13, weight: .medium))
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(GGColor.textSecondary)
+                        .padding(12)
+                        .glass(cornerRadius: 14, tint: GGColor.ink(0.06))
                     }
 
                     HStack(spacing: 12) {
@@ -605,13 +700,19 @@ struct ProductDetailView: View {
                 .buttonStyle(PressableStyle())
 
                 if EconomyStore.shared.isOwn(product.id) {
-                    // Your own listing — there's no one to message.
-                    Text("Your listing")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(GGColor.textSecondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .glassCapsule(interactive: false)
+                    // Your own listing — there's no one to message, so the CTA
+                    // is the thing you actually came here to do.
+                    Button {
+                        app.manageListing(product.id)
+                    } label: {
+                        Text("Manage listing")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(GGColor.onAccent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Capsule().fill(GGColor.white))
+                    }
+                    .buttonStyle(PressableStyle())
                 } else {
                     Button {
                         app.openSellerChat(for: product)

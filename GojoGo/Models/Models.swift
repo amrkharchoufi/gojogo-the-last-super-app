@@ -343,16 +343,20 @@ struct Product: Identifiable {
     var condition: String
     var distance: String
     var description: String
+    /// Live / paused / sold. A saved listing can go sold under the buyer, so the
+    /// detail view says so instead of offering to message about a gone item.
+    var status: ListingStatus
 
     init(id: UUID = UUID(), name: String, price: String, meta: String = "",
          gradient: [Color], imageURL: String? = nil, saved: Bool = false,
          category: String = "All", seller: String = "seller",
          condition: String = "Good", distance: String = "nearby",
-         description: String = "") {
+         description: String = "", status: ListingStatus = .active) {
         self.id = id; self.name = name; self.price = price; self.meta = meta
         self.gradient = gradient; self.imageURL = imageURL; self.saved = saved
         self.category = category; self.seller = seller
         self.condition = condition; self.distance = distance
+        self.status = status
         self.description = description.isEmpty
             ? "Listed on GojoGo Economy. Message the seller to ask about pickup, bundle deals, or more photos."
             : description

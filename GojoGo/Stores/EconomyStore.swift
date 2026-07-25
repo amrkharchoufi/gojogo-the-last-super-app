@@ -55,18 +55,44 @@ final class EconomyStore {
         return dtos.map(map)
     }
 
-    func mine(limit: Int = 50) async throws -> [Product] {
+    // MARK: Seller shelf
+
+    /// Everything the caller is selling — paused and sold listings included,
+    /// since "Your listings" is the only place they still show up.
+    func mine(limit: Int = 100) async throws -> [SellerListing] {
         let dtos: [ListingDTO] = try await APIClient.shared.get("/v1/economy/listings/mine?limit=\(limit)")
         track(dtos)
-        return dtos.map(map)
+        return dtos.map(Self.sellerListing)
+    }
+
+    func stats() async throws -> SellerStatsDTO {
+        try await APIClient.shared.get("/v1/economy/listings/mine/stats")
     }
 
     // MARK: Mutations
 
-    func create(_ body: CreateListingBody) async throws -> Product {
+    func create(_ body: ListingBody) async throws -> Product {
         let dto: ListingDTO = try await APIClient.shared.post("/v1/economy/listings", body: body)
         track([dto])
         return map(dto)
+    }
+
+    /// Saves a seller's edits. Returns the server's version of the listing, so
+    /// the catalog and the seller shelf both settle on what actually persisted.
+    func update(_ listingId: UUID, _ body: ListingBody) async throws -> ListingDTO {
+        let dto: ListingDTO = try await APIClient.shared.put("/v1/economy/listings/\(listingId)",
+                                                             body: body)
+        track([dto])
+        return dto
+    }
+
+    /// Take it down, put it back, or mark it sold.
+    func setStatus(_ listingId: UUID, _ status: ListingStatus) async throws -> ListingDTO {
+        let dto: ListingDTO = try await APIClient.shared.put(
+            "/v1/economy/listings/\(listingId)/status",
+            body: ListingStatusBody(status: status.rawValue))
+        track([dto])
+        return dto
     }
 
     func save(_ listingId: UUID) async throws {
@@ -114,10 +140,34 @@ final class EconomyStore {
             seller: dto.seller.handle ?? sellerName,
             condition: dto.condition,
             distance: dto.locationLabel,
-            description: dto.description)
+            description: dto.description,
+            status: ListingStatus(wire: dto.status))
     }
 
-    static func formatPrice(cents: Int64?, currency: String) -> String {
+    /// The seller's view of their own listing — raw price and every photo, so
+    /// the edit form can round-trip it without re-parsing display strings.
+    static func sellerListing(_ dto: ListingDTO) -> SellerListing {
+        SellerListing(
+            id: dto.id,
+            title: dto.title,
+            priceCents: dto.priceCents,
+            currency: dto.currency,
+            category: dto.category,
+            condition: dto.condition,
+            locationLabel: dto.locationLabel,
+            description: dto.description,
+            imageURLs: dto.imageUrls,
+            status: ListingStatus(wire: dto.status),
+            saveCount: dto.saveCount,
+            viewCount: dto.viewCount ?? 0,
+            createdAt: dto.createdAt,
+            updatedAt: dto.updatedAt)
+    }
+
+    // Pure formatting helpers — `nonisolated` so value types like
+    // `SellerListing` can format a price without hopping to the main actor.
+
+    nonisolated static func formatPrice(cents: Int64?, currency: String) -> String {
         guard let cents else { return "$—" }
         let symbol = currency == "USD" ? "$" : "\(currency) "
         let whole = cents / 100
@@ -126,7 +176,7 @@ final class EconomyStore {
         return frac == 0 ? "\(symbol)\(grouped)" : "\(symbol)\(grouped).\(String(format: "%02d", frac))"
     }
 
-    private static func groupThousands(_ value: Int64) -> String {
+    nonisolated private static func groupThousands(_ value: Int64) -> String {
         let f = NumberFormatter()
         f.numberStyle = .decimal
         f.groupingSeparator = ","
@@ -135,7 +185,7 @@ final class EconomyStore {
     }
 
     /// Parses a free-text price field ("$1,200", "45", "") into integer cents.
-    static func parseCents(_ text: String) -> Int64? {
+    nonisolated static func parseCents(_ text: String) -> Int64? {
         let digits = text.filter { $0.isNumber || $0 == "." }
         guard !digits.isEmpty, let dollars = Double(digits) else { return nil }
         return Int64((dollars * 100).rounded())

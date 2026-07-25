@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -38,10 +39,17 @@ class EconomyController {
         return listings.browse(current.require(jwt).id(), category, before, limit);
     }
 
+    /** The seller's own listings — every status, newest first. Paused and sold
+     *  ones are here and nowhere else, so "Your listings" doesn't filter them. */
     @GetMapping("/v1/economy/listings/mine")
     List<ListingResponse> mine(@AuthenticationPrincipal Jwt jwt,
                                @RequestParam(defaultValue = "50") int limit) {
         return listings.mine(current.require(jwt).id(), limit);
+    }
+
+    @GetMapping("/v1/economy/listings/mine/stats")
+    SellerStatsResponse myStats(@AuthenticationPrincipal Jwt jwt) {
+        return listings.stats(current.require(jwt).id());
     }
 
     @GetMapping("/v1/economy/saved")
@@ -60,6 +68,21 @@ class EconomyController {
     ListingResponse create(@AuthenticationPrincipal Jwt jwt,
                            @Valid @RequestBody CreateListingRequest request) {
         return listings.create(current.require(jwt).id(), request);
+    }
+
+    /** Seller edits their own listing. Full replacement — the form posts every
+     *  field back, photos included. */
+    @PutMapping("/v1/economy/listings/{listingId}")
+    ListingResponse update(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID listingId,
+                           @Valid @RequestBody UpdateListingRequest request) {
+        return listings.update(current.require(jwt).id(), listingId, request);
+    }
+
+    /** Take it down, put it back, or mark it sold. */
+    @PutMapping("/v1/economy/listings/{listingId}/status")
+    ListingResponse updateStatus(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID listingId,
+                                 @Valid @RequestBody UpdateListingStatusRequest request) {
+        return listings.updateStatus(current.require(jwt).id(), listingId, request);
     }
 
     @DeleteMapping("/v1/economy/listings/{listingId}")
