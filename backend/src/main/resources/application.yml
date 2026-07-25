@@ -61,6 +61,13 @@ gojogo:
       pickup-seconds: ${DELIVERY_PICKUP_SECONDS:75}
       delivering-seconds: ${DELIVERY_DELIVERING_SECONDS:150}
       delivered-seconds: ${DELIVERY_DELIVERED_SECONDS:330}
+  # Marketplace test-data cleanup (EconomyAdminController). /v1/economy/admin/**
+  # exists only while this token is set to 16+ characters; unset — the
+  # production default — those paths 404. Set ECONOMY_ADMIN_TOKEN for the deploy
+  # that does the wipe, then unset it and deploy again.
+  economy:
+    admin:
+      token: ${ECONOMY_ADMIN_TOKEN:}
   # APNs push (activity notifications). All empty → push disabled (sender
   # no-ops). key-base64 is the base64 of the Apple .p8 token-auth key file.
   apns:

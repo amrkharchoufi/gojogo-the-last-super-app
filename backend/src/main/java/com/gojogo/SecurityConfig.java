@@ -24,6 +24,11 @@ class SecurityConfig {
                 // Native Apple sign-in runs before the client holds a Cognito
                 // token — it validates Apple's token itself and returns one.
                 .requestMatchers(HttpMethod.POST, "/v1/auth/apple").permitAll()
+                // Dev-only marketplace cleanup. Outside the JWT chain so a wipe
+                // is one curl rather than a minted user token — the endpoints
+                // guard themselves with ECONOMY_ADMIN_TOKEN and, unset (the
+                // production default), 404 whatever is presented.
+                .requestMatchers("/v1/economy/admin/**").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
         return http.build();

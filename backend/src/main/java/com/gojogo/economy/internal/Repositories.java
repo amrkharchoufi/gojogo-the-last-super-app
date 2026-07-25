@@ -42,6 +42,25 @@ interface ListingRepository extends JpaRepository<Listing, UUID> {
         + "from Listing l where l.sellerId = :sellerId group by l.status")
     List<SellerStatusTotals> sellerTotals(@Param("sellerId") UUID sellerId);
 
+    /** Dev-only cleanup inventory (see ListingAdminService) — every status,
+     *  every seller, newest first. */
+    @Query("select l from Listing l order by l.createdAt desc, l.id desc")
+    List<Listing> everyListing(Pageable page);
+
+    /** Bulk deletes for cleanup. Photos and saves reference the listing with
+     *  ON DELETE CASCADE, so the database clears them as these rows go. */
+    @Modifying(clearAutomatically = true)
+    @Query("delete from Listing l where l.id in :ids")
+    int deleteByIdIn(@Param("ids") Collection<UUID> ids);
+
+    @Modifying(clearAutomatically = true)
+    @Query("delete from Listing l where l.sellerId = :sellerId")
+    int deleteBySellerId(@Param("sellerId") UUID sellerId);
+
+    @Modifying(clearAutomatically = true)
+    @Query("delete from Listing l")
+    int deleteEveryListing();
+
     interface SellerStatusTotals {
         ListingStatus getStatus();
 

@@ -126,6 +126,13 @@ export class GojoGoFargateStack extends cdk.Stack {
         APNS_BUNDLE_ID: 'com.gojo.gojogo',
         APNS_PRODUCTION: 'true',
         MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: 'true',
+        // Dev-only marketplace cleanup (EconomyAdminController). Empty here on
+        // purpose: with no token, /v1/economy/admin/** 404s. Pass one for the
+        // deploy that does the wipe, then deploy again without the flag —
+        // defaulting to '' means a plain deploy always turns cleanup back off.
+        //   cdk deploy GojoGoFargateStack -c economyAdminToken=$(openssl rand -hex 24)
+        ECONOMY_ADMIN_TOKEN:
+          (this.node.tryGetContext('economyAdminToken') as string | undefined) ?? '',
       },
       secrets: {
         DB_PASSWORD: ecs.Secret.fromSecretsManager(props.database.secret!, 'password'),
