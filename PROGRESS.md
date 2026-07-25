@@ -9,7 +9,7 @@ These are the only open items that require you personally; everything else in Ph
 1. **APNs device test** — enable the **Push Notifications** capability on App ID `com.gojo.gojogo` (Apple Developer portal), then run the app on a **physical iPhone** to confirm a real push arrives. (Backend + key are done and verified against Apple.) Note: `APNS_PRODUCTION` is currently `true` in [app-stack.ts](infra/lib/app-stack.ts) — that's for TestFlight/App Store builds; a plain Xcode dev build mints a **sandbox** token, so use `false` for dev-device testing (redeploy `GojoGoAppStack`).
 2. **CloudFront** — the AWS account is unverified for CloudFront; only AWS Support can lift it. Until then media is public-read from S3. (Flip `ENABLE_CLOUDFRONT` in media-stack when verified.)
 3. **Real SMS OTP** — SNS SMS is in the account sandbox (only verified numbers). Get SNS SMS production access (AWS Support) + a sender id, or swap to Twilio/Vonage Verify. Then **clear `WORLD_OTP_DEV_CODE`** (currently `424242`) before launch.
-4. **CI deploy** — add `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` GitHub repo secrets (the Actions workflow is untested).
+4. ~~**CI deploy**~~ — **working as of 2026-07-25.** A push to `main` touching `backend/**` auto-deployed end to end (tests → image → task definition revision → rollout → health check), so the repo secrets are in place and the workflow is no longer untested.
 5. **Cost/scaling decisions** — RDS is publicly reachable (a NAT Gateway ~$32/mo removes that); App Runner bills ~24/7 (`aws apprunner pause-service` when idle). Your call.
 6. **Git** — nothing has been committed this session; commit when you're happy.
 7. ~~**IAM for the new deploy path**~~ — **applied 2026-07-25.** `iam:PassRole` for `ecs-tasks.amazonaws.com` is granted, so `scripts/deploy-backend.sh` (and CI) can register a task definition again. Not yet re-exercised end to end: the first deploy after this will be the proof.
@@ -564,13 +564,24 @@ VALUES ('Track title', 'Artist', 'https://…/artwork.jpg', 'https://…/audio.m
 
 `is_active = false` pulls a track from search **without** breaking the stories that already carry its snapshot. Only add music you hold the rights to distribute — nothing in this code checks that, and the app is the distributor.
 
+**Placeholder tracks are currently seeded (`V17`).** Four tracks by "GojoGo Sound" — `Night Drive`, `Casablanca Blue`, `Atlas Morning`, `Medina Late` — live in the catalog so the picker can be tested. They are **synthesised**: generated from sine/saw math with no source recording, sample pack or third-party audio anywhere in them, so there is nothing to license. Audio and cover art sit in the media bucket under `media/music/`. They sound like placeholder loops because that is what they are — replace them before anyone real sees the app:
+
+```sql
+UPDATE music.track SET is_active = false WHERE artist = 'GojoGo Sound';  -- hide
+DELETE FROM music.track WHERE artist = 'GojoGo Sound';                   -- or drop
+```
+
+Dropping them is safe: no foreign key points at a track, and any story that used one keeps its own snapshot and goes on playing.
+
 **Verified against a real backend (2026-07-25) — two-user E2E, 58/58 green.** Run on a **local Postgres 18** with all sixteen migrations applied from scratch (`V1`→`V16`, "Successfully applied 16 migrations… now at version v16") and the real Spring app booted against it, so Hibernate `ddl-auto: validate` accepted every new mapping — the `@Embedded` music snapshot, both enums, and all the V11–V14 columns. Auth used real Cognito tokens for the existing test users. Script: scratchpad `e2e_stories.sh`.
 
 **The upgrade path was tested separately, which matters more than the fresh install** — prod already holds story rows, and `V11` alters that table. A second database was taken to `V10` (the shape prod is in today), seeded with legacy image-only frames and a `story_view` with no timestamp, and then `V11`→`V16` were applied over it: legacy frames come out `media_type=IMAGE` / `audience=ALL` / no music, the legacy view gets a backfilled `viewed_at`, all four new CHECK constraints apply cleanly against the existing rows, and a legacy row is still updatable afterwards (no CHECK trap on soft delete).
 
 What it covers: the music catalog (trending order, search by artist, a pulled `is_active=false` track hidden from browse *and* rejected on attach) · frame creation for IMAGE/TEXT with per-kind 400s · **the legacy `frameImageUrls` body still mapping to an IMAGE frame**, which is what makes the rolling deploy safe · music snapshots resolved server-side (title/artist/audio URL come from the catalog, never the client) with the clip clamped to 15s *and* to a 9s track's real length · `viewerCount` present for the author and null for everyone else · seen-state not duplicating on a re-mark (the `existsById` guard) · reactions replacing rather than stacking, visible as `myReaction` only to the reactor · **reply privacy — the author reads both replies, B reads only their own** · close friends gating a restricted frame and *revoking* access when B is removed · mute flagging the ring, sorting it last, and leaving it reachable · a deleted frame leaving the ring while its highlight keeps playing (what the soft delete is for) · 403s for reading another author's viewers, deleting their frame, or highlighting it · the archive excluding deleted frames and being own-only.
 
-**Still unverified:** video frames (the `mp4/mov` presign path is the one posts already use, but the story-specific poster → stream swap and the progress-driven bar have only run locally), and the **iOS** music surfaces past the picker's first screen — the clip scrubber, the music sticker and clip playback need a catalog with real audio behind them, which is the seeding step below.
+**Deployed to prod and re-verified against it (2026-07-25).** The push to `main` auto-deployed via the Actions workflow — so the CI path works and the `iam:PassRole` grant is confirmed good. All sixteen migrations applied to prod on first boot. With the placeholder catalog seeded (below), the iOS surfaces that had never been exercised with real data were walked in the simulator **against prod**: the picker lists tracks with artwork streaming from S3, the clip scrubber drags and reports its window, the music sticker renders on the frame, and posting a story with a sound round-trips — a clip scrubbed to ~0:15 came back from `GET /v1/stories` as `startMs=15985, durationMs=15000`, with title/artist resolved server-side.
+
+**Still unverified:** video story frames. The `mp4/mov` presign path is the one posts already use, but the story-specific poster → stream swap and the progress-driven bar have only run locally — a real video story has never been posted.
 
 ## Username change — 2-month cooldown with grace (deployed + verified 2026-07-23)
 
