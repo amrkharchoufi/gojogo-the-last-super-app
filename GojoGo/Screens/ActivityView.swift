@@ -13,17 +13,22 @@ struct ActivityView: View {
         NavigationStack {
             ZStack {
                 GGColor.bg.ignoresSafeArea()
-                if app.notifications.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "heart")
-                            .font(.system(size: 34))
-                            .foregroundStyle(GGColor.textTertiary)
-                        Text("Activity on your posts shows up here.")
-                            .font(.system(size: 14))
-                            .foregroundStyle(GGColor.textSecondary)
-                    }
-                } else {
-                    ScrollView(showsIndicators: false) {
+                // The empty state lives *inside* the scroll view rather than
+                // beside it: "nothing here yet" is exactly when someone reaches
+                // for a pull-to-refresh, so it has to be pullable too.
+                ScrollView(showsIndicators: false) {
+                    if app.notifications.isEmpty {
+                        VStack(spacing: 10) {
+                            Image(systemName: "heart")
+                                .font(.system(size: 34))
+                                .foregroundStyle(GGColor.textTertiary)
+                            Text("Activity on your posts shows up here.")
+                                .font(.system(size: 14))
+                                .foregroundStyle(GGColor.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 140)
+                    } else {
                         LazyVStack(alignment: .leading, spacing: 4) {
                             if !unread.isEmpty {
                                 sectionLabel("New")
@@ -37,6 +42,7 @@ struct ActivityView: View {
                         .padding(.vertical, 12)
                     }
                 }
+                .refreshable { await app.refreshNotifications() }
             }
             .navigationTitle("Activity")
             .navigationBarTitleDisplayMode(.inline)

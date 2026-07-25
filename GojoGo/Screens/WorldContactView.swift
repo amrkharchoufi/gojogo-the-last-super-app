@@ -61,6 +61,11 @@ struct WorldContactView: View {
                 }
                 .padding(.bottom, 48)
             }
+            .refreshable {
+                guard let id = convo?.id else { return }
+                await app.reloadLiveConversation(id)
+                app.loadWorldContactProfile(for: id)
+            }
         }
         .background {
             IMColor.bg.ignoresSafeArea()

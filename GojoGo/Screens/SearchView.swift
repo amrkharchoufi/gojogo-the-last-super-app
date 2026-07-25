@@ -31,7 +31,9 @@ struct SearchView: View {
 
     private var matchedVideos: [VideoItem] {
         app.videos.filter {
-            $0.title.lowercased().contains(trimmed) || $0.channel.lowercased().contains(trimmed)
+            $0.title.lowercased().contains(trimmed)
+                || $0.channel.lowercased().contains(trimmed)
+                || $0.details.lowercased().contains(trimmed)
         }
     }
 

@@ -24,24 +24,48 @@ private struct ProfileGridItem: Identifiable {
     var views: Int = 0
 }
 
-/// Profile content tabs. Home (customizable canvas) is own-profile only.
+/// Profile content tabs. Each kind of thing this account publishes gets its own
+/// tab and its own layout — a text note, a photo, a long-form video and a short
+/// have nothing in common visually, and squeezing all four into one square grid
+/// was flattening them into thumbnails that told you nothing.
+/// Home (customizable canvas) is the landing tab; Saved is own-profile only.
 private enum ProfileTab: Hashable {
-    case home, grid, reels, saved
+    case home, posts, text, videos, shorts, saved
 
+    /// Icons reuse the vocabulary the rest of the app already uses for each
+    /// kind — `play.rectangle` is long-form in the composer and the dock,
+    /// `rectangle.stack` is the Shorts pager's own empty-state glyph.
     var icon: String {
         switch self {
-        case .home:  return "house"
-        case .grid:  return "square.grid.3x3"
-        case .reels: return "play.rectangle"
-        case .saved: return "person.crop.square"
+        case .home:   return "house"
+        case .posts:  return "square.grid.3x3"
+        case .text:   return "text.alignleft"
+        case .videos: return "play.rectangle"
+        case .shorts: return "rectangle.stack"
+        case .saved:  return "bookmark"
+        }
+    }
+
+    var emptyTitle: String {
+        switch self {
+        case .home:   return "Nothing here yet."
+        case .posts:  return "No photos or videos yet."
+        case .text:   return "No written posts yet."
+        case .videos: return "No videos yet."
+        case .shorts: return "No shorts yet."
+        case .saved:  return "Nothing saved yet."
         }
     }
 }
 
 struct ProfileView: View {
     @EnvironmentObject var app: AppState
-    @Environment(\.dismiss) private var dismiss
     @State private var tab = 0
+    /// Live offset while the back-swipe is in progress.
+    @State private var backDrag: CGFloat = 0
+    /// Measured width of the tab strip — decides whether the tabs spread to
+    /// fill or start scrolling at their natural size.
+    @State private var tabStripWidth: CGFloat = 0
 
     private var profile: ProfileUser {
         app.profileUser ?? .own(from: app.user, posts: app.myPosts.count)
@@ -51,11 +75,13 @@ struct ProfileView: View {
 
     /// Tabs available for this profile. Everyone gets a customizable Home first.
     private var tabs: [ProfileTab] {
-        isOwn ? [.home, .grid, .reels, .saved] : [.home, .grid, .reels]
+        isOwn
+            ? [.home, .posts, .text, .videos, .shorts, .saved]
+            : [.home, .posts, .text, .videos, .shorts]
     }
 
     private var selectedTab: ProfileTab {
-        tabs.indices.contains(tab) ? tabs[tab] : .grid
+        tabs.indices.contains(tab) ? tabs[tab] : .posts
     }
 
     /// Posts authored by the profile being viewed.
@@ -66,80 +92,75 @@ struct ProfileView: View {
         }
     }
 
+    /// Written posts — text with nothing attached. These are the ones a square
+    /// thumbnail served worst, so they get a readable list of their own.
+    private var textPosts: [Post] {
+        profilePosts.filter {
+            $0.carouselSlides.isEmpty
+                && !($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    /// Posts that carry a photo, a carousel or a video — the grid's contents.
+    private var mediaPosts: [Post] {
+        profilePosts.filter { !$0.carouselSlides.isEmpty }
+    }
+
+    private var profileVideos: [VideoItem] {
+        isOwn ? app.myVideos : app.videos.filter { matchesProfile($0.channel) }
+    }
+
+    private var profileShorts: [Short] {
+        isOwn ? app.myShorts : app.shorts.filter { matchesProfile($0.channel) }
+    }
+
     /// Home blocks for the profile: the live own layout, or the visited user's.
     private var homeBlocks: [ProfileHomeBlock] {
         isOwn ? app.profileHomeBlocks : app.otherProfileHome(profile.handle)
     }
 
+    /// Cells for the tabs that render as a grid. Text and long-form have their
+    /// own list layouts and never come through here.
     private var gridItems: [ProfileGridItem] {
-        let posts: [Post] = {
-            if isOwn { return app.myPosts }
-            return app.posts.filter {
-                $0.author == profile.handle || $0.author == "@\(profile.handle)"
-            }
-        }()
-
         switch selectedTab {
-        case .home:
+        case .home, .text, .videos:
             return []
-        case .grid:
-            return posts.map { post in
-                let hasImage = post.imageURL != nil || post.imageData != nil
-                    || post.mediaItems.first?.imageData != nil
-                let kind: ProfileGridKind = hasImage
-                    ? .image(url: post.imageURL, data: postThumbData(post))
-                    : .text(post.text ?? "Post")
-                return ProfileGridItem(id: "post-\(post.id)",
-                                       kind: kind,
-                                       target: .post(post.id),
-                                       isCarousel: post.isCarousel,
-                                       isVideoPost: post.isVideo)
+        case .posts:
+            // Media only — a written post is not a blank tile here any more,
+            // it lives in its own tab.
+            return mediaPosts.map { post in
+                ProfileGridItem(id: "post-\(post.id)",
+                                kind: .image(url: post.imageURL, data: postThumbData(post)),
+                                target: .post(post.id),
+                                isCarousel: post.isCarousel,
+                                isVideoPost: post.isVideo)
             }
-        case .reels:
-            if isOwn {
-                // Every video the user posted, from any surface: Shorts, long-form
-                // (Watch), and video feed posts — the last of which were missing.
-                let shorts = app.myShorts.map {
-                    ProfileGridItem(id: "short-\($0.id)",
-                                    kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil),
-                                    target: .short($0.id),
-                                    views: syntheticViews(likes: $0.likeCount, seed: $0.id.uuidString))
-                }
-                let videoPosts = app.myPosts.filter(\.isVideo).map {
-                    ProfileGridItem(id: "reelpost-\($0.id)",
-                                    kind: .video(url: $0.imageURL, data: postThumbData($0), duration: nil),
-                                    target: .post($0.id),
-                                    views: syntheticViews(likes: $0.likeCount, seed: $0.id.uuidString))
-                }
-                let longs = app.myVideos.map {
-                    ProfileGridItem(id: "vid-\($0.id)",
-                                    kind: .video(url: $0.thumbURL, data: $0.thumbData, duration: $0.duration),
-                                    target: .longForm($0.id),
-                                    views: syntheticViews(likes: $0.likes, seed: $0.id.uuidString))
-                }
-                return shorts + videoPosts + longs
-            }
-            return posts.filter(\.isVideo).map {
-                ProfileGridItem(id: "reel-\($0.id)",
-                                kind: .video(url: $0.imageURL, data: postThumbData($0), duration: nil),
-                                target: .post($0.id),
-                                views: syntheticViews(likes: $0.likeCount, seed: $0.id.uuidString))
+        case .shorts:
+            return profileShorts.map {
+                ProfileGridItem(id: "short-\($0.id)",
+                                kind: .video(url: $0.imageURL, data: $0.imageData, duration: nil),
+                                target: .short($0.id),
+                                views: $0.views)
             }
         case .saved:
-            if isOwn {
-                return app.savedPosts.prefix(12).map { post in
-                    if post.imageURL != nil || post.imageData != nil {
-                        return ProfileGridItem(id: "saved-\(post.id)",
-                                               kind: .image(url: post.imageURL, data: post.imageData),
-                                               target: .post(post.id))
-                    }
+            guard isOwn else { return [] }
+            return app.savedPosts.prefix(12).map { post in
+                if post.imageURL != nil || post.imageData != nil {
                     return ProfileGridItem(id: "saved-\(post.id)",
-                                           kind: .text(post.text ?? "Saved"),
+                                           kind: .image(url: post.imageURL, data: post.imageData),
                                            target: .post(post.id))
                 }
+                return ProfileGridItem(id: "saved-\(post.id)",
+                                       kind: .text(post.text ?? "Saved"),
+                                       target: .post(post.id))
             }
-            return []
         }
+    }
+
+    /// Handle match for the profile being viewed, tolerant of a leading "@".
+    private func matchesProfile(_ handle: String) -> Bool {
+        handle.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased()
+            == profile.handle.lowercased()
     }
 
     /// Best still to represent a post in a grid cell (poster, or first carousel slide).
@@ -147,12 +168,6 @@ struct ProfileView: View {
         post.imageData ?? post.mediaItems.first?.imageData
     }
 
-    /// Stable, realistic-looking play count for demo media (no real analytics yet).
-    private func syntheticViews(likes: Int, seed: String) -> Int {
-        var h = 5381
-        for b in seed.utf8 { h = ((h &* 33) &+ Int(b)) & 0x7fffffff }
-        return likes > 0 ? likes * 12 + (h % 4000) : (h % 60000) + 300
-    }
 
     private func open(_ target: ProfileGridTarget?) {
         guard let target else { return }
@@ -173,6 +188,23 @@ struct ProfileView: View {
                 app.watchSubFeed = .shorts
             }
         }
+    }
+
+    /// Pull-to-refresh. Your own profile re-reads the feed it's built from and
+    /// your follower/post counts; someone else's re-reads their public profile.
+    /// Highlights are refetched either way — that's the part `.task` already
+    /// owns, and the one most likely to have changed while the sheet was open.
+    private func pullRefresh() async {
+        let owner = isOwn ? nil : SocialStore.shared.profileId(forHandle: profile.handle)
+        if isOwn {
+            await app.refreshSocial()
+            await app.refreshOwnCounts()
+            app.profileUser = .own(from: app.user, posts: app.myPosts.count)
+        } else {
+            app.refreshRemoteProfile(handle: profile.handle)
+        }
+        guard isOwn || owner != nil else { return }
+        await app.refreshHighlights(for: owner)
     }
 
     var body: some View {
@@ -204,6 +236,31 @@ struct ProfileView: View {
             }
             .background(GGColor.bg.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
+            .refreshable { await pullRefresh() }
+        }
+        // Pushed page, so the system's own back-swipe isn't there — this
+        // restores it. Confined to a narrow leading strip so it can never
+        // fight the grid's vertical scroll or the highlights rail.
+        .offset(x: backDrag)
+        .overlay(alignment: .leading) {
+            Color.clear
+                .frame(width: 20)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            backDrag = max(0, value.translation.width)
+                        }
+                        .onEnded { value in
+                            let far = value.translation.width > 90
+                            let flick = value.predictedEndTranslation.width > 220
+                            if far || flick {
+                                app.closeProfile()
+                            }
+                            withAnimation(.ggSnappy) { backDrag = 0 }
+                        }
+                )
         }
         .onAppear {
             if app.profileUser == nil {
@@ -219,10 +276,24 @@ struct ProfileView: View {
             let owner = isOwn ? nil : SocialStore.shared.profileId(forHandle: profile.handle)
             guard isOwn || owner != nil else { return }
             await app.refreshHighlights(for: owner)
+            // Their uploads populate the Videos and Shorts tabs — without this
+            // those tabs would be empty for anyone you haven't watched.
+            if let channel = owner ?? SocialStore.shared.myProfileId {
+                await app.refreshChannelVideos(of: channel)
+            }
         }
+        .videoDeletionConfirmations()
         // These open from inside this sheet, so they must present from here.
         .sheet(isPresented: $app.showEditProfile) {
             EditProfileSheet().environmentObject(app)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.editingVideoID != nil },
+            set: { if !$0 { app.closeVideoDetails() } }
+        )) {
+            if let id = app.editingVideoID {
+                VideoDetailsSheet(target: .published(id)).environmentObject(app)
+            }
         }
         // "New highlight" opens from this sheet, so it presents from here.
         .sheet(isPresented: $app.showStoryArchive) {
@@ -268,30 +339,19 @@ struct ProfileView: View {
 
     private var headerRow: some View {
         HStack(spacing: 14) {
-            if isOwn {
-                Button {
-                    app.closeProfile()
-                    app.activeTab = .home
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        app.openComposer()
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
-                        .frame(width: 36, height: 36)
-                }
-            } else {
-                Button {
-                    app.closeProfile()
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
-                        .frame(width: 36, height: 36)
-                }
+            // A page needs a way back on *both* profiles — your own used to rely
+            // on swiping the drawer down, which no longer exists. Composing
+            // moved into the menu on the right rather than crowding this side.
+            Button {
+                app.closeProfile()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
             Spacer(minLength: 0)
 
@@ -314,6 +374,15 @@ struct ProfileView: View {
 
             Menu {
                 if isOwn {
+                    Button {
+                        app.closeProfile()
+                        app.activeTab = .home
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            app.openComposer()
+                        }
+                    } label: {
+                        Label("New post", systemImage: "plus.square")
+                    }
                     Button {
                         app.showEditProfile = true
                     } label: {
@@ -353,7 +422,6 @@ struct ProfileView: View {
                     Divider()
                     Button(role: .destructive) {
                         app.closeProfile()
-                        dismiss()
                     } label: {
                         Label("Report", systemImage: "flag")
                     }
@@ -585,48 +653,292 @@ struct ProfileView: View {
 
     // MARK: Tabs
 
+    /// Smallest a tab may ever get. Six tabs at this width overflow a phone, and
+    /// that is the point: they keep their full tap target and the row scrolls
+    /// instead of shrinking icons into an unreadable strip.
+    private static let minTabWidth: CGFloat = 62
+
+    /// One row that behaves two ways from a single layout, no branching: the
+    /// strip is always horizontally scrollable, but its content is pinned to at
+    /// least the container's width, so while the tabs fit they spread evenly
+    /// edge to edge exactly as before — and only once they can't do they start
+    /// scrolling at full size. The selected tab is always scrolled into view,
+    /// and a fade on each edge shows there is more when there is.
     private var iconTabs: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                ForEach(Array(tabs.enumerated()), id: \.offset) { i, item in
-                    Button {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        withAnimation(.easeOut(duration: 0.2)) { tab = i }
-                    } label: {
-                        VStack(spacing: 10) {
-                            Image(systemName: item.icon)
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(i == tab ? GGColor.textPrimary : GGColor.textTertiary)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 44)
-                            Rectangle()
-                                .fill(i == tab ? GGColor.textPrimary : Color.clear)
-                                .frame(height: 1.5)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        ForEach(Array(tabs.enumerated()), id: \.offset) { i, item in
+                            tabButton(item, index: i)
+                                .id(i)
                         }
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .frame(minWidth: tabStripWidth, alignment: .leading)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .mask(tabEdgeFade)
+                .onChange(of: tab) { _, newValue in
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(newValue, anchor: .center)
+                    }
+                }
+            }
+            .background {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { tabStripWidth = geo.size.width }
+                        .onChange(of: geo.size.width) { _, width in tabStripWidth = width }
                 }
             }
             Rectangle().fill(GGColor.ink(0.12)).frame(height: 0.5)
         }
     }
 
+    private func tabButton(_ item: ProfileTab, index: Int) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            withAnimation(.easeOut(duration: 0.2)) { tab = index }
+        } label: {
+            VStack(spacing: 10) {
+                Image(systemName: item.icon)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(index == tab ? GGColor.textPrimary : GGColor.textTertiary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                Rectangle()
+                    .fill(index == tab ? GGColor.textPrimary : Color.clear)
+                    .frame(height: 1.5)
+            }
+            .frame(minWidth: Self.minTabWidth, maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Only fades when the row actually overflows — a fade over tabs that fit
+    /// would dim the first and last for no reason.
+    private var tabEdgeFade: some View {
+        let overflows = CGFloat(tabs.count) * Self.minTabWidth > tabStripWidth
+        return LinearGradient(
+            stops: overflows
+                ? [.init(color: .clear, location: 0),
+                   .init(color: .black, location: 0.045),
+                   .init(color: .black, location: 0.955),
+                   .init(color: .clear, location: 1)]
+                : [.init(color: .black, location: 0), .init(color: .black, location: 1)],
+            startPoint: .leading, endPoint: .trailing
+        )
+    }
+
     // MARK: Grid
 
+    @ViewBuilder
     private var contentGrid: some View {
-        Group {
-            if gridItems.isEmpty {
-                Text("No posts yet.")
-                    .font(.system(size: 14))
-                    .foregroundStyle(GGColor.textTertiary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 56)
-            } else if selectedTab == .reels {
-                reelsGrid
-            } else {
-                postsGrid
+        switch selectedTab {
+        case .text:
+            if textPosts.isEmpty { emptyTab } else { textList }
+        case .videos:
+            if profileVideos.isEmpty { emptyTab } else { videoList }
+        case .shorts:
+            if gridItems.isEmpty { emptyTab } else { reelsGrid }
+        default:
+            if gridItems.isEmpty { emptyTab } else { postsGrid }
+        }
+    }
+
+    private var emptyTab: some View {
+        Text(selectedTab.emptyTitle)
+            .font(.system(size: 14))
+            .foregroundStyle(GGColor.textTertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 56)
+    }
+
+    // MARK: Written posts
+
+    /// A readable feed of text-only posts. No repost control: this app has no
+    /// reposting, and an icon for an action that doesn't exist is worse than
+    /// no icon at all.
+    private var textList: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(textPosts) { post in
+                textRow(post)
+                Rectangle()
+                    .fill(GGColor.ink(0.10))
+                    .frame(height: 0.5)
+                    .padding(.leading, 62)
+            }
+        }
+    }
+
+    private func textRow(_ post: Post) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            UserAvatar(size: 36,
+                       gradient: profile.avatarGradient,
+                       letter: String(profile.name.prefix(1)).uppercased(),
+                       imageURL: profile.avatarURL)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(profile.handle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Text(post.meta)
+                        .font(.system(size: 13))
+                        .foregroundStyle(GGColor.textTertiary)
+                    Spacer(minLength: 0)
+                }
+
+                Text(post.text ?? "")
+                    .font(.system(size: 15))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 20) {
+                    textAction(post.liked ? "heart.fill" : "heart",
+                               tint: post.liked ? GGColor.red : GGColor.textSecondary,
+                               count: post.likeCount) {
+                        withAnimation(.easeOut(duration: 0.18)) { app.toggleLike(post.id) }
+                    }
+                    textAction("bubble.right", tint: GGColor.textSecondary,
+                               count: app.commentsByPost[post.id]?.count ?? post.commentCount) {
+                        app.openComments(for: post.id)
+                    }
+                    ShareLink(item: app.postShareURL(for: post.id)) {
+                        Image(systemName: "paperplane")
+                            .font(.system(size: 15))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
+        .onTapGesture { app.openPostViewer(post.id) }
+        .contextMenu {
+            Button { app.openPostViewer(post.id) } label: {
+                Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
+            }
+            ShareLink(item: app.postShareURL(for: post.id)) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            if app.isMyPost(post.id) {
+                Divider()
+                Button(role: .destructive) {
+                    app.requestDeletePost(post.id)
+                } label: {
+                    Label("Delete post", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    private func textAction(_ icon: String, tint: Color, count: Int,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 15))
+                    .foregroundStyle(tint)
+                if count > 0 {
+                    Text(formatCount(count))
+                        .font(.system(size: 13))
+                        .foregroundStyle(GGColor.textSecondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Long-form videos
+
+    /// The Watch row, on the profile: a wide thumbnail with its duration, the
+    /// title, and what it actually earned — views and age.
+    private var videoList: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(profileVideos) { video in
+                videoRow(video)
+            }
+        }
+    }
+
+    private func videoRow(_ video: VideoItem) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
+                MediaImage(url: video.thumbURL, data: video.thumbData, cornerRadius: 10)
+                    .frame(width: 150, height: 84)
+                    .clipped()
+                    .background(GGColor.ink(0.08))
+                Text(video.duration)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.black.opacity(0.82)))
+                    .padding(5)
+            }
+            .frame(width: 150, height: 84)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(video.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(video.meta)
+                    .font(.system(size: 13))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 2)
+
+            Menu {
+                videoRowMenu(video)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .frame(width: 28, height: 32)
+                    .contentShape(Rectangle())
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture { open(.longForm(video.id)) }
+        .contextMenu { videoRowMenu(video) }
+    }
+
+    @ViewBuilder
+    private func videoRowMenu(_ video: VideoItem) -> some View {
+        Button { open(.longForm(video.id)) } label: {
+            Label("Play", systemImage: "play.fill")
+        }
+        ShareLink(item: app.videoShareURL(for: video.id), subject: Text(video.title)) {
+            Label("Share", systemImage: "square.and.arrow.up")
+        }
+        if app.canDeleteVideo(video.id) {
+            Divider()
+            Button { app.editVideoDetails(video.id) } label: {
+                Label("Edit details", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                app.requestDeleteVideo(video.id)
+            } label: {
+                Label("Delete video", systemImage: "trash")
             }
         }
     }
@@ -635,7 +947,10 @@ struct ProfileView: View {
         Array(repeating: GridItem(.flexible(), spacing: 1.5), count: 3)
     }
 
-    /// Square photo grid with carousel / video corner badges.
+    /// Square media grid. The corner badge is the only thing telling the three
+    /// kinds apart at thumbnail size: stacked squares for a carousel, a play
+    /// rectangle for a video — and deliberately nothing at all for a single
+    /// photo, so the badge always means "there is more here than one image".
     private var postsGrid: some View {
         LazyVGrid(columns: gridColumns, spacing: 1.5) {
             ForEach(gridItems) { item in
@@ -646,16 +961,18 @@ struct ProfileView: View {
                         if item.isCarousel {
                             cornerBadge("square.on.square.fill")
                         } else if item.isVideoPost {
-                            cornerBadge("play.fill")
+                            cornerBadge("play.rectangle.fill")
                         }
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { open(item.target) }
+                    .contextMenu { gridMenu(for: item) }
             }
         }
     }
 
-    /// Portrait reels grid with a play-count overlay.
+    /// Portrait reels grid. The play count is what we actually counted, so a
+    /// video nobody has opened shows nothing rather than an invented number.
     private var reelsGrid: some View {
         LazyVGrid(columns: gridColumns, spacing: 1.5) {
             ForEach(gridItems) { item in
@@ -669,19 +986,71 @@ struct ProfileView: View {
                     }
                     .overlay(alignment: .bottomLeading) {
                         HStack(spacing: 4) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 11, weight: .bold))
-                            Text(formatCount(item.views))
-                                .font(.system(size: 13, weight: .semibold))
+                            if item.views > 0 {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 11, weight: .bold))
+                                Text(formatCount(item.views))
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            if case .video(_, _, let duration) = item.kind, let duration {
+                                Spacer(minLength: 4)
+                                Text(duration)
+                                    .font(.ggMono(11, .semibold))
+                            }
                         }
                         .foregroundStyle(.white)
                         .padding(8)
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { open(item.target) }
+                    .contextMenu { gridMenu(for: item) }
             }
         }
     }
+
+    /// Owner-only management on a grid cell. Deleting is the whole point here —
+    /// there was no way to remove a short or a long-form video from anywhere.
+    @ViewBuilder
+    private func gridMenu(for item: ProfileGridItem) -> some View {
+        if isOwn, let target = item.target {
+            switch target {
+            case .longForm(let id):
+                Button { open(target) } label: { Label("Play", systemImage: "play.fill") }
+                Button {
+                    app.editVideoDetails(id)
+                } label: {
+                    Label("Edit details", systemImage: "pencil")
+                }
+                Divider()
+                Button(role: .destructive) {
+                    app.requestDeleteVideo(id)
+                } label: {
+                    Label("Delete video", systemImage: "trash")
+                }
+            case .short(let id):
+                Button { open(target) } label: { Label("Play", systemImage: "play.fill") }
+                Divider()
+                Button(role: .destructive) {
+                    app.requestDeleteShort(id)
+                } label: {
+                    Label("Delete short", systemImage: "trash")
+                }
+            case .post(let id):
+                Button { open(target) } label: {
+                    Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
+                if app.isMyPost(id) {
+                    Divider()
+                    Button(role: .destructive) {
+                        app.requestDeletePost(id)
+                    } label: {
+                        Label("Delete post", systemImage: "trash")
+                    }
+                }
+            }
+        }
+    }
+
 
     private func cornerBadge(_ icon: String) -> some View {
         Image(systemName: icon)

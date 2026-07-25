@@ -24,6 +24,7 @@ struct LongFormFeedView: View {
                         ForEach(app.videos) { video in
                             VideoCard(video: video)
                                 .padding(.bottom, 18)
+                                .onAppear { app.loadMoreWatchIfNeeded(after: video.id) }
                         }
                     }
                     Color.clear.frame(height: tabBarInset)
@@ -36,6 +37,7 @@ struct LongFormFeedView: View {
             .environment(\.defaultMinListRowHeight, 0)
             .scrollContentBackground(.hidden)
             .scrollIndicators(.hidden)
+            .refreshable { await app.refreshWatch() }
             .trackScrollChrome(hidden: $hideChrome)
 
             HStack {
@@ -57,6 +59,7 @@ struct LongFormFeedView: View {
             .zIndex(20)
             .autoHideChrome(hideChrome)
         }
+        .videoDeletionConfirmations(enabled: !app.showWatching && !app.showProfile)
     }
 }
 
@@ -100,6 +103,12 @@ struct VideoCard: View {
         UIScreen.main.bounds.width * 9 / 16
     }
 
+    /// The channel's own avatar. The thumbnail used to be passed here, which
+    /// made every row's avatar a still from its own video.
+    private var avatarURL: String? {
+        app.authorAvatarURL(forChannel: live.channel, stored: live.authorAvatarURL)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -126,12 +135,14 @@ struct VideoCard: View {
 
             HStack(alignment: .top, spacing: 12) {
                 Button {
-                    app.openUserProfile(handle: live.channel, avatarURL: live.thumbURL)
+                    app.openUserProfile(handle: live.channel, avatarURL: avatarURL)
                 } label: {
                     UserAvatar(
                         size: 36,
+                        gradient: app.avatarGradient(forHandle: live.channel),
                         letter: String(live.channel.prefix(1)).uppercased(),
-                        imageURL: live.thumbURL
+                        imageURL: avatarURL,
+                        imageData: live.authorAvatarData
                     )
                     .padding(.top, 2)
                 }
@@ -199,12 +210,25 @@ struct VideoCard: View {
             Label("Share", systemImage: "square.and.arrow.up")
         }
         Divider()
-        Button(role: .destructive) {
-            withAnimation(.ggTab) {
-                app.reportVideo(live.id)
+        if app.canDeleteVideo(live.id) {
+            Button {
+                app.editVideoDetails(live.id)
+            } label: {
+                Label("Edit details", systemImage: "pencil")
             }
-        } label: {
-            Label("Not interested", systemImage: "eye.slash")
+            Button(role: .destructive) {
+                app.requestDeleteVideo(live.id)
+            } label: {
+                Label("Delete video", systemImage: "trash")
+            }
+        } else {
+            Button(role: .destructive) {
+                withAnimation(.ggTab) {
+                    app.reportVideo(live.id)
+                }
+            } label: {
+                Label("Not interested", systemImage: "eye.slash")
+            }
         }
     }
 }

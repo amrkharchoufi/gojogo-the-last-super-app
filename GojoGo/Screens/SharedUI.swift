@@ -450,3 +450,83 @@ enum ScrollChromeControl {
         FeedViewportGate.shared.suppress(for: 0.5)
     }
 }
+
+// MARK: - Video deletion confirmations
+
+/// Confirmation dialogs for deleting your own short / long-form video.
+///
+/// The request is raised from a row's context menu or a player's overflow
+/// menu, but the dialog has to be presented by the *screen root* — SwiftUI
+/// will not present one from inside a `List` row or from a menu that is still
+/// dismissing. `AppState` holds the pending id so the two can be separated.
+struct VideoDeletionConfirmations: ViewModifier {
+    @EnvironmentObject var app: AppState
+    /// Only the screen currently on top may own the dialog. Two live views
+    /// bound to the same flag both try to present, and SwiftUI resolves that
+    /// by tearing down whichever cover is in the way.
+    var enabled: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                "Delete “\(app.videos.first(where: { $0.id == app.pendingVideoDelete })?.title ?? "this video")”?",
+                isPresented: Binding(
+                    get: { enabled && app.pendingVideoDelete != nil },
+                    set: { if !$0 { app.pendingVideoDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    guard let id = app.pendingVideoDelete else { return }
+                    app.pendingVideoDelete = nil
+                    withAnimation(.ggTab) { app.deleteVideo(id) }
+                }
+                Button("Cancel", role: .cancel) { app.pendingVideoDelete = nil }
+            } message: {
+                Text("This removes the video and its file from your device. It can't be undone.")
+            }
+            .confirmationDialog(
+                "Delete this short?",
+                isPresented: Binding(
+                    get: { enabled && app.pendingShortDelete != nil },
+                    set: { if !$0 { app.pendingShortDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    guard let id = app.pendingShortDelete else { return }
+                    app.pendingShortDelete = nil
+                    withAnimation(.ggTab) { app.deleteShort(id) }
+                }
+                Button("Cancel", role: .cancel) { app.pendingShortDelete = nil }
+            } message: {
+                Text("This removes the clip and its video file from your device. It can't be undone.")
+            }
+            .confirmationDialog(
+                "Delete this post?",
+                isPresented: Binding(
+                    get: { enabled && app.pendingPostDelete != nil },
+                    set: { if !$0 { app.pendingPostDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    guard let id = app.pendingPostDelete else { return }
+                    app.pendingPostDelete = nil
+                    withAnimation(.ggTab) { app.deleteMyPost(id) }
+                }
+                Button("Cancel", role: .cancel) { app.pendingPostDelete = nil }
+            } message: {
+                Text("This removes the post for everyone. It can't be undone.")
+            }
+    }
+}
+
+extension View {
+    /// Attach at a screen root so owner-only delete actions can confirm.
+    /// Pass `enabled: false` when this screen is covered by another that also
+    /// attaches it — exactly one live view may own the dialog.
+    func videoDeletionConfirmations(enabled: Bool = true) -> some View {
+        modifier(VideoDeletionConfirmations(enabled: enabled))
+    }
+}

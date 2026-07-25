@@ -188,6 +188,27 @@ extension AppState {
         }
     }
 
+    /// Pull-to-refresh on a restaurant page. Deliberately unconditional, unlike
+    /// `loadDeliveryMenuIfNeeded` — an already-loaded menu is exactly what the
+    /// user is asking to re-read (a dish sold out, a price moved).
+    func reloadDeliveryMenu(_ merchantID: UUID) async {
+        guard backendConnected, DeliveryStore.shared.isRemote(merchantID) else { return }
+        do {
+            let full = try await DeliveryStore.shared.merchant(merchantID)
+            if let index = deliveryRestaurants.firstIndex(where: { $0.id == merchantID }) {
+                // Menu only: the browse record carries fields the detail fetch
+                // doesn't, and replacing it wholesale would drop them.
+                deliveryRestaurants[index].menu = full.menu
+            } else {
+                deliveryRestaurants.append(full)
+            }
+        } catch {
+            #if DEBUG
+            print("Delivery menu reload failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
     // MARK: Order history
 
     func refreshDeliveryHistory() async {

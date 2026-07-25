@@ -222,8 +222,28 @@ final class AppState: ObservableObject {
     @Published var subscribedChannels: Set<String> = []
     @Published var dislikedVideoIDs: Set<UUID> = []
     @Published var downloadedVideoIDs: Set<UUID> = []
+    /// Non-nil while the long-form details editor is up (a published video id).
+    @Published var editingVideoID: UUID? = nil
+    /// Deletions awaiting confirmation. These live here rather than in the row
+    /// that asked, because a dialog raised from inside a `List` row or a
+    /// dismissing context menu never presents — the screen root owns it.
+    @Published var pendingVideoDelete: UUID? = nil
+    @Published var pendingShortDelete: UUID? = nil
+    @Published var pendingPostDelete: UUID? = nil
+    /// Non-nil while the pre-publish details editor is up (a compose attachment id).
+    @Published var editingLongFormAttachmentID: UUID? = nil
+    /// Ids counted this run, so re-rendering a card can't inflate a view count.
+    private var countedViewIDs: Set<UUID> = []
+    // Keyset cursors + in-flight flags for the two Watch feeds.
+    @Published var watchNextBefore: String? = nil
+    @Published var shortsNextBefore: String? = nil
+    @Published var watchLoadingMore: Bool = false
+    @Published var shortsLoadingMore: Bool = false
     /// Profiles the user turned notifications on for.
     @Published var notifyHandles: Set<String> = []
+    /// Follower counts learned from real profile fetches, keyed by lowercased
+    /// handle. Used for the "subscribers" line — absent means we show nothing.
+    @Published var followerCountByHandle: [String: Int] = [:]
 
     // Profile editing + post viewer (profile grid)
     @Published var showEditProfile: Bool = false
@@ -492,6 +512,14 @@ final class AppState: ObservableObject {
         for s in SampleData.stories where !storyKeys.contains(s.name) {
             stories.append(s)
         }
+    }
+
+    /// Repairs stale media refs in a restored session. The live Watch fetch is
+    /// `refreshWatch()` in AppState+Watch.swift.
+    func repairCachedMedia() {
+        topUpSeedContent()
+        refreshSampleMediaFromSeed()
+        schedulePersist()
     }
 
     /// Strip leftover remote placeholder media from older caches.
@@ -1433,29 +1461,205 @@ final class AppState: ObservableObject {
 
     // MARK: Channel subscriptions
 
+    func isOwnChannel(_ channel: String) -> Bool {
+        let key = channel.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased()
+        return !key.isEmpty && key == user.handle.lowercased()
+    }
+
     func isSubscribed(_ channel: String) -> Bool {
         subscribedChannels.contains(channel.lowercased())
     }
 
+    /// Subscribing to a channel *is* following its profile — one relationship,
+    /// one number. Mirrors onto the feed and the backend the same way the
+    /// profile Follow button does.
     func toggleSubscribe(_ channel: String) {
-        let key = channel.lowercased()
-        if subscribedChannels.contains(key) {
-            subscribedChannels.remove(key)
-            user.followingCount = max(0, user.followingCount - 1)
-        } else {
+        let handle = channel.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        let key = handle.lowercased()
+        guard !isOwnChannel(handle) else { return }
+        let subscribing = !subscribedChannels.contains(key)
+        if subscribing {
             subscribedChannels.insert(key)
             user.followingCount += 1
+        } else {
+            subscribedChannels.remove(key)
+            user.followingCount = max(0, user.followingCount - 1)
         }
+        followerCountByHandle[key] = max(0, (followerCountByHandle[key] ?? 0) + (subscribing ? 1 : -1))
+        for i in posts.indices where posts[i].author == handle || posts[i].author == "@\(handle)" {
+            posts[i].following = subscribing
+            posts[i].showFollow = !subscribing
+        }
+        for i in shorts.indices where shorts[i].channel.lowercased() == key {
+            shorts[i].following = subscribing
+        }
+        if var p = profileUser, p.handle.lowercased() == key {
+            p.following = subscribing
+            p.followerCount = max(0, p.followerCount + (subscribing ? 1 : -1))
+            profileUser = p
+        }
+        syncProfileFollow(handle: handle, following: subscribing)
         schedulePersist()
     }
 
-    /// Stable pseudo subscriber count per channel (prototype — no backend).
-    func subscriberLabel(for channel: String) -> String {
-        var hash = 0
-        for u in channel.lowercased().unicodeScalars { hash = (hash &* 31 &+ Int(u.value)) }
-        let base = 12_000 + abs(hash) % 2_400_000
-        let total = base + (isSubscribed(channel) ? 1 : 0)
-        return "\(formatCount(total)) subscribers"
+    /// Subscribers *are* followers. Your own channel reads the live follower
+    /// count; another channel reads whatever their profile last reported. When
+    /// nothing real is known the caller gets nil and shows no number at all
+    /// rather than an invented one.
+    func subscriberLabel(for channel: String) -> String? {
+        guard let count = followerCount(forChannel: channel) else { return nil }
+        return count == 1 ? "1 subscriber" : "\(formatCount(count)) subscribers"
+    }
+
+    func followerCount(forChannel channel: String) -> Int? {
+        if isOwnChannel(channel) { return user.followerCount }
+        let key = channel.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased()
+        if let p = profileUser, p.handle.lowercased() == key, !p.isOwn { return p.followerCount }
+        return followerCountByHandle[key]
+    }
+
+    // MARK: Video / short views
+
+    /// Counts this viewer. Deduped per run so re-mounting a card can't move the
+    /// optimistic number; the server dedupes permanently, one row per viewer,
+    /// and the next fetch replaces the optimistic count with that truth.
+    func registerVideoView(_ id: UUID) {
+        guard !countedViewIDs.contains(id),
+              let i = videos.firstIndex(where: { $0.id == id }) else { return }
+        countedViewIDs.insert(id)
+        videos[i].views += 1
+        syncVideoView(id)
+        schedulePersist()
+    }
+
+    func registerShortView(_ id: UUID) {
+        guard !countedViewIDs.contains(id),
+              let i = shorts.firstIndex(where: { $0.id == id }) else { return }
+        countedViewIDs.insert(id)
+        shorts[i].views += 1
+        syncVideoView(id)
+        schedulePersist()
+    }
+
+    // MARK: Deleting your own videos
+
+    /// Ask for confirmation. Deferred a beat so the menu that triggered it is
+    /// gone before the dialog tries to present.
+    func requestDeleteVideo(_ id: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.pendingVideoDelete = id
+        }
+    }
+
+    func requestDeleteShort(_ id: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.pendingShortDelete = id
+        }
+    }
+
+    func requestDeletePost(_ id: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.pendingPostDelete = id
+        }
+    }
+
+    func canDeleteVideo(_ id: UUID) -> Bool {
+        videos.first(where: { $0.id == id }).map { isOwnChannel($0.channel) } ?? false
+    }
+
+    func canDeleteShort(_ id: UUID) -> Bool {
+        shorts.first(where: { $0.id == id }).map { isOwnChannel($0.channel) } ?? false
+    }
+
+    /// Removes a long-form video and everything derived from it: the local
+    /// movie file, its comments, and any download / dislike state.
+    func deleteVideo(_ id: UUID) {
+        guard let video = videos.first(where: { $0.id == id }) else { return }
+        if watchingVideoID == id { closeWatching() }
+        if commentingPostID == id { closeComments() }
+        if isOwnChannel(video.channel), !isVideoURLShared(video.videoURL, excluding: id) {
+            VideoLibrary.remove(video.videoURL)
+        }
+        syncVideoDelete(id)
+        videos.removeAll { $0.id == id }
+        dislikedVideoIDs.remove(id)
+        downloadedVideoIDs.remove(id)
+        commentsByPost[id] = nil
+        countedViewIDs.remove(id)
+        editingVideoID = nil
+        schedulePersist()
+    }
+
+    func deleteShort(_ id: UUID) {
+        guard let short = shorts.first(where: { $0.id == id }) else { return }
+        if commentingPostID == id { closeComments() }
+        if focusedShortID == id { focusedShortID = nil }
+        if isOwnChannel(short.channel), !isVideoURLShared(short.videoURL, excluding: id) {
+            VideoLibrary.remove(short.videoURL)
+        }
+        syncVideoDelete(id)
+        shorts.removeAll { $0.id == id }
+        commentsByPost[id] = nil
+        countedViewIDs.remove(id)
+        schedulePersist()
+    }
+
+    /// A feed post opened in Shorts shares its movie file with the post — don't
+    /// delete the file out from under whatever else still points at it.
+    private func isVideoURLShared(_ url: String?, excluding id: UUID) -> Bool {
+        guard let url, !url.isEmpty else { return false }
+        if posts.contains(where: { $0.videoURL == url
+            || $0.mediaItems.contains(where: { $0.videoURL == url }) }) { return true }
+        if videos.contains(where: { $0.id != id && $0.videoURL == url }) { return true }
+        if shorts.contains(where: { $0.id != id && $0.videoURL == url }) { return true }
+        return false
+    }
+
+    // MARK: Long-form details
+
+    /// Applies the details sheet to a published video.
+    func updateVideoDetails(_ id: UUID, title: String, details: String, thumbData: Data?) {
+        guard let i = videos.firstIndex(where: { $0.id == id }) else { return }
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        videos[i].title = cleanTitle.isEmpty ? videos[i].title : cleanTitle
+        videos[i].details = details.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let thumbData {
+            videos[i].thumbData = thumbData
+            videos[i].thumbURL = nil
+        }
+        syncVideoDetails(id, title: videos[i].title, details: videos[i].details, thumbData: thumbData)
+        schedulePersist()
+    }
+
+    // MARK: Author identity on videos
+
+    /// The avatar to show next to a handle. Never the media's own poster —
+    /// falls back to the letter-and-gradient avatar when we know of no picture.
+    func avatarURL(forHandle handle: String) -> String? {
+        if isOwnChannel(handle) { return user.avatarURL }
+        let key = handle.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased()
+        if let p = profileUser, p.handle.lowercased() == key, let url = p.avatarURL { return url }
+        if let post = posts.first(where: {
+            $0.author.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased() == key
+        }), let url = post.avatarURL { return url }
+        return nil
+    }
+
+    /// Avatar for a video or short: your own always tracks the live profile
+    /// picture (so changing it updates everything you posted), anyone else's
+    /// uses what was stored with the item and falls back to a lookup.
+    func authorAvatarURL(forChannel channel: String, stored: String?) -> String? {
+        if isOwnChannel(channel) { return user.avatarURL ?? stored }
+        return stored ?? avatarURL(forHandle: channel)
+    }
+
+    func avatarGradient(forHandle handle: String) -> [Color] {
+        if isOwnChannel(handle) { return user.avatarGradient }
+        let key = handle.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased()
+        if let post = posts.first(where: {
+            $0.author.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased() == key
+        }) { return post.avatarGradient }
+        return SocialStore.gradient(for: key)
     }
 
     // MARK: Video reactions
@@ -1644,6 +1848,7 @@ final class AppState: ObservableObject {
         AuthSession.shared.clear()
         SocialStore.shared.reset()
         StoriesStore.shared.reset()
+        WatchStore.shared.reset()
         MusicStore.shared.reset()
         ProfileStore.shared.reset()
         EconomyStore.shared.reset()
@@ -1848,20 +2053,58 @@ final class AppState: ObservableObject {
         schedulePersist()
     }
 
+    /// Removes a post from *this* device's feed. Someone else's post is only
+    /// ever hidden — deleting it is `deleteMyPost`, and the server enforces the
+    /// same rule.
     func hidePost(_ id: UUID) {
         posts.removeAll { $0.id == id }
         savedPostIDs.remove(id)
         schedulePersist()
     }
 
+    func isMyPost(_ id: UUID) -> Bool {
+        guard let post = posts.first(where: { $0.id == id }) else { return false }
+        return isOwnChannel(post.author)
+    }
+
+    /// Deletes your own post for everyone. The optimistic removal is reverted
+    /// if the server refuses, so the feed never shows a post that still exists.
+    func deleteMyPost(_ id: UUID) {
+        guard let index = posts.firstIndex(where: { $0.id == id }),
+              isOwnChannel(posts[index].author) else { return }
+        let removed = posts[index]
+        posts.remove(at: index)
+        savedPostIDs.remove(id)
+        commentsByPost[id] = nil
+        if viewingPostID == id { closePostViewer() }
+        if commentingPostID == id { closeComments() }
+        user.postCount = max(0, user.postCount - 1)
+        if profileUser?.isOwn == true {
+            profileUser?.postCount = max(0, (profileUser?.postCount ?? 1) - 1)
+        }
+        schedulePersist()
+        syncDeletePost(id, restoring: removed, at: index)
+    }
+
     func postShareURL(for id: UUID) -> URL {
         URL(string: "https://gojogo.app/p/\(id.uuidString.lowercased())")!
+    }
+
+    /// True when this id addresses a video/short rather than a feed post — the
+    /// two live in different modules, so every comment call has to pick one.
+    func isVideoThread(_ id: UUID) -> Bool {
+        WatchStore.shared.isLive(id)
+            || videos.contains(where: { $0.id == id })
+            || shorts.contains(where: { $0.id == id })
     }
 
     func openComments(for postID: UUID) {
         commentingPostID = postID
         draftComment = ""
-        if SocialStore.shared.remotePostIds.contains(postID) {
+        if isVideoThread(postID) {
+            if commentsByPost[postID] == nil { commentsByPost[postID] = [] }
+            if WatchStore.shared.isLive(postID) { refreshVideoComments(for: postID) }
+        } else if SocialStore.shared.remotePostIds.contains(postID) {
             if commentsByPost[postID] == nil { commentsByPost[postID] = [] }
             refreshComments(for: postID)
         } else if commentsByPost[postID] == nil {
@@ -1886,8 +2129,15 @@ final class AppState: ObservableObject {
         if let i = posts.firstIndex(where: { $0.id == id }) {
             posts[i].commentCount = list.count
         }
+        if let i = videos.firstIndex(where: { $0.id == id }) {
+            videos[i].commentCount = list.count
+        }
         draftComment = ""
-        syncNewComment(text: text, postID: id, optimisticID: comment.id)
+        if isVideoThread(id) {
+            syncNewVideoComment(text: text, videoID: id, optimisticID: comment.id)
+        } else {
+            syncNewComment(text: text, postID: id, optimisticID: comment.id)
+        }
         schedulePersist()
     }
 
@@ -1897,7 +2147,11 @@ final class AppState: ObservableObject {
         list[i].liked.toggle()
         list[i].likeCount += list[i].liked ? 1 : -1
         commentsByPost[postID] = list
-        syncCommentLike(commentID: commentID, liked: list[i].liked)
+        if isVideoThread(postID) {
+            syncVideoCommentLike(commentID: commentID, liked: list[i].liked)
+        } else {
+            syncCommentLike(commentID: commentID, liked: list[i].liked)
+        }
         schedulePersist()
     }
 
@@ -1907,6 +2161,23 @@ final class AppState: ObservableObject {
         watchingDraft = ""
         watchingChat = SampleData.watchingChat
         showWatching = true
+        registerVideoView(id)
+    }
+
+    /// Opens the long-form details editor for a published video you own.
+    func editVideoDetails(_ id: UUID) {
+        guard canDeleteVideo(id) else { return }
+        editingVideoID = id
+    }
+
+    func closeVideoDetails() {
+        editingVideoID = nil
+        editingLongFormAttachmentID = nil
+    }
+
+    var editingLongFormAttachment: ComposeAttachment? {
+        guard let id = editingLongFormAttachmentID else { return nil }
+        return composeAttachments.first(where: { $0.id == id })
     }
 
     /// Opens a feed video (single or carousel slide) in Shorts.
@@ -1934,13 +2205,16 @@ final class AppState: ObservableObject {
         } else {
             let short = Short(
                 channel: post.author,
-                subscribers: "from feed · just now",
-                caption: post.text ?? post.author,
+                caption: post.text ?? "",
                 gradient: post.avatarGradient,
                 imageURL: posterURL,
                 imageData: posterData,
                 videoURL: url,
-                likeCount: post.likeCount
+                authorAvatarURL: post.avatarURL,
+                liked: post.liked,
+                following: post.following,
+                likeCount: post.likeCount,
+                publishedAt: Date()
             )
             shorts.insert(short, at: 0)
             focusedShortID = short.id
@@ -2165,33 +2439,46 @@ final class AppState: ObservableObject {
         }
 
         for att in shorts {
-            withAnimation {
-                self.shorts.insert(
-                    Short(channel: user.handle, subscribers: "you · just now",
-                          caption: caption ?? "New short",
-                          gradient: user.avatarGradient,
-                          imageData: att.imageData,
-                          videoURL: Self.persistedVideoURL(from: att.videoURL),
-                          likeCount: 0),
-                    at: 0)
-            }
+            let stored = Self.persistedVideoURL(from: att.videoURL)
+            let short = Short(channel: user.handle,
+                              caption: caption ?? "",
+                              gradient: user.avatarGradient,
+                              imageData: att.imageData,
+                              videoURL: stored,
+                              authorAvatarURL: user.avatarURL,
+                              likeCount: 0)
+            withAnimation { self.shorts.insert(short, at: 0) }
+            // A short's caption rides in `title` — the server has no separate
+            // body for one, so `description` stays empty.
+            syncPublishVideo(localID: short.id, kind: "SHORT",
+                             title: caption, description: nil,
+                             thumbData: att.imageData, videoRef: stored,
+                             durationSeconds: Self.durationSeconds(att.durationLabel))
             activeTab = .watch
             watchSubFeed = .shorts
         }
 
         for att in longForms {
-            withAnimation {
-                videos.insert(
-                    VideoItem(title: caption ?? "Untitled video",
-                              channel: user.handle,
-                              meta: "\(user.handle) · just now",
-                              duration: att.durationLabel ?? "0:08",
-                              thumbGradient: user.avatarGradient,
-                              thumbData: att.imageData,
-                              videoURL: Self.persistedVideoURL(from: att.videoURL),
-                              likes: 0),
-                    at: 0)
-            }
+            // Title / description / cover come from the details sheet; the
+            // compose caption is the fallback title when it was skipped.
+            let title = att.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let details = att.details.trimmingCharacters(in: .whitespacesAndNewlines)
+            let stored = Self.persistedVideoURL(from: att.videoURL)
+            let resolvedTitle = title.isEmpty ? (caption ?? "Untitled video") : title
+            let video = VideoItem(title: resolvedTitle,
+                                  channel: user.handle,
+                                  details: details,
+                                  duration: att.durationLabel ?? "0:08",
+                                  thumbGradient: user.avatarGradient,
+                                  thumbData: att.imageData,
+                                  videoURL: stored,
+                                  authorAvatarURL: user.avatarURL,
+                                  likes: 0)
+            withAnimation { videos.insert(video, at: 0) }
+            syncPublishVideo(localID: video.id, kind: "LONG_FORM",
+                             title: resolvedTitle, description: details,
+                             thumbData: att.imageData, videoRef: stored,
+                             durationSeconds: Self.durationSeconds(att.durationLabel))
             activeTab = .watch
             watchSubFeed = .feed
         }
@@ -2203,6 +2490,19 @@ final class AppState: ObservableObject {
     /// Copies picker temp movies into Application Support so they survive rebuilds.
     private static func persistedVideoURL(from source: URL?) -> String? {
         VideoLibrary.persist(source)
+    }
+
+    /// "1:23" → 83. The server stores whole seconds and the client formats them
+    /// back, so the label never has to round-trip as a string.
+    static func durationSeconds(_ label: String?) -> Int? {
+        guard let label else { return nil }
+        let parts = label.split(separator: ":").compactMap { Int($0) }
+        switch parts.count {
+        case 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        case 2: return parts[0] * 60 + parts[1]
+        case 1: return parts[0]
+        default: return nil
+        }
     }
 
     /// Quick path — a bare photo with no editor. Same pipeline as the composer.
@@ -2388,12 +2688,14 @@ final class AppState: ObservableObject {
         guard let i = videos.firstIndex(where: { $0.id == id }) else { return }
         videos[i].liked.toggle()
         videos[i].likes += videos[i].liked ? 1 : -1
+        syncVideoLike(id, liked: videos[i].liked)
         schedulePersist()
     }
 
     func toggleVideoSave(_ id: UUID) {
         guard let i = videos.firstIndex(where: { $0.id == id }) else { return }
         videos[i].saved.toggle()
+        syncVideoSave(id, saved: videos[i].saved)
         schedulePersist()
     }
 
@@ -2401,6 +2703,7 @@ final class AppState: ObservableObject {
         guard let i = shorts.firstIndex(where: { $0.id == id }) else { return }
         shorts[i].liked.toggle()
         shorts[i].likeCount += shorts[i].liked ? 1 : -1
+        syncVideoLike(id, liked: shorts[i].liked)
         schedulePersist()
     }
 
@@ -2411,6 +2714,7 @@ final class AppState: ObservableObject {
         guard !shorts[i].liked else { return false }
         shorts[i].liked = true
         shorts[i].likeCount += 1
+        syncVideoLike(id, liked: true)
         schedulePersist()
         return true
     }
@@ -2418,6 +2722,7 @@ final class AppState: ObservableObject {
     func toggleShortBookmark(_ id: UUID) {
         guard let i = shorts.firstIndex(where: { $0.id == id }) else { return }
         shorts[i].bookmarked.toggle()
+        syncVideoSave(id, saved: shorts[i].bookmarked)
         schedulePersist()
     }
 

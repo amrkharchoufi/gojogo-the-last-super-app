@@ -38,6 +38,10 @@ struct WorldSettingsView: View {
                 .padding(.bottom, 40)
             }
             .scrollDismissesKeyboard(.interactively)
+            .refreshable {
+                await app.loadWorldProfile()
+                cacheSize = app.worldMediaCacheSize
+            }
         }
         .background(IMColor.sheetBG.ignoresSafeArea())
         .task { cacheSize = app.worldMediaCacheSize }

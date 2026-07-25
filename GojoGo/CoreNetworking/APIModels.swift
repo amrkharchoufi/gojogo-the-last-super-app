@@ -136,6 +136,68 @@ struct CreateCommentBody: Encodable {
     var text: String
 }
 
+// MARK: - Watch (long-form + shorts)
+
+/// The channel behind a video. `subscriberCount` is the author's real follower
+/// count — subscribers *are* followers, resolved server-side.
+struct VideoChannelDTO: Decodable {
+    var id: UUID
+    var name: String?
+    var handle: String?
+    var avatarUrl: String?
+    var subscriberCount: Int
+    var subscribed: Bool
+}
+
+/// Optional past `id` for the same reason story frames are: an app build either
+/// side of a backend roll must still decode the item rather than drop the feed.
+struct VideoDTO: Decodable {
+    var id: UUID
+    var kind: String?
+    var channel: VideoChannelDTO
+    var title: String?
+    var description: String?
+    var thumbUrl: String?
+    var videoUrl: String?
+    var durationSeconds: Int?
+    var liked: Bool
+    var saved: Bool
+    var likeCount: Int
+    var commentCount: Int
+    var viewCount: Int
+    var createdAt: String?
+}
+
+struct VideoFeedDTO: Decodable {
+    var videos: [VideoDTO]
+    var nextBefore: String?
+}
+
+struct CreateVideoBody: Encodable {
+    var kind: String
+    var title: String?
+    var description: String?
+    var thumbUrl: String?
+    var videoUrl: String
+    var durationSeconds: Int?
+}
+
+/// A nil field means "leave it alone" server-side, not "clear it".
+struct UpdateVideoBody: Encodable {
+    var title: String?
+    var description: String?
+    var thumbUrl: String?
+}
+
+struct VideoCommentDTO: Decodable {
+    var id: UUID
+    var author: VideoChannelDTO
+    var text: String
+    var liked: Bool
+    var likeCount: Int
+    var createdAt: String?
+}
+
 /// Every field past `id` is optional so a build of the app that predates a
 /// backend roll (or vice versa) still decodes the frame instead of dropping the
 /// whole rail.

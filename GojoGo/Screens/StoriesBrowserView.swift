@@ -48,6 +48,7 @@ struct StoriesBrowserView: View {
                     .padding(.top, 12)
                     .padding(.bottom, 40)
                 }
+                .refreshable { await app.refreshStoryRings() }
             }
             .navigationTitle("Stories")
             .navigationBarTitleDisplayMode(.inline)

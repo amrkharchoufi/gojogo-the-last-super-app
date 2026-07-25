@@ -141,6 +141,14 @@ enum VideoLibrary {
         return SampleData.repairedVideoURL(stored)
     }
 
+    /// Delete a durable local movie. Only touches files this library owns —
+    /// bundled clips and remote URLs are left alone.
+    static func remove(_ stored: String?) {
+        guard let stored, stored.hasPrefix(prefix) else { return }
+        let url = directory.appendingPathComponent(String(stored.dropFirst(prefix.count)))
+        try? FileManager.default.removeItem(at: url)
+    }
+
     static func bundleURL(named raw: String) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -327,7 +335,9 @@ struct CachedVideo: Codable {
     var id: UUID
     var title: String
     var channel: String
-    var meta: String
+    /// Legacy: `meta` used to be an authored string. It is derived now — kept
+    /// so caches written before that still decode, but never read back.
+    var meta: String?
     var duration: String
     var thumbGradient: [String]
     var thumbURL: String?
@@ -336,12 +346,20 @@ struct CachedVideo: Codable {
     var likes: Int
     var liked: Bool
     var saved: Bool
+    // Added with the long-form rewrite — optional so older caches still decode.
+    var details: String?
+    var authorAvatarURL: String?
+    var authorAvatarData: Data?
+    var views: Int?
+    var commentCount: Int?
+    var publishedAt: Date?
 }
 
 struct CachedShort: Codable {
     var id: UUID
     var channel: String
-    var subscribers: String
+    /// Legacy authored subtitle ("2.1M subscribers"). Derived now; decode-only.
+    var subscribers: String?
     var caption: String
     var gradient: [String]
     var imageURL: String?
@@ -351,6 +369,11 @@ struct CachedShort: Codable {
     var bookmarked: Bool
     var following: Bool
     var likeCount: Int
+    // Added with the long-form rewrite — optional so older caches still decode.
+    var authorAvatarURL: String?
+    var authorAvatarData: Data?
+    var views: Int?
+    var publishedAt: Date?
 }
 
 struct CachedProduct: Codable {
@@ -589,33 +612,43 @@ extension CachedPost {
 
 extension CachedVideo {
     init(from v: VideoItem) {
-        id = v.id; title = v.title; channel = v.channel; meta = v.meta
+        id = v.id; title = v.title; channel = v.channel; meta = nil
         duration = v.duration; thumbGradient = v.thumbGradient.map(SessionColor.hex)
         thumbURL = v.thumbURL; thumbData = v.thumbData; videoURL = v.videoURL
         likes = v.likes; liked = v.liked; saved = v.saved
+        details = v.details
+        authorAvatarURL = v.authorAvatarURL; authorAvatarData = v.authorAvatarData
+        views = v.views; commentCount = v.commentCount; publishedAt = v.publishedAt
     }
 
     func asDomain() -> VideoItem {
-        VideoItem(id: id, title: title, channel: channel, meta: meta,
+        VideoItem(id: id, title: title, channel: channel, details: details ?? "",
                   duration: duration, thumbGradient: SessionColor.colors(from: thumbGradient),
                   thumbURL: thumbURL, thumbData: thumbData, videoURL: videoURL,
-                  likes: likes, liked: liked, saved: saved)
+                  authorAvatarURL: authorAvatarURL, authorAvatarData: authorAvatarData,
+                  likes: likes, liked: liked, saved: saved,
+                  views: views ?? 0, commentCount: commentCount ?? 0,
+                  publishedAt: publishedAt ?? Date())
     }
 }
 
 extension CachedShort {
     init(from s: Short) {
-        id = s.id; channel = s.channel; subscribers = s.subscribers; caption = s.caption
+        id = s.id; channel = s.channel; subscribers = nil; caption = s.caption
         gradient = s.gradient.map(SessionColor.hex)
         imageURL = s.imageURL; imageData = s.imageData; videoURL = s.videoURL
         liked = s.liked; bookmarked = s.bookmarked; following = s.following; likeCount = s.likeCount
+        authorAvatarURL = s.authorAvatarURL; authorAvatarData = s.authorAvatarData
+        views = s.views; publishedAt = s.publishedAt
     }
 
     func asDomain() -> Short {
-        Short(id: id, channel: channel, subscribers: subscribers, caption: caption,
+        Short(id: id, channel: channel, caption: caption,
               gradient: SessionColor.colors(from: gradient),
               imageURL: imageURL, imageData: imageData, videoURL: videoURL,
-              liked: liked, bookmarked: bookmarked, following: following, likeCount: likeCount)
+              authorAvatarURL: authorAvatarURL, authorAvatarData: authorAvatarData,
+              liked: liked, bookmarked: bookmarked, following: following, likeCount: likeCount,
+              views: views ?? 0, publishedAt: publishedAt ?? Date())
     }
 }
 

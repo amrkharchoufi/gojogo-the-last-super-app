@@ -64,6 +64,7 @@ struct GojoTVView: View {
                 }
                 .padding(.top, 100)
             }
+            .refreshable { await app.refreshWatch() }
             .trackScrollChrome(hidden: $hideChrome)
 
             HStack {

@@ -33,8 +33,20 @@ final class LongFormPlayerModel: ObservableObject {
     /// Accumulated double-tap skip flash (seconds, signed: negative = rewind).
     @Published var skipFlashSeconds: Int = 0
     @Published var skipFlashForward: Bool = true
+    /// Legible (subtitle / closed-caption) tracks the loaded asset actually
+    /// carries. Empty for most phone-shot footage — the UI says so rather than
+    /// offering a switch that does nothing.
+    @Published var captionOptions: [AVMediaSelectionOption] = []
+    @Published var activeCaptionID: String?
+    @Published var loops = false
+    /// Roll into the next video when this one ends (the top-bar toggle).
+    @Published var autoplayNext = false
 
     let player = AVPlayer()
+    /// Set by the host screen; called when playback reaches the end and
+    /// `autoplayNext` is on.
+    var onEnded: (@MainActor () -> Void)?
+    private var captionGroup: AVMediaSelectionGroup?
     private var timeObserver: Any?
     private var statusObserver: NSKeyValueObservation?
     private var endObserver: NSObjectProtocol?
@@ -71,6 +83,11 @@ final class LongFormPlayerModel: ObservableObject {
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
         player.isMuted = isMuted
+
+        captionOptions = []
+        activeCaptionID = nil
+        captionGroup = nil
+        loadCaptionTracks(for: item)
 
         statusObserver = item.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor in
@@ -115,11 +132,56 @@ final class LongFormPlayerModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.player.seek(to: .zero)
-                self?.isPlaying = false
-                self?.showControls()
+                guard let self else { return }
+                self.player.seek(to: .zero)
+                if self.loops {
+                    self.play()
+                } else if self.autoplayNext, let onEnded = self.onEnded {
+                    onEnded()
+                } else {
+                    self.isPlaying = false
+                    self.showControls()
+                }
             }
         }
+    }
+
+    // MARK: Captions
+
+    var hasCaptions: Bool { !captionOptions.isEmpty }
+
+    /// Reads the asset's legible tracks once. `nil` selection means captions off.
+    private func loadCaptionTracks(for item: AVPlayerItem) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let group = try? await item.asset.loadMediaSelectionGroup(for: .legible) else { return }
+            guard self.player.currentItem === item else { return }
+            self.captionGroup = group
+            self.captionOptions = group.options
+            if let selected = item.currentMediaSelection.selectedMediaOption(in: group) {
+                self.activeCaptionID = Self.captionID(selected)
+            }
+        }
+    }
+
+    func selectCaption(_ option: AVMediaSelectionOption?) {
+        guard let group = captionGroup, let item = player.currentItem else { return }
+        item.select(option, in: group)
+        activeCaptionID = option.map(Self.captionID)
+        showControls()
+    }
+
+    static func captionID(_ option: AVMediaSelectionOption) -> String {
+        option.locale?.identifier ?? option.displayName
+    }
+
+    static func captionLabel(_ option: AVMediaSelectionOption) -> String {
+        option.displayName
+    }
+
+    func toggleLoop() {
+        loops.toggle()
+        showControls()
     }
 
     func play() {
@@ -550,8 +612,10 @@ struct LongFormFullscreenChrome: View {
     var onExit: () -> Void
     var onPlayPrevious: () -> Void
     var onPlayNext: () -> Void
-
-    @State private var autoplay = false
+    /// Comments live in a sheet the host screen presents — fullscreen has to
+    /// come back to portrait first, so it hands the request upward.
+    var onOpenComments: () -> Void = {}
+    var onDelete: () -> Void = {}
 
     private var nextVideo: VideoItem? {
         guard let i = app.videos.firstIndex(where: { $0.id == video.id }) else {
@@ -664,9 +728,10 @@ struct LongFormFullscreenChrome: View {
 
             HStack(spacing: 10) {
                 Button {
-                    autoplay.toggle()
+                    model.autoplayNext.toggle()
                     model.showControls()
                 } label: {
+                    let autoplay = model.autoplayNext
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
                             .font(.system(size: 10, weight: .bold))
@@ -688,9 +753,83 @@ struct LongFormFullscreenChrome: View {
                 }
                 .buttonStyle(.plain)
 
-                glassIcon("airplayvideo")
-                glassIcon("captions.bubble")
-                glassIcon("gearshape")
+                // These three were decorative — each one now does its job.
+                AirPlayRoutePicker()
+                    .frame(width: 20, height: 20)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Color.white.opacity(0.1)))
+                    .overlay(Circle().strokeBorder(GGColor.hairline, lineWidth: 1))
+
+                Menu {
+                    if model.hasCaptions {
+                        Button {
+                            model.selectCaption(nil)
+                        } label: {
+                            if model.activeCaptionID == nil {
+                                Label("Off", systemImage: "checkmark")
+                            } else {
+                                Text("Off")
+                            }
+                        }
+                        ForEach(model.captionOptions, id: \.self) { option in
+                            Button {
+                                model.selectCaption(option)
+                            } label: {
+                                if model.activeCaptionID == LongFormPlayerModel.captionID(option) {
+                                    Label(LongFormPlayerModel.captionLabel(option), systemImage: "checkmark")
+                                } else {
+                                    Text(LongFormPlayerModel.captionLabel(option))
+                                }
+                            }
+                        }
+                    } else {
+                        Text("This video has no subtitle track")
+                    }
+                } label: {
+                    glassIconLabel(model.activeCaptionID != nil
+                                   ? "captions.bubble.fill" : "captions.bubble")
+                }
+                .onTapGesture { model.showControls() }
+
+                Menu {
+                    Section("Playback speed") {
+                        ForEach([Float(0.5), 1, 1.25, 1.5, 2], id: \.self) { speed in
+                            Button {
+                                model.setSpeed(speed)
+                            } label: {
+                                if model.playbackSpeed == speed {
+                                    Label(speedLabel(speed), systemImage: "checkmark")
+                                } else {
+                                    Text(speedLabel(speed))
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        model.toggleMute()
+                    } label: {
+                        Label(model.isMuted ? "Unmute" : "Mute",
+                              systemImage: model.isMuted ? "speaker.wave.2" : "speaker.slash")
+                    }
+                    Button {
+                        model.toggleLoop()
+                    } label: {
+                        Label(model.loops ? "Stop looping" : "Loop video",
+                              systemImage: model.loops ? "repeat.circle.fill" : "repeat")
+                    }
+                    if app.canDeleteVideo(video.id) {
+                        Divider()
+                        Button {
+                            onExit()
+                            app.editVideoDetails(video.id)
+                        } label: {
+                            Label("Edit details", systemImage: "pencil")
+                        }
+                    }
+                } label: {
+                    glassIconLabel("gearshape")
+                }
+                .onTapGesture { model.showControls() }
             }
         }
     }
@@ -752,12 +891,24 @@ struct LongFormFullscreenChrome: View {
                     fsAction(video.liked ? "hand.thumbsup.fill" : "hand.thumbsup") {
                         app.toggleVideoLike(video.id)
                     }
-                    fsAction("hand.thumbsdown")
-                    fsAction("bubble.right")
+                    fsAction(app.isVideoDisliked(video.id) ? "hand.thumbsdown.fill" : "hand.thumbsdown") {
+                        app.toggleVideoDislike(video.id)
+                    }
+                    fsAction("bubble.right") {
+                        onExit()
+                        onOpenComments()
+                    }
                     fsAction(video.saved ? "bookmark.fill" : "bookmark") {
                         app.toggleVideoSave(video.id)
                     }
-                    fsAction("arrowshape.turn.up.right")
+                    ShareLink(item: app.videoShareURL(for: video.id), subject: Text(video.title)) {
+                        Image(systemName: "arrowshape.turn.up.right")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(GGColor.textPrimary)
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                     Button {
                         model.showControls()
                         onExit()
@@ -767,7 +918,37 @@ struct LongFormFullscreenChrome: View {
                             .frame(width: 36, height: 36)
                     }
                     .buttonStyle(.plain)
-                    fsAction("ellipsis")
+                    Menu {
+                        Button {
+                            app.toggleVideoDownload(video.id)
+                        } label: {
+                            Label(app.isVideoDownloaded(video.id) ? "Remove download" : "Download",
+                                  systemImage: app.isVideoDownloaded(video.id)
+                                  ? "checkmark.circle.fill" : "arrow.down.circle")
+                        }
+                        if app.canDeleteVideo(video.id) {
+                            Divider()
+                            Button(role: .destructive) {
+                                onExit()
+                                onDelete()
+                            } label: {
+                                Label("Delete video", systemImage: "trash")
+                            }
+                        } else {
+                            Button {
+                                app.reportVideo(video.id)
+                            } label: {
+                                Label("Report", systemImage: "flag")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(GGColor.textPrimary)
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .onTapGesture { model.showControls() }
                 }
 
                 Spacer(minLength: 12)
@@ -838,19 +1019,14 @@ struct LongFormFullscreenChrome: View {
         .disabled(!enabled)
     }
 
-    private func glassIcon(_ name: String) -> some View {
-        Button {
-            model.showControls()
-        } label: {
-            Image(systemName: name)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(GGColor.textPrimary)
-                .frame(width: 36, height: 36)
-                .background(Circle().fill(Color.white.opacity(0.1)))
-                .overlay(Circle().strokeBorder(GGColor.hairline, lineWidth: 1))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
+    private func glassIconLabel(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(GGColor.textPrimary)
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Color.white.opacity(0.1)))
+            .overlay(Circle().strokeBorder(GGColor.hairline, lineWidth: 1))
+            .contentShape(Circle())
     }
 
     private func fsAction(_ icon: String, action: @escaping () -> Void = {}) -> some View {

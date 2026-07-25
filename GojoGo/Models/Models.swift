@@ -348,56 +348,99 @@ struct PostMediaItem: Identifiable, Equatable {
     }
 }
 
+/// A long-form (Watch) video. Everything shown about it is authored at publish
+/// time or counted locally — there is no video service yet, so nothing here is
+/// generated to look plausible.
 struct VideoItem: Identifiable {
     let id: UUID
-    let title: String
+    var title: String
     let channel: String
-    let meta: String
+    /// Author-written description shown on the watch page. Empty until written.
+    var details: String
     let duration: String
     let thumbGradient: [Color]
     var thumbURL: String?
     var thumbData: Data?
     var videoURL: String?
+    /// The author's avatar — never the video's own poster frame.
+    var authorAvatarURL: String?
+    var authorAvatarData: Data?
     var likes: Int
     var liked: Bool
     var saved: Bool
+    /// Distinct viewers, counted server-side (one row per viewer, so a replay
+    /// can't inflate it). Zero until someone opens it.
+    var views: Int
+    var commentCount: Int
+    let publishedAt: Date
 
-    init(id: UUID = UUID(), title: String, channel: String, meta: String,
+    init(id: UUID = UUID(), title: String, channel: String, details: String = "",
          duration: String, thumbGradient: [Color], thumbURL: String? = nil,
          thumbData: Data? = nil, videoURL: String? = nil,
-         likes: Int = 0, liked: Bool = false, saved: Bool = false) {
-        self.id = id; self.title = title; self.channel = channel; self.meta = meta
+         authorAvatarURL: String? = nil, authorAvatarData: Data? = nil,
+         likes: Int = 0, liked: Bool = false, saved: Bool = false,
+         views: Int = 0, commentCount: Int = 0, publishedAt: Date = Date()) {
+        self.id = id; self.title = title; self.channel = channel; self.details = details
         self.duration = duration; self.thumbGradient = thumbGradient
         self.thumbURL = thumbURL; self.thumbData = thumbData; self.videoURL = videoURL
+        self.authorAvatarURL = authorAvatarURL; self.authorAvatarData = authorAvatarData
         self.likes = likes; self.liked = liked; self.saved = saved
+        self.views = views; self.commentCount = commentCount; self.publishedAt = publishedAt
+    }
+
+    /// "1.2K views · 3h" — built from what we actually counted.
+    var meta: String {
+        let viewPart = views == 1 ? "1 view" : "\(formatCount(views)) views"
+        return "\(viewPart) · \(RelativeTime.since(publishedAt))"
     }
 }
 
 struct Short: Identifiable {
     let id: UUID
     let channel: String
-    let subscribers: String
-    let caption: String
+    var caption: String
     let gradient: [Color]
     var imageURL: String?
     var imageData: Data?
     /// Local file or remote HTTP URL for playback.
     var videoURL: String?
+    /// The author's avatar — never the clip's own poster frame.
+    var authorAvatarURL: String?
+    var authorAvatarData: Data?
     var liked: Bool
     var bookmarked: Bool
     var following: Bool
     var likeCount: Int
+    var views: Int
+    let publishedAt: Date
 
-    init(id: UUID = UUID(), channel: String, subscribers: String, caption: String,
+    init(id: UUID = UUID(), channel: String, caption: String,
          gradient: [Color], imageURL: String? = nil, imageData: Data? = nil,
          videoURL: String? = nil,
+         authorAvatarURL: String? = nil, authorAvatarData: Data? = nil,
          liked: Bool = false, bookmarked: Bool = false, following: Bool = false,
-         likeCount: Int = 1200) {
-        self.id = id; self.channel = channel; self.subscribers = subscribers
+         likeCount: Int = 0, views: Int = 0, publishedAt: Date = Date()) {
+        self.id = id; self.channel = channel
         self.caption = caption; self.gradient = gradient; self.imageURL = imageURL
         self.imageData = imageData; self.videoURL = videoURL
+        self.authorAvatarURL = authorAvatarURL; self.authorAvatarData = authorAvatarData
         self.liked = liked; self.bookmarked = bookmarked; self.following = following
         self.likeCount = likeCount
+        self.views = views; self.publishedAt = publishedAt
+    }
+}
+
+/// Age of a locally-authored item. The backend equivalent is `BackendDate.relative`.
+enum RelativeTime {
+    static func since(_ date: Date) -> String {
+        let seconds = max(0, Date().timeIntervalSince(date))
+        switch seconds {
+        case ..<60: return "just now"
+        case ..<3600: return "\(Int(seconds / 60))m ago"
+        case ..<86_400: return "\(Int(seconds / 3600))h ago"
+        case ..<604_800: return "\(Int(seconds / 86_400))d ago"
+        default: return "\(Int(seconds / 604_800))w ago"
+        }
     }
 }
 
@@ -637,6 +680,9 @@ struct ComposeAttachment: Identifiable, Equatable {
     /// Normalized trim range for videos (0…1).
     var trimStart: Double
     var trimEnd: Double
+    /// Long-form only — authored in the details sheet before publishing.
+    var title: String
+    var details: String
 
     var isVideo: Bool {
         videoURL != nil || kind == .short || kind == .longForm
@@ -646,12 +692,14 @@ struct ComposeAttachment: Identifiable, Equatable {
          originalImageData: Data? = nil,
          durationLabel: String? = nil, audioURL: URL? = nil,
          videoURL: URL? = nil,
-         trimStart: Double = 0, trimEnd: Double = 1) {
+         trimStart: Double = 0, trimEnd: Double = 1,
+         title: String = "", details: String = "") {
         self.id = id; self.kind = kind; self.imageData = imageData
         self.originalImageData = originalImageData ?? imageData
         self.durationLabel = durationLabel; self.audioURL = audioURL
         self.videoURL = videoURL
         self.trimStart = trimStart; self.trimEnd = trimEnd
+        self.title = title; self.details = details
     }
 }
 

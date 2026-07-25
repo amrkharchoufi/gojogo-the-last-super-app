@@ -130,6 +130,7 @@ struct HomeView: View {
             ScrollChromeControl.suppressTabBarJitter()
             hideChrome = false
         }
+        .videoDeletionConfirmations(enabled: !app.showProfile && !app.showWatching)
     }
 
     // MARK: Stories — 3×3 circle grid (Messages Favorites style)
@@ -354,17 +355,16 @@ struct InstagramPostCard: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 12)
             media
+            // No timestamp under the actions: the header already carries it
+            // next to the handle, and repeating it twice on one card just
+            // added a second, quieter line saying the same thing.
             PostActions(post: live) {
                 heartTrigger += 1
             }
             .padding(.horizontal, 14)
             .padding(.top, 14)
-            .padding(.bottom, 12)
+            .padding(.bottom, 16)
             .frame(minHeight: 52)
-
-            timestamp
-                .padding(.horizontal, 14)
-                .padding(.bottom, 18)
         }
         .padding(.bottom, 6)
 
@@ -630,12 +630,6 @@ struct InstagramPostCard: View {
         }
     }
 
-    private var timestamp: some View {
-        Text(live.meta.isEmpty ? "just now" : live.meta)
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(GGColor.textTertiary)
-    }
-
     @ViewBuilder
     private var postContextMenu: some View {
         Button {
@@ -691,20 +685,30 @@ struct InstagramPostCard: View {
 
         Divider()
 
-        Button(role: .destructive) {
-            withAnimation(.ggTab) {
-                app.hidePost(live.id)
+        if app.isMyPost(live.id) {
+            // Yours: a real delete, for everyone. Hiding your own post from
+            // your own feed would just look like a bug.
+            Button(role: .destructive) {
+                app.requestDeletePost(live.id)
+            } label: {
+                Label("Delete post", systemImage: "trash")
             }
-        } label: {
-            Label("Hide", systemImage: "eye.slash")
-        }
+        } else {
+            Button(role: .destructive) {
+                withAnimation(.ggTab) {
+                    app.hidePost(live.id)
+                }
+            } label: {
+                Label("Hide", systemImage: "eye.slash")
+            }
 
-        Button(role: .destructive) {
-            withAnimation(.ggTab) {
-                app.hidePost(live.id)
+            Button(role: .destructive) {
+                withAnimation(.ggTab) {
+                    app.hidePost(live.id)
+                }
+            } label: {
+                Label("Report", systemImage: "flag")
             }
-        } label: {
-            Label("Report", systemImage: "flag")
         }
     }
 

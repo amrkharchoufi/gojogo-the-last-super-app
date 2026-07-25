@@ -558,10 +558,16 @@ struct AttachmentsTray: View {
             HStack(spacing: 8) {
                 ForEach(app.composeAttachments) { att in
                     ZStack(alignment: .topTrailing) {
-                        // Same portrait tile as before — tap opens editor.
+                        // Tap opens the editor — long-form goes to the details
+                        // form instead, since title/description/cover are the
+                        // things that actually need filling in before it posts.
                         Button {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            app.openMediaEditor(att.id)
+                            if att.kind == .longForm {
+                                app.editingLongFormAttachmentID = att.id
+                            } else {
+                                app.openMediaEditor(att.id)
+                            }
                         } label: {
                             ZStack(alignment: .bottom) {
                                 Group {
@@ -575,17 +581,27 @@ struct AttachmentsTray: View {
                                 .clipped()
 
                                 if att.isVideo || att.kind == .audio {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: att.kind == .audio ? "waveform"
-                                              : att.kind == .short ? "bolt.fill" : "play.fill")
-                                            .font(.system(size: 10, weight: .semibold))
-                                        if let d = att.durationLabel {
-                                            Text(d).font(.system(size: 11, weight: .semibold))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: att.kind == .audio ? "waveform"
+                                                  : att.kind == .short ? "bolt.fill" : "play.fill")
+                                                .font(.system(size: 10, weight: .semibold))
+                                            if let d = att.durationLabel {
+                                                Text(d).font(.system(size: 11, weight: .semibold))
+                                            }
+                                            Spacer(minLength: 0)
                                         }
-                                        Spacer(minLength: 0)
+                                        if att.kind == .longForm {
+                                            Text(att.title.isEmpty ? "Add details" : att.title)
+                                                .font(.system(size: 10, weight: .medium))
+                                                .foregroundStyle(att.title.isEmpty
+                                                                 ? .white.opacity(0.7) : .white)
+                                                .lineLimit(1)
+                                        }
                                     }
                                     .foregroundStyle(.white)
                                     .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                     .background(.ultraThinMaterial)
                                 }
                             }

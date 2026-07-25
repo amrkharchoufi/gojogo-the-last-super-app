@@ -289,6 +289,7 @@ private struct WorldMessagesList: View {
             }
         }
         .scrollDismissesKeyboard(.immediately)
+        .refreshable { await app.refreshWorldConversations() }
         .simultaneousGesture(TapGesture().onEnded {
             if app.showWorldFilters {
                 withAnimation { app.showWorldFilters = false }

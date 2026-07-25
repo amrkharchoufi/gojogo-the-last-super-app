@@ -319,6 +319,25 @@ extension AppState {
         }
     }
 
+    /// Pull-to-refresh for the stories directory — re-fetches the rings on their
+    /// own, without dragging the whole home feed along the way `refreshSocial`
+    /// does (that one owns posts and rings together, and is what Home pulls).
+    func refreshStoryRings() async {
+        guard backendConnected else { return }
+        do {
+            var rings = try await StoriesStore.shared.fetchRings()
+            if !rings.contains(where: \.isYou) {
+                rings.insert(Story(name: "You", letter: String((user.name.first ?? "g").uppercased()),
+                                   gradient: user.avatarGradient, frames: [], isYou: true), at: 0)
+            }
+            withAnimation(.easeOut(duration: 0.25)) { stories = rings }
+        } catch {
+            #if DEBUG
+            print("Story rings refresh failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
     // MARK: - Archive
 
     func refreshStoryArchive() async {

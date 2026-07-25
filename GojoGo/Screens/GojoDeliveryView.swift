@@ -129,6 +129,7 @@ private struct DeliveryBrowseView: View {
                     }
                 }
                 .scrollDismissesKeyboard(.immediately)
+                .refreshable { await app.refreshDelivery() }
             }
 
             if !app.deliveryCart.isEmpty {
@@ -459,6 +460,7 @@ private struct DeliveryRestaurantView: View {
                     Color.clear.frame(height: tabBarInset + (app.deliveryCart.isEmpty ? 12 : 70))
                 }
             }
+            .refreshable { await app.reloadDeliveryMenu(restaurant.id) }
 
             if !app.deliveryCart.isEmpty {
                 DeliveryCartBar()

@@ -94,6 +94,20 @@ struct MainAppView: View {
                     .zIndex(70)
             }
 
+            // Profile is a page, not a drawer: it pushes in from the trailing
+            // edge over the whole surface (dock included) rather than sliding
+            // up as a modal card. Hosted here for the same reason the story
+            // viewer is — a sheet couldn't cover the tab bar, and a card with a
+            // grab handle read as a temporary peek at something that is really
+            // a destination.
+            if app.showProfile {
+                ProfileView()
+                    .environmentObject(app)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.move(edge: .trailing))
+                    .zIndex(40)
+            }
+
             // Chat attachment opened full screen. Hosted here (not in the chat
             // view) so it covers the dock and the immersive chrome.
             if !app.worldMediaViewerItems.isEmpty {
@@ -111,15 +125,7 @@ struct MainAppView: View {
         // Don't ignore keyboard — composer must sit above it when open.
         .animation(.ggOverlay, value: app.isComposing)
         .animation(.ggGentle, value: app.isWorldImmersive)
-        .sheet(isPresented: Binding(
-            get: { app.showProfile },
-            set: { if !$0 { app.closeProfile() } }
-        )) {
-            ProfileView()
-                .environmentObject(app)
-                .presentationDragIndicator(.visible)
-                .presentationBackground(GGColor.sheetBG)
-        }
+        .animation(.ggNav, value: app.showProfile)
         .sheet(isPresented: $app.showStoriesBrowser) {
             StoriesBrowserView()
                 .environmentObject(app)
@@ -163,6 +169,26 @@ struct MainAppView: View {
         )) {
             if let id = app.editingAttachmentID {
                 MediaEditSheet(attachmentID: id)
+                    .environmentObject(app)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { app.editingLongFormAttachmentID != nil },
+            set: { if !$0 { app.closeVideoDetails() } }
+        )) {
+            if let id = app.editingLongFormAttachmentID {
+                VideoDetailsSheet(target: .attachment(id))
+                    .environmentObject(app)
+            }
+        }
+        // The profile and the player are themselves covers and declare their
+        // own copy of this editor — same shape as the post viewer above.
+        .sheet(isPresented: Binding(
+            get: { app.editingVideoID != nil && !app.showProfile && !app.showWatching },
+            set: { if !$0 { app.closeVideoDetails() } }
+        )) {
+            if let id = app.editingVideoID {
+                VideoDetailsSheet(target: .published(id))
                     .environmentObject(app)
             }
         }

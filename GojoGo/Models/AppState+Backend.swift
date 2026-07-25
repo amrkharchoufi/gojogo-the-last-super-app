@@ -30,6 +30,7 @@ extension AppState {
                 worldConversationsLoading = true
             }
             await refreshSocial()
+            await refreshWatch()
             await refreshOwnCounts()
             await refreshEconomy()
             await refreshDelivery()
@@ -430,6 +431,28 @@ extension AppState {
         }
     }
 
+    /// Deletes a post server-side. A purely local post (sample content, or one
+    /// whose create is still in flight) just stays deleted on the device.
+    func syncDeletePost(_ postID: UUID, restoring post: Post, at index: Int) {
+        guard SocialStore.shared.remotePostIds.contains(postID) else { return }
+        Task {
+            do {
+                try await SocialStore.shared.deletePost(postID)
+                await refreshOwnCounts()
+            } catch {
+                // Put it back rather than leave the user believing it's gone.
+                let insertAt = min(index, posts.count)
+                posts.insert(post, at: insertAt)
+                user.postCount += 1
+                if profileUser?.isOwn == true { profileUser?.postCount += 1 }
+                schedulePersist()
+                #if DEBUG
+                print("Post delete failed: \(error.localizedDescription)")
+                #endif
+            }
+        }
+    }
+
     func syncBookmark(postID: UUID, bookmarked: Bool) {
         guard SocialStore.shared.remotePostIds.contains(postID) else { return }
         Task {
@@ -610,6 +633,8 @@ extension AppState {
                 }
                 let profileId = view.id
                 SocialStore.shared.registerProfile(id: profileId, handle: view.handle)
+                // Real follower count — the "subscribers" line on their videos reads this.
+                followerCountByHandle[view.handle.lowercased()] = view.followerCount
                 guard showProfile, profileUser?.handle.lowercased() == handle.lowercased() else { return }
                 profileUser = ProfileUser(
                     name: view.name,

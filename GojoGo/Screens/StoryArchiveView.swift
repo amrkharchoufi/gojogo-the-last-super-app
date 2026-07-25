@@ -24,9 +24,18 @@ struct StoryArchiveView: View {
                 if loading && app.storyArchive.isEmpty {
                     ProgressView().tint(GGColor.textSecondary)
                 } else if app.storyArchive.isEmpty {
-                    emptyState
+                    // In a scroll view so an empty archive can still be pulled —
+                    // the frames land here on expiry, which is precisely what
+                    // someone is checking for when they pull on "nothing yet".
+                    ScrollView(showsIndicators: false) {
+                        emptyState
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 120)
+                    }
+                    .refreshable { await pullRefresh() }
                 } else {
                     content
+                        .refreshable { await pullRefresh() }
                 }
             }
             .navigationTitle("Archive")
@@ -46,6 +55,13 @@ struct StoryArchiveView: View {
             await app.refreshHighlights()
             loading = false
         }
+    }
+
+    /// Same pair the initial `.task` loads — the archive and the highlights
+    /// built from it are only ever meaningful together.
+    private func pullRefresh() async {
+        await app.refreshStoryArchive()
+        await app.refreshHighlights()
     }
 
     @ToolbarContentBuilder

@@ -86,6 +86,10 @@ interface FollowRepository extends JpaRepository<Follow, Follow.Key> {
 
     long countByFollowerId(UUID followerId);
 
+    /** Follower counts for a batch — one query behind {@code SocialGraphApi}. */
+    @Query("select f.followeeId, count(f) from Follow f where f.followeeId in :ids group by f.followeeId")
+    List<Object[]> followerCounts(@Param("ids") Collection<UUID> ids);
+
     @Modifying
     @Query("delete from Follow f where f.followerId = :followerId and f.followeeId = :followeeId")
     int deleteByFollowerIdAndFolloweeId(@Param("followerId") UUID followerId, @Param("followeeId") UUID followeeId);

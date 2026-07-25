@@ -110,7 +110,8 @@ Shared infra:
 | `HomeView`, `Post`, `Story`, `Comment`, `ComposePostView` | Vertical | `social` | `social` | Feed, likes, bookmarks, follows — **live**. Stories are the full Instagram surface since Phase 2c (photo/video/text frames, overlays, replies, reactions, viewers, mute, archive, highlights, close friends) |
 | `ProfileView`, `GGUser`, `ProfileUser`, interests | Platform-ish | `profile` | `profile` | CRUD + by-handle — **live** |
 | Presigned upload, post/story media | Platform | `media` | S3 (+ `media` metadata) | CloudFront deferred — **live** (S3 public-read interim) |
-| `ShortsView`, `WatchView`, `GojoTVView`, `VideoItem`, `Short`, `TVShow` | Vertical on platform | `media` (+ later `watch` catalog) | `media` | Still SampleData on client; UGC HLS = later |
+| `ShortsView`, `WatchView`, `VideoItem`, `Short` | Vertical on platform | **`watch`** | `watch` | **Live** — long-form + shorts catalog, authored title/description/thumbnail, likes, saves, distinct-viewer view counts, comments, owner-only edit/delete. Reads `SocialGraphApi` so **subscribers = followers**. Playback is still the direct-S3 object; UGC HLS transcode = Phase 3 |
+| `GojoTVView`, `TVShow` | Vertical on platform | `media` (+ later `watch` catalog) | `media` | Still SampleData on client |
 | `GojoTravelView`, `TravelPlace`, `RideOption`, `TravelDriver` | Vertical | `travel` | `travel` | Uses platform `dispatch` + client Mapbox |
 | `GojoDeliveryView`, restaurant/cart/courier | Vertical | `delivery` | `delivery` | Own `AppTab`; **live** (M4) — catalog, server-priced orders, fulfilment state machine. Will use platform `dispatch` for real couriers (Phase 3) |
 | `EconomyView`, `Product` | Vertical | `economy` | `economy` | Marketplace listings — **live**; `SellerListingsView` is the seller side (edit, pause, mark sold, delete, saves/views) |
@@ -129,7 +130,7 @@ Shared infra:
 | **Co-watch chat** (`WatchingMadeleineView`, `watchingChat`) | Unowned | Ephemeral **media room** + `assistant` participation; not My World history |
 | `ActivityView`, `ActivityItem` | Only “SNS later” | Platform **`notifications`** — **live**: in-app activity feed from `UserFollowed`/`PostLiked`/`PostCommented` events; APNs fan-out still later |
 | **Profile Home** (`ProfileHomeBlock`, canvas editor) | Lumped under profile vaguely | Owned by **`profile`** (structured blocks JSON / rows in `profile` schema) |
-| Watch channel subscribe / dislike / download | Unowned | `media`/`watch` engagement tables; downloads are client-local unless offline sync is productized |
+| Watch channel subscribe / dislike / download | Unowned | **Subscribe is follow** — one graph, in `social`, read by `watch` through `SocialGraphApi`; there is deliberately no second subscription table. Likes/saves/views/comments are `watch` engagement tables. Dislike + download stay client-local (a dislike is a personal ranking signal with no feed to feed yet; downloads are device-local unless offline sync is productized) |
 | Partner live jobs / radar | Under partner only | `partner` UX + **`dispatch`** for offers/assignment |
 
 ### 6c Chat ownership summary (four surfaces)

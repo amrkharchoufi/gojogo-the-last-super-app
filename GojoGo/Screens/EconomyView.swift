@@ -135,6 +135,7 @@ struct EconomyView: View {
                 .padding(.top, 56)
             }
             .scrollDismissesKeyboard(.immediately)
+            .refreshable { await app.refreshEconomy() }
             .trackScrollChrome(hidden: $chromeHidden)
 
             topChrome
@@ -685,6 +686,7 @@ struct ProductDetailView: View {
                 .padding(.bottom, 110)
             }
         }
+        .refreshable { await app.refreshEconomy() }
         .background(GGColor.bg.ignoresSafeArea())
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 10) {

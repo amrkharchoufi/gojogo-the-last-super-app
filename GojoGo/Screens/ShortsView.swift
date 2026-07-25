@@ -109,6 +109,10 @@ struct ShortsView: View {
         .onChange(of: app.shorts.count) { _, _ in
             index = min(index, max(app.shorts.count - 1, 0))
         }
+        .onChange(of: index) { _, i in
+            app.loadMoreShortsIfNeeded(currentIndex: i)
+        }
+        .videoDeletionConfirmations(enabled: !app.showWatching && !app.showProfile)
     }
 
     /// Black for the immersive video feed; theme background when there's nothing to play.
@@ -146,7 +150,25 @@ struct ShortCard: View {
 
     private var short: Short {
         app.shorts.first(where: { $0.id == shortID })
-            ?? Short(channel: "", subscribers: "", caption: "", gradient: [])
+            ?? Short(channel: "", caption: "", gradient: [])
+    }
+
+    private var isOwn: Bool { app.isOwnChannel(short.channel) }
+
+    /// The line under the handle: followers when we know them, otherwise how
+    /// many people have actually watched, otherwise just when it went up.
+    private var channelSubtitle: String {
+        var parts: [String] = []
+        if isOwn {
+            parts.append("you")
+        } else if let subs = app.subscriberLabel(for: short.channel) {
+            parts.append(subs)
+        }
+        if short.views > 0 {
+            parts.append(short.views == 1 ? "1 view" : "\(formatCount(short.views)) views")
+        }
+        parts.append(RelativeTime.since(short.publishedAt))
+        return parts.joined(separator: " · ")
     }
 
     private var commentCount: Int {
@@ -303,6 +325,11 @@ struct ShortCard: View {
                                 app.toggleShortBookmark(shortID)
                             }
                         }
+                        Menu {
+                            shortMenuItems
+                        } label: {
+                            railLabel(icon: "ellipsis", tint: .white, label: nil)
+                        }
                     }
                     .padding(.trailing, 12)
                     .padding(.bottom, 168)
@@ -317,22 +344,26 @@ struct ShortCard: View {
                         HStack(spacing: 10) {
                             Button {
                                 app.openUserProfile(handle: short.channel,
-                                                    avatarURL: short.imageURL,
+                                                    avatarURL: avatarURL,
                                                     avatarGradient: short.gradient)
                             } label: {
                                 HStack(spacing: 10) {
+                                    // The author's picture — deliberately not the
+                                    // clip's poster frame, which is what used to
+                                    // land here and made every avatar a video still.
                                     UserAvatar(size: 40,
+                                               gradient: app.avatarGradient(forHandle: short.channel),
                                                letter: String(short.channel.prefix(1)).uppercased(),
                                                ring: true,
-                                               imageURL: short.imageURL,
-                                               imageData: short.imageData)
+                                               imageURL: avatarURL,
+                                               imageData: short.authorAvatarData)
                                         .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
 
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(short.channel)
                                             .font(.system(size: 15, weight: .semibold))
                                             .foregroundStyle(.white)
-                                        Text(short.subscribers)
+                                        Text(channelSubtitle)
                                             .font(.system(size: 12))
                                             .foregroundStyle(.white.opacity(0.75))
                                     }
@@ -340,26 +371,30 @@ struct ShortCard: View {
                             }
                             .buttonStyle(.plain)
 
-                            Button {
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    app.toggleShortFollow(shortID)
+                            if !isOwn {
+                                Button {
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        app.toggleShortFollow(shortID)
+                                    }
+                                } label: {
+                                    Text(short.following ? "Following" : "Follow")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 14).padding(.vertical, 7)
+                                        .glassCapsule(interactive: true)
                                 }
-                            } label: {
-                                Text(short.following ? "Following" : "Follow")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 14).padding(.vertical, 7)
-                                    .glassCapsule(interactive: true)
+                                .buttonStyle(SoftPressStyle())
                             }
-                            .buttonStyle(SoftPressStyle())
                         }
 
-                        Text(short.caption)
-                            .font(.system(size: 14))
-                            .lineSpacing(3)
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.55), radius: 8, y: 2)
-                            .frame(maxWidth: 260, alignment: .leading)
+                        if !short.caption.isEmpty {
+                            Text(short.caption)
+                                .font(.system(size: 14))
+                                .lineSpacing(3)
+                                .foregroundStyle(.white)
+                                .shadow(color: .black.opacity(0.55), radius: 8, y: 2)
+                                .frame(maxWidth: 260, alignment: .leading)
+                        }
                     }
                     .padding(.leading, 16)
                     .padding(.trailing, 72)
@@ -372,15 +407,52 @@ struct ShortCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .onAppear { probeVideoAspect() }
+        .onAppear {
+            probeVideoAspect()
+            if isActive { app.registerShortView(shortID) }
+        }
         .onChange(of: short.videoURL) { _, _ in
             videoAspect = nil
             probeVideoAspect()
         }
         .onChange(of: isActive) { _, active in
-            if !active { isPaused = false }
+            if !active { isPaused = false } else { app.registerShortView(shortID) }
         }
         .animation(.easeOut(duration: 0.14), value: isPaused)
+    }
+
+    /// Author's avatar, stored at publish and resolved by handle for anything
+    /// older that predates the field.
+    private var avatarURL: String? {
+        app.authorAvatarURL(forChannel: short.channel, stored: short.authorAvatarURL)
+    }
+
+    @ViewBuilder
+    private var shortMenuItems: some View {
+        ShareLink(item: app.shortShareURL(for: shortID)) {
+            Label("Share", systemImage: "square.and.arrow.up")
+        }
+        Button {
+            app.toggleShortBookmark(shortID)
+        } label: {
+            Label(short.bookmarked ? "Remove from saved" : "Save",
+                  systemImage: short.bookmarked ? "bookmark.slash" : "bookmark")
+        }
+        if app.canDeleteShort(shortID) {
+            Divider()
+            Button(role: .destructive) {
+                app.requestDeleteShort(shortID)
+            } label: {
+                Label("Delete short", systemImage: "trash")
+            }
+        } else {
+            Divider()
+            Button(role: .destructive) {
+                withAnimation(.easeOut(duration: 0.2)) { app.deleteShort(shortID) }
+            } label: {
+                Label("Not interested", systemImage: "eye.slash")
+            }
+        }
     }
 
     private func togglePauseInstant() {
@@ -473,10 +545,20 @@ struct ShortCard: View {
 
 // MARK: - Instant single-tap (no double-tap delay)
 
-/// UIKit taps: single fires immediately; double also fires (caller resumes + likes).
+/// UIKit taps for the Shorts surface.
+///
+/// A `numberOfTapsRequired = 1` recognizer fires on *both* taps of a double
+/// tap, so liking a clip used to pause it, resume it, and flash the play glyph
+/// on the way. The single tap is therefore held for `doubleTapWindow` and
+/// dropped if a second tap lands — the same trade every Reels-style feed makes,
+/// and the like stays instant because the double-tap path fires on its own.
 private struct ShortTapOverlay: UIViewRepresentable {
     var onSingleTap: () -> Void
     var onDoubleTap: () -> Void
+
+    /// Long enough to catch a deliberate double tap, short enough that a pause
+    /// still feels like a direct response.
+    private static let doubleTapWindow: TimeInterval = 0.25
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -494,10 +576,10 @@ private struct ShortTapOverlay: UIViewRepresentable {
             action: #selector(Coordinator.handleSingle(_:))
         )
         single.numberOfTapsRequired = 1
-        // Do not require double to fail — that adds ~300ms pause latency.
 
         view.addGestureRecognizer(double)
         view.addGestureRecognizer(single)
+        context.coordinator.window = Self.doubleTapWindow
         context.coordinator.onSingleTap = onSingleTap
         context.coordinator.onDoubleTap = onDoubleTap
         return view
@@ -510,17 +592,43 @@ private struct ShortTapOverlay: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.cancelPendingSingle()
+    }
+
     final class Coordinator: NSObject {
         var onSingleTap: () -> Void = {}
         var onDoubleTap: () -> Void = {}
+        var window: TimeInterval = 0.25
+        private var pendingSingle: DispatchWorkItem?
+        /// The two recognizers can fire in either order on the second tap, so
+        /// the double is also remembered — a single arriving just after one is
+        /// the tail of that double, not a new tap.
+        private var lastDoubleAt: Date = .distantPast
+
+        func cancelPendingSingle() {
+            pendingSingle?.cancel()
+            pendingSingle = nil
+        }
 
         @objc func handleSingle(_ g: UITapGestureRecognizer) {
             guard g.state == .ended else { return }
-            onSingleTap()
+            cancelPendingSingle()
+            guard Date().timeIntervalSince(lastDoubleAt) > window else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingSingle = nil
+                guard Date().timeIntervalSince(self.lastDoubleAt) > self.window else { return }
+                self.onSingleTap()
+            }
+            pendingSingle = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + window, execute: work)
         }
 
         @objc func handleDouble(_ g: UITapGestureRecognizer) {
             guard g.state == .ended else { return }
+            cancelPendingSingle()
+            lastDoubleAt = Date()
             onDoubleTap()
         }
     }

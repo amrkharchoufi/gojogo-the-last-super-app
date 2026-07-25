@@ -5,8 +5,21 @@ import UIKit
 struct WatchingMadeleineView: View {
     @EnvironmentObject var app: AppState
     @StateObject private var playerModel = LongFormPlayerModel()
+    @State private var descriptionExpanded = false
 
     private var video: VideoItem? { app.watchingVideo }
+
+    private var isOwnVideo: Bool {
+        guard let video else { return false }
+        return app.isOwnChannel(video.channel)
+    }
+
+    /// The channel's avatar — stored on the video at publish, or resolved from
+    /// the profile we already know. Never the video's own thumbnail.
+    private var channelAvatarURL: String? {
+        guard let video else { return nil }
+        return app.authorAvatarURL(forChannel: video.channel, stored: video.authorAvatarURL)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -53,7 +66,9 @@ struct WatchingMadeleineView: View {
                             guard let next = nextVideo(from: video.id) else { return }
                             app.playVideo(next.id)
                             playerModel.load(urlString: next.videoURL, autoplay: true)
-                        }
+                        },
+                        onOpenComments: { app.openComments(for: video.id) },
+                        onDelete: { app.requestDeleteVideo(video.id) }
                     )
                     .frame(width: surfaceW, height: surfaceH)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -106,7 +121,28 @@ struct WatchingMadeleineView: View {
         .onAppear {
             playerModel.load(urlString: video?.videoURL, autoplay: true)
             playerModel.showControls()
+            playerModel.onEnded = { [weak app] in
+                guard let app, let current = app.watchingVideoID,
+                      let next = nextVideo(from: current) else { return }
+                app.playVideo(next.id)
+                playerModel.load(urlString: next.videoURL, autoplay: true)
+            }
         }
+        .sheet(isPresented: Binding(
+            get: { app.commentingPostID != nil },
+            set: { if !$0 { app.closeComments() } }
+        )) {
+            CommentsSheet().environmentObject(app)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.editingVideoID != nil },
+            set: { if !$0 { app.closeVideoDetails() } }
+        )) {
+            if let id = app.editingVideoID {
+                VideoDetailsSheet(target: .published(id)).environmentObject(app)
+            }
+        }
+        .videoDeletionConfirmations(enabled: !app.showProfile)
         .onChange(of: app.watchingVideoID) { _, _ in
             playerModel.load(urlString: video?.videoURL, autoplay: true)
         }
@@ -157,41 +193,60 @@ struct WatchingMadeleineView: View {
                 HStack(spacing: 12) {
                     Button {
                         if let channel = video?.channel {
-                            app.openUserProfile(handle: channel, avatarURL: video?.thumbURL)
+                            app.openUserProfile(handle: channel, avatarURL: channelAvatarURL)
                         }
                     } label: {
                         HStack(spacing: 12) {
                             UserAvatar(size: 40,
-                                       letter: String((video?.channel ?? "?").prefix(1)),
-                                       imageURL: video?.thumbURL)
+                                       gradient: app.avatarGradient(forHandle: video?.channel ?? ""),
+                                       letter: String((video?.channel ?? "?").prefix(1)).uppercased(),
+                                       imageURL: channelAvatarURL,
+                                       imageData: video?.authorAvatarData)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(video?.channel ?? "channel")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.white)
-                                Text(app.subscriberLabel(for: video?.channel ?? "channel"))
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(GGColor.textTertiary)
+                                // Subscribers are followers. When we know of no
+                                // real number we say nothing instead of guessing.
+                                if let subscribers = app.subscriberLabel(for: video?.channel ?? "") {
+                                    Text(subscribers)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(GGColor.textTertiary)
+                                }
                             }
                         }
                     }
                     .buttonStyle(.plain)
                     Spacer()
-                    Button {
-                        if let channel = video?.channel {
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                app.toggleSubscribe(channel)
-                            }
+                    if isOwnVideo {
+                        Button {
+                            if let id = video?.id { app.editVideoDetails(id) }
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .background(Capsule().fill(Color.white.opacity(0.14)))
                         }
-                    } label: {
-                        let subscribed = app.isSubscribed(video?.channel ?? "")
-                        Text(subscribed ? "Subscribed" : "Subscribe")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(subscribed ? .white : .black)
-                            .padding(.horizontal, 16).padding(.vertical, 8)
-                            .background(Capsule().fill(subscribed ? Color.white.opacity(0.14) : Color.white))
+                        .buttonStyle(SoftPressStyle())
+                    } else {
+                        Button {
+                            if let channel = video?.channel {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    app.toggleSubscribe(channel)
+                                }
+                            }
+                        } label: {
+                            let subscribed = app.isSubscribed(video?.channel ?? "")
+                            Text(subscribed ? "Subscribed" : "Subscribe")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(subscribed ? .white : .black)
+                                .padding(.horizontal, 16).padding(.vertical, 8)
+                                .background(Capsule().fill(subscribed ? Color.white.opacity(0.14) : Color.white))
+                        }
+                        .buttonStyle(SoftPressStyle())
                     }
-                    .buttonStyle(SoftPressStyle())
                 }
                 .padding(.horizontal, 16)
 
@@ -200,12 +255,16 @@ struct WatchingMadeleineView: View {
                         if let id = video?.id {
                             actionChip(
                                 icon: (video?.liked == true) ? "hand.thumbsup.fill" : "hand.thumbsup",
-                                title: formatCount(video?.likes ?? 0)
+                                title: (video?.likes ?? 0) > 0 ? formatCount(video?.likes ?? 0) : "Like"
                             ) { app.toggleVideoLike(id) }
                             actionChip(
                                 icon: app.isVideoDisliked(id) ? "hand.thumbsdown.fill" : "hand.thumbsdown",
                                 title: ""
                             ) { app.toggleVideoDislike(id) }
+                            actionChip(
+                                icon: "bubble.right",
+                                title: commentCount > 0 ? formatCount(commentCount) : "Comment"
+                            ) { app.openComments(for: id) }
                             actionChip(
                                 icon: (video?.saved == true) ? "bookmark.fill" : "bookmark",
                                 title: video?.saved == true ? "Saved" : "Save"
@@ -219,8 +278,14 @@ struct WatchingMadeleineView: View {
                                 icon: app.isVideoDownloaded(id) ? "checkmark.circle.fill" : "arrow.down.circle",
                                 title: app.isVideoDownloaded(id) ? "Downloaded" : "Download"
                             ) { app.toggleVideoDownload(id) }
-                            actionChip(icon: "flag", title: "Report") {
-                                app.reportVideo(id)
+                            if isOwnVideo {
+                                actionChip(icon: "trash", title: "Delete") {
+                                    app.requestDeleteVideo(id)
+                                }
+                            } else {
+                                actionChip(icon: "flag", title: "Report") {
+                                    app.reportVideo(id)
+                                }
                             }
                         }
                     }
@@ -247,26 +312,14 @@ struct WatchingMadeleineView: View {
                     }
                     .padding(14)
                     .liquidGlass(cornerRadius: 18, interactive: true)
+                    // Without this the glass background's own bounds let the
+                    // button swallow taps meant for the action chips above it.
+                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 .buttonStyle(SoftPressStyle())
                 .padding(.horizontal, 16)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Description")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text(descriptionCopy)
-                        .font(.system(size: 13))
-                        .foregroundStyle(GGColor.textSecondary)
-                        .lineSpacing(3)
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                )
-                .padding(.horizontal, 16)
+                descriptionBlock
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Up next")
@@ -295,8 +348,10 @@ struct WatchingMadeleineView: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 UserAvatar(size: 30,
-                           letter: String((video?.channel ?? "S").prefix(1)),
-                           imageURL: video?.thumbURL)
+                           gradient: app.avatarGradient(forHandle: video?.channel ?? ""),
+                           letter: String((video?.channel ?? "S").prefix(1)).uppercased(),
+                           imageURL: channelAvatarURL,
+                           imageData: video?.authorAvatarData)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(video?.title ?? "Untitled")
                         .font(.system(size: 13, weight: .semibold))
@@ -428,14 +483,61 @@ struct WatchingMadeleineView: View {
         app.videos.filter { $0.id != video?.id }
     }
 
-    private var descriptionCopy: String {
-        """
-        \(video?.title ?? "This video") — filmed and edited for GojoGo Watch.
+    /// The loaded thread if we have it, otherwise the server's count — so the
+    /// chip reads right before anyone opens the sheet.
+    private var commentCount: Int {
+        guard let video else { return 0 }
+        return app.commentsByPost[video.id]?.count ?? video.commentCount
+    }
 
-        In this episode we dig into craft, tools, and the messy middle of making things. Chapters in description. Sources linked by Madeleine if you ask.
+    /// The author's own description. Nothing is written on their behalf — an
+    /// empty one either invites the owner to add it or is simply absent.
+    @ViewBuilder
+    private var descriptionBlock: some View {
+        let text = video?.details.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !text.isEmpty || isOwnVideo {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Description")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    if !text.isEmpty {
+                        Button(descriptionExpanded ? "Less" : "More") {
+                            withAnimation(.easeOut(duration: 0.2)) { descriptionExpanded.toggle() }
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(GGColor.textSecondary)
+                    }
+                }
 
-        #gojogo #watch #longform
-        """
+                if text.isEmpty {
+                    Button {
+                        if let id = video?.id { app.editVideoDetails(id) }
+                    } label: {
+                        Text("No description yet — add one so viewers know what this is.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text(text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .lineSpacing(3)
+                        .lineLimit(descriptionExpanded ? nil : 3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+            .padding(.horizontal, 16)
+        }
     }
 
     private func actionChip(icon: String, title: String, action: @escaping () -> Void = {}) -> some View {
@@ -455,6 +557,7 @@ struct WatchingMadeleineView: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 14).padding(.vertical, 9)
         .background(Capsule().fill(Color.white.opacity(0.1)))
+        .contentShape(Capsule())
     }
 
     private func relatedRow(_ item: VideoItem) -> some View {
