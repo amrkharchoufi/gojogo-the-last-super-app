@@ -102,7 +102,9 @@ final class APIClient {
     }
 
     /// Presign + direct S3 PUT. Returns the public URL to reference in posts/stories.
-    func uploadMedia(_ data: Data, contentType: String) async throws -> String {
+    /// `onProgress` is 0…1 for the PUT body (not the presign round-trip).
+    func uploadMedia(_ data: Data, contentType: String,
+                     onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> String {
         let presign: PresignDTO = try await post("/v1/media/presign", body: PresignBody(contentType: contentType))
         guard let url = URL(string: presign.uploadUrl) else {
             throw APIError.http(status: -1, message: "Bad upload URL")
@@ -115,11 +117,13 @@ final class APIClient {
         if let cacheControl = presign.cacheControl {
             put.setValue(cacheControl, forHTTPHeaderField: "Cache-Control")
         }
-        let (_, response) = try await URLSession.shared.upload(for: put, from: data)
+        let delegate = onProgress.map { UploadProgressDelegate(onProgress: $0) }
+        let (_, response) = try await URLSession.shared.upload(for: put, from: data, delegate: delegate)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw APIError.http(status: (response as? HTTPURLResponse)?.statusCode ?? -1,
                                 message: "Media upload failed")
         }
+        onProgress?(1)
         return presign.publicUrl
     }
 
@@ -131,6 +135,22 @@ final class APIClient {
             return "image/heic"
         }
         return "image/jpeg"
+    }
+}
+
+/// Forwards upload byte progress to a callback. Kept private to APIClient.
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    private let onProgress: @Sendable (Double) -> Void
+
+    init(onProgress: @escaping @Sendable (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
+                    totalBytesExpectedToSend: Int64) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        onProgress(min(1, Double(totalBytesSent) / Double(totalBytesExpectedToSend)))
     }
 }
 

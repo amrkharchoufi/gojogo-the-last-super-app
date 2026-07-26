@@ -239,6 +239,8 @@ final class AppState: ObservableObject {
     @Published var shortsNextBefore: String? = nil
     @Published var watchLoadingMore: Bool = false
     @Published var shortsLoadingMore: Bool = false
+    /// Local video/short ids currently being uploaded — blocks double-create.
+    var videoPublishInFlight: Set<UUID> = []
     /// Profiles the user turned notifications on for.
     @Published var notifyHandles: Set<String> = []
     /// Follower counts learned from real profile fetches, keyed by lowercased
@@ -2099,6 +2101,10 @@ final class AppState: ObservableObject {
     }
 
     func openComments(for postID: UUID) {
+        // One drawer under the player — Madeleine yields to comments.
+        if showWatching, watchingWithMadeleine {
+            watchingWithMadeleine = false
+        }
         commentingPostID = postID
         draftComment = ""
         if isVideoThread(postID) {
@@ -2229,6 +2235,7 @@ final class AppState: ObservableObject {
 
     func closeWatching() {
         LongFormOrientation.lock(.portrait)
+        if commentingPostID != nil { closeComments() }
         showWatching = false
         watchingVideoID = nil
         watchingWithMadeleine = false
@@ -2236,6 +2243,8 @@ final class AppState: ObservableObject {
     }
 
     func openMadeleineWhileWatching() {
+        // One drawer under the player — comments yield to Madeleine.
+        if commentingPostID != nil { closeComments() }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
             watchingWithMadeleine = true
         }
@@ -2446,7 +2455,8 @@ final class AppState: ObservableObject {
                               imageData: att.imageData,
                               videoURL: stored,
                               authorAvatarURL: user.avatarURL,
-                              likeCount: 0)
+                              likeCount: 0,
+                              publishState: .uploading(progress: 0))
             withAnimation { self.shorts.insert(short, at: 0) }
             // A short's caption rides in `title` — the server has no separate
             // body for one, so `description` stays empty.
@@ -2473,7 +2483,8 @@ final class AppState: ObservableObject {
                                   thumbData: att.imageData,
                                   videoURL: stored,
                                   authorAvatarURL: user.avatarURL,
-                                  likes: 0)
+                                  likes: 0,
+                                  publishState: .uploading(progress: 0))
             withAnimation { videos.insert(video, at: 0) }
             syncPublishVideo(localID: video.id, kind: "LONG_FORM",
                              title: resolvedTitle, description: details,

@@ -158,6 +158,7 @@ struct ShortCard: View {
     /// The line under the handle: followers when we know them, otherwise how
     /// many people have actually watched, otherwise just when it went up.
     private var channelSubtitle: String {
+        if let status = short.publishState.statusLabel { return status }
         var parts: [String] = []
         if isOwn {
             parts.append("you")
@@ -173,6 +174,60 @@ struct ShortCard: View {
 
     private var commentCount: Int {
         app.commentsByPost[shortID]?.count ?? 0
+    }
+
+    @ViewBuilder
+    private var shortPublishBanner: some View {
+        switch short.publishState {
+        case .uploading(let progress):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.up.circle")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(short.publishState.statusLabel ?? "Uploading…")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.22))
+                        Capsule()
+                            .fill(Color.white)
+                            .frame(width: max(4, geo.size.width * max(0, min(1, progress))))
+                    }
+                }
+                .frame(height: 3)
+            }
+            .foregroundStyle(.white)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.black.opacity(0.55))
+            )
+        case .failed:
+            Button {
+                app.retryPublishVideo(shortID)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Upload failed · Tap to retry")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.black.opacity(0.55))
+                )
+            }
+            .buttonStyle(.plain)
+        case .published:
+            EmptyView()
+        }
     }
 
     private var hasVideo: Bool {
@@ -234,11 +289,25 @@ struct ShortCard: View {
                 }
                 .allowsHitTesting(false)
 
+                if short.publishState.isPending {
+                    VStack {
+                        shortPublishBanner
+                            .padding(.top, 56)
+                            .padding(.horizontal, 16)
+                        Spacer(minLength: 0)
+                    }
+                    .zIndex(5)
+                }
+
                 Color.clear
                     .contentShape(Rectangle())
                     .overlay(
                         ShortTapOverlay(
                             onSingleTap: {
+                                if case .failed = short.publishState {
+                                    app.retryPublishVideo(shortID)
+                                    return
+                                }
                                 guard hasVideo, isActive else { return }
                                 togglePauseInstant()
                             },

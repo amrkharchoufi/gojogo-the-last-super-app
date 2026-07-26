@@ -622,13 +622,17 @@ extension CachedVideo {
     }
 
     func asDomain() -> VideoItem {
-        VideoItem(id: id, title: title, channel: channel, details: details ?? "",
+        let pendingLocal = videoURL?.hasPrefix(VideoLibrary.prefix) == true
+        return VideoItem(id: id, title: title, channel: channel, details: details ?? "",
                   duration: duration, thumbGradient: SessionColor.colors(from: thumbGradient),
                   thumbURL: thumbURL, thumbData: thumbData, videoURL: videoURL,
                   authorAvatarURL: authorAvatarURL, authorAvatarData: authorAvatarData,
                   likes: likes, liked: liked, saved: saved,
                   views: views ?? 0, commentCount: commentCount ?? 0,
-                  publishedAt: publishedAt ?? Date())
+                  publishedAt: publishedAt ?? Date(),
+                  publishState: pendingLocal
+                    ? .failed(message: "Not uploaded yet")
+                    : .published)
     }
 }
 
@@ -643,12 +647,16 @@ extension CachedShort {
     }
 
     func asDomain() -> Short {
-        Short(id: id, channel: channel, caption: caption,
+        let pendingLocal = videoURL?.hasPrefix(VideoLibrary.prefix) == true
+        return Short(id: id, channel: channel, caption: caption,
               gradient: SessionColor.colors(from: gradient),
               imageURL: imageURL, imageData: imageData, videoURL: videoURL,
               authorAvatarURL: authorAvatarURL, authorAvatarData: authorAvatarData,
               liked: liked, bookmarked: bookmarked, following: following, likeCount: likeCount,
-              views: views ?? 0, publishedAt: publishedAt ?? Date())
+              views: views ?? 0, publishedAt: publishedAt ?? Date(),
+              publishState: pendingLocal
+                ? .failed(message: "Not uploaded yet")
+                : .published)
     }
 }
 

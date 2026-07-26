@@ -14,6 +14,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         URLCache.shared = URLCache(memoryCapacity: 64 * 1024 * 1024,
                                    diskCapacity: 512 * 1024 * 1024)
         UNUserNotificationCenter.current().delegate = self
+        // Every SwiftUI ScrollView/List is backed by UIScrollView — make drag
+        // dismiss the keyboard app-wide, including sheets.
+        UIScrollView.appearance().keyboardDismissMode = .interactive
+        DispatchQueue.main.async {
+            KeyboardDismissInstaller.shared.installIfNeeded()
+        }
         return true
     }
 
@@ -72,6 +78,7 @@ struct GojoGoApp: App {
                 .environmentObject(appState)
                 .preferredColorScheme(appState.appTheme.colorScheme)
                 .tint(GGColor.accent)
+                .dismissesKeyboard()
                 .animation(.easeInOut(duration: 0.3), value: appState.appTheme)
         }
     }

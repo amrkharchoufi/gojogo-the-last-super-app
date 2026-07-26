@@ -154,8 +154,10 @@ struct MainAppView: View {
         )) {
             CloseFriendsView().environmentObject(app)
         }
+        // The long-form player is a fullScreenCover and owns its own comments
+        // drawer — presenting from here while it's up dismisses the player.
         .sheet(isPresented: Binding(
-            get: { app.commentingPostID != nil },
+            get: { app.commentingPostID != nil && !app.showWatching },
             set: { if !$0 { app.closeComments() } }
         )) {
             CommentsSheet().environmentObject(app)
@@ -293,6 +295,9 @@ struct RootView: View {
                 // A backgrounded socket is dropped by API Gateway well before the
                 // user notices — re-dial and re-sync the moment we're back.
                 app.worldEnterForeground()
+                if app.backendConnected, app.phase == .app {
+                    Task { await app.refreshWatch() }
+                }
             @unknown default:
                 break
             }

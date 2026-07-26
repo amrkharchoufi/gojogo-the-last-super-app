@@ -42,7 +42,36 @@ extension AppState {
             shortsNextBefore = remoteShorts.nextBefore
         }
         adoptSubscriberCounts()
+        // Clips authored while the watch API was down (or before it shipped)
+        // sit in the session cache forever unless we retry. Only `gojovideo:`
+        // refs — never sample/bundle URLs.
+        flushPendingVideoPublishes()
         schedulePersist()
+    }
+
+    /// Re-attempts S3 + `POST /v1/videos` for any on-device clip the server has
+    /// never seen. Safe to call repeatedly: in-flight ids and live ids are skipped.
+    func flushPendingVideoPublishes() {
+        guard backendConnected else { return }
+        for short in shorts {
+            guard !WatchStore.shared.isLive(short.id),
+                  let ref = short.videoURL,
+                  ref.hasPrefix(VideoLibrary.prefix) else { continue }
+            syncPublishVideo(localID: short.id, kind: "SHORT",
+                             title: short.caption.isEmpty ? nil : short.caption,
+                             description: nil,
+                             thumbData: short.imageData, videoRef: ref,
+                             durationSeconds: nil)
+        }
+        for video in videos {
+            guard !WatchStore.shared.isLive(video.id),
+                  let ref = video.videoURL,
+                  ref.hasPrefix(VideoLibrary.prefix) else { continue }
+            syncPublishVideo(localID: video.id, kind: "LONG_FORM",
+                             title: video.title, description: video.details,
+                             thumbData: video.thumbData, videoRef: ref,
+                             durationSeconds: Self.durationSeconds(video.duration))
+        }
     }
 
     /// Server truth wins for anything the server knows about; a purely local
@@ -123,36 +152,51 @@ extension AppState {
     // MARK: Publishing
 
     /// Uploads the movie (and its cover) and swaps the optimistic local item
-    /// for the server's. The local id is kept only until the server answers —
-    /// after that every mutation addresses the real one.
+    /// for the server's. Progress is written onto the local row so the publisher
+    /// sees "Uploading…" — not a false "already live" state — until create returns.
     func syncPublishVideo(localID: UUID, kind: String, title: String?, description: String?,
                           thumbData: Data?, videoRef: String?, durationSeconds: Int?) {
-        guard backendConnected else { return }
+        guard backendConnected else {
+            setVideoPublishState(localID, kind: kind,
+                                 .failed(message: "Sign in to publish"))
+            return
+        }
+        guard videoPublishInFlight.insert(localID).inserted else { return }
         Task {
+            defer { videoPublishInFlight.remove(localID) }
+            setVideoPublishState(localID, kind: kind, .uploading(progress: 0))
             do {
-                guard let videoUrl = try await uploadVideoFile(videoRef) else { return }
+                guard let videoUrl = try await uploadVideoFile(videoRef, localID: localID, kind: kind) else {
+                    setVideoPublishState(localID, kind: kind,
+                                         .failed(message: "Could not read the video file"))
+                    return
+                }
+                setVideoPublishState(localID, kind: kind, .uploading(progress: 0.92))
                 let thumbUrl = try await uploadThumbnail(thumbData)
+                setVideoPublishState(localID, kind: kind, .uploading(progress: 0.97))
                 let dto = try await WatchStore.shared.create(
                     kind: kind, title: title, description: description,
                     thumbUrl: thumbUrl, videoUrl: videoUrl, durationSeconds: durationSeconds)
                 if kind == "SHORT" {
                     if let i = shorts.firstIndex(where: { $0.id == localID }) {
                         var merged = WatchStore.shared.mapShort(dto)
-                        // Keep the local poster bytes so the card doesn't blink
-                        // while the uploaded thumbnail is fetched back.
                         merged.imageData = shorts[i].imageData
                         merged.videoURL = shorts[i].videoURL ?? merged.videoURL
+                        merged.publishState = .published
                         shorts[i] = merged
                     }
                 } else if let i = videos.firstIndex(where: { $0.id == localID }) {
                     var merged = WatchStore.shared.mapVideo(dto)
                     merged.thumbData = videos[i].thumbData
                     merged.videoURL = videos[i].videoURL ?? merged.videoURL
+                    merged.publishState = .published
                     videos[i] = merged
                 }
                 adoptSubscriberCounts()
                 schedulePersist()
             } catch {
+                setVideoPublishState(localID, kind: kind,
+                                     .failed(message: error.localizedDescription))
                 #if DEBUG
                 print("Video publish sync failed: \(error.localizedDescription)")
                 #endif
@@ -160,16 +204,57 @@ extension AppState {
         }
     }
 
+    /// Re-runs S3 + create for a local clip that failed (or never left the device).
+    func retryPublishVideo(_ id: UUID) {
+        if let short = shorts.first(where: { $0.id == id }) {
+            guard short.publishState.isPending || !WatchStore.shared.isLive(id) else { return }
+            syncPublishVideo(localID: short.id, kind: "SHORT",
+                             title: short.caption.isEmpty ? nil : short.caption,
+                             description: nil,
+                             thumbData: short.imageData, videoRef: short.videoURL,
+                             durationSeconds: nil)
+            return
+        }
+        guard let video = videos.first(where: { $0.id == id }) else { return }
+        guard video.publishState.isPending || !WatchStore.shared.isLive(id) else { return }
+        syncPublishVideo(localID: video.id, kind: "LONG_FORM",
+                         title: video.title, description: video.details,
+                         thumbData: video.thumbData, videoRef: video.videoURL,
+                         durationSeconds: Self.durationSeconds(video.duration))
+    }
+
+    private func setVideoPublishState(_ id: UUID, kind: String, _ state: VideoPublishState) {
+        if kind == "SHORT" {
+            if let i = shorts.firstIndex(where: { $0.id == id }) {
+                shorts[i].publishState = state
+            }
+        } else if let i = videos.firstIndex(where: { $0.id == id }) {
+            videos[i].publishState = state
+        }
+    }
+
     /// Reads a durable local movie ref off disk and PUTs it to S3. A ref that
     /// is already an https URL is passed straight through.
-    private func uploadVideoFile(_ ref: String?) async throws -> String? {
+    private func uploadVideoFile(_ ref: String?, localID: UUID, kind: String) async throws -> String? {
         guard let ref, !ref.isEmpty else { return nil }
         if ref.hasPrefix("https://") || ref.hasPrefix("http://") { return ref }
-        guard let resolved = VideoLibrary.resolve(ref),
-              let fileURL = URL(string: resolved), fileURL.isFileURL,
-              let data = try? Data(contentsOf: fileURL) else { return nil }
+        guard let resolved = VideoLibrary.resolve(ref) else { return nil }
+        let fileURL: URL
+        if let parsed = URL(string: resolved), parsed.isFileURL {
+            fileURL = parsed
+        } else if resolved.hasPrefix("/") {
+            fileURL = URL(fileURLWithPath: resolved)
+        } else {
+            return nil
+        }
+        let data = try Data(contentsOf: fileURL)
         let type = fileURL.pathExtension.lowercased() == "mov" ? "video/quicktime" : "video/mp4"
-        return try await APIClient.shared.uploadMedia(data, contentType: type)
+        return try await APIClient.shared.uploadMedia(data, contentType: type) { [weak self] progress in
+            Task { @MainActor in
+                self?.setVideoPublishState(localID, kind: kind,
+                                           .uploading(progress: min(0.9, progress * 0.9)))
+            }
+        }
     }
 
     private func uploadThumbnail(_ data: Data?) async throws -> String? {

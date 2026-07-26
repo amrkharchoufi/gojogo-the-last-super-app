@@ -94,10 +94,18 @@ struct WatchingMadeleineView: View {
 
                         ZStack(alignment: .bottom) {
                             videoDetailsScroll
-                                .opacity(app.watchingWithMadeleine ? 0.35 : 1)
-                                .allowsHitTesting(!app.watchingWithMadeleine)
+                                .opacity(detailsDimmed ? 0.35 : 1)
+                                .allowsHitTesting(!detailsDimmed)
 
-                            if app.watchingWithMadeleine {
+                            if showCommentsDrawer {
+                                Color.black.opacity(0.25)
+                                    .ignoresSafeArea(edges: .bottom)
+                                    .onTapGesture { app.closeComments() }
+                                    .transition(.opacity)
+
+                                commentsDrawer
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                            } else if app.watchingWithMadeleine {
                                 Color.black.opacity(0.25)
                                     .ignoresSafeArea(edges: .bottom)
                                     .onTapGesture { dismissMadeleineDrawer() }
@@ -117,6 +125,7 @@ struct WatchingMadeleineView: View {
         }
         .background(GGColor.bg.ignoresSafeArea())
         .animation(.spring(response: 0.42, dampingFraction: 0.88), value: app.watchingWithMadeleine)
+        .animation(.spring(response: 0.42, dampingFraction: 0.88), value: app.commentingPostID)
         .preferredColorScheme(.dark)
         .onAppear {
             playerModel.load(urlString: video?.videoURL, autoplay: true)
@@ -127,12 +136,6 @@ struct WatchingMadeleineView: View {
                 app.playVideo(next.id)
                 playerModel.load(urlString: next.videoURL, autoplay: true)
             }
-        }
-        .sheet(isPresented: Binding(
-            get: { app.commentingPostID != nil },
-            set: { if !$0 { app.closeComments() } }
-        )) {
-            CommentsSheet().environmentObject(app)
         }
         .sheet(isPresented: Binding(
             get: { app.editingVideoID != nil },
@@ -157,6 +160,9 @@ struct WatchingMadeleineView: View {
             playerModel.shutdown()
         }
     }
+
+    private var showCommentsDrawer: Bool { app.commentingPostID != nil }
+    private var detailsDimmed: Bool { showCommentsDrawer || app.watchingWithMadeleine }
 
     private func nextVideo(from id: UUID) -> VideoItem? {
         guard let i = app.videos.firstIndex(where: { $0.id == id }) else {
@@ -340,6 +346,41 @@ struct WatchingMadeleineView: View {
             }
         }
         .background(Color.black)
+    }
+
+    // MARK: - Comments drawer (under video)
+
+    /// Same slot as Madeleine — keeps the player on screen instead of stacking
+    /// another system sheet on top of the watching fullScreenCover.
+    private var commentsDrawer: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.white.opacity(0.22))
+                .frame(width: 36, height: 4)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+
+            CommentsSheet(embedded: true)
+                .environmentObject(app)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            UnevenRoundedRectangle(
+                cornerRadii: .init(topLeading: 22, bottomLeading: 0, bottomTrailing: 0, topTrailing: 22),
+                style: .continuous
+            )
+            .fill(GGColor.bg)
+            .ignoresSafeArea(edges: .bottom)
+        )
+        .gesture(
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in
+                    if value.translation.height > 80 {
+                        app.closeComments()
+                    }
+                }
+        )
     }
 
     // MARK: - Madeleine drawer (under video)

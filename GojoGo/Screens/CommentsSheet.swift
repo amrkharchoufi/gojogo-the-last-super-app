@@ -3,6 +3,9 @@ import SwiftUI
 struct CommentsSheet: View {
     @EnvironmentObject var app: AppState
     @FocusState private var focused: Bool
+    /// When true, renders as an in-view panel (no sheet detents). Used under
+    /// the long-form player so comments don't fight the `fullScreenCover`.
+    var embedded: Bool = false
 
     private var postID: UUID? { app.commentingPostID }
     private var comments: [Comment] {
@@ -11,6 +14,19 @@ struct CommentsSheet: View {
     }
 
     var body: some View {
+        Group {
+            if embedded {
+                panel
+            } else {
+                panel
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+        }
+        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { focused = true } }
+    }
+
+    private var panel: some View {
         NavigationStack {
             ZStack {
                 GGColor.bg.ignoresSafeArea()
@@ -57,9 +73,6 @@ struct CommentsSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { focused = true } }
     }
 
     private var canSend: Bool {

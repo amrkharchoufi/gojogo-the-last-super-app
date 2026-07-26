@@ -87,6 +87,17 @@ struct WatchView: View {
                         withAnimation(.ggTab) { app.watchSubFeed = all[idx - 1] }
                     }
                 })
+        // Keep others' feeds current while this tab is open — publish only lands
+        // on their device after a refresh (no push yet).
+        .task(id: app.backendConnected) {
+            guard app.backendConnected else { return }
+            await app.refreshWatch()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled, app.backendConnected else { continue }
+                await app.refreshWatch()
+            }
+        }
     }
 }
 
@@ -112,22 +123,52 @@ struct VideoCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                app.playVideo(live.id)
+                if case .failed = live.publishState {
+                    app.retryPublishVideo(live.id)
+                } else {
+                    app.playVideo(live.id)
+                }
             } label: {
-                ZStack(alignment: .bottomTrailing) {
+                ZStack(alignment: .bottom) {
                     MediaImage(url: live.thumbURL, data: live.thumbData, cornerRadius: 0)
                         .frame(maxWidth: .infinity)
                         .frame(height: thumbHeight)
                         .clipped()
                         .background(GGColor.ink(0.06))
+                        .opacity(live.publishState.isPending ? 0.85 : 1)
 
-                    Text(live.duration)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.black.opacity(0.82)))
-                        .padding(8)
+                    if case .uploading(let progress) = live.publishState {
+                        VStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            publishBadge(text: live.meta, systemImage: "arrow.up.circle")
+                                .padding(10)
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Rectangle().fill(Color.white.opacity(0.2))
+                                    Rectangle()
+                                        .fill(Color.white)
+                                        .frame(width: max(4, geo.size.width * max(0, min(1, progress))))
+                                }
+                            }
+                            .frame(height: 3)
+                        }
+                    } else if case .failed = live.publishState {
+                        VStack {
+                            Spacer(minLength: 0)
+                            publishBadge(text: "Upload failed · Tap to retry",
+                                         systemImage: "exclamationmark.triangle")
+                                .padding(10)
+                        }
+                    } else {
+                        Text(live.duration)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.black.opacity(0.82)))
+                            .padding(8)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    }
                 }
             }
             .buttonStyle(.plain)
@@ -149,7 +190,11 @@ struct VideoCard: View {
                 .buttonStyle(.plain)
 
                 Button {
-                    app.playVideo(live.id)
+                    if case .failed = live.publishState {
+                        app.retryPublishVideo(live.id)
+                    } else {
+                        app.playVideo(live.id)
+                    }
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(live.title)
@@ -161,7 +206,9 @@ struct VideoCard: View {
 
                         Text(live.meta)
                             .font(.system(size: 13))
-                            .foregroundStyle(GGColor.ink(0.55))
+                            .foregroundStyle(live.publishState.isPending
+                                             ? GGColor.textPrimary.opacity(0.7)
+                                             : GGColor.ink(0.55))
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                     }
@@ -187,8 +234,29 @@ struct VideoCard: View {
         }
     }
 
+    private func publishBadge(text: String, systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+            Text(text)
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(Color.black.opacity(0.72)))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     @ViewBuilder
     private var menuItems: some View {
+        if case .failed = live.publishState {
+            Button {
+                app.retryPublishVideo(live.id)
+            } label: {
+                Label("Retry upload", systemImage: "arrow.clockwise")
+            }
+        }
         Button {
             app.playVideo(live.id)
         } label: {

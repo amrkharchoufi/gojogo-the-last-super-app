@@ -348,9 +348,36 @@ struct PostMediaItem: Identifiable, Equatable {
     }
 }
 
-/// A long-form (Watch) video. Everything shown about it is authored at publish
-/// time or counted locally — there is no video service yet, so nothing here is
-/// generated to look plausible.
+/// Local upload lifecycle for a Watch clip. Remote / sample items stay
+/// `.published`; the publisher's optimistic row moves uploading → published
+/// (or failed) so "instant publish" isn't mistaken for being live for others.
+enum VideoPublishState: Equatable {
+    case published
+    case uploading(progress: Double)
+    case failed(message: String)
+
+    var isPending: Bool {
+        switch self {
+        case .published: return false
+        case .uploading, .failed: return true
+        }
+    }
+
+    var statusLabel: String? {
+        switch self {
+        case .published:
+            return nil
+        case .uploading(let progress):
+            let pct = Int((max(0, min(1, progress)) * 100).rounded())
+            return pct > 0 ? "Uploading \(pct)%…" : "Uploading…"
+        case .failed:
+            return "Upload failed · Tap to retry"
+        }
+    }
+}
+
+/// A long-form (Watch) video. Authored fields come from publish; counts come
+/// from the live `watch` module when the id is server-backed.
 struct VideoItem: Identifiable {
     let id: UUID
     var title: String
@@ -373,23 +400,27 @@ struct VideoItem: Identifiable {
     var views: Int
     var commentCount: Int
     let publishedAt: Date
+    var publishState: VideoPublishState
 
     init(id: UUID = UUID(), title: String, channel: String, details: String = "",
          duration: String, thumbGradient: [Color], thumbURL: String? = nil,
          thumbData: Data? = nil, videoURL: String? = nil,
          authorAvatarURL: String? = nil, authorAvatarData: Data? = nil,
          likes: Int = 0, liked: Bool = false, saved: Bool = false,
-         views: Int = 0, commentCount: Int = 0, publishedAt: Date = Date()) {
+         views: Int = 0, commentCount: Int = 0, publishedAt: Date = Date(),
+         publishState: VideoPublishState = .published) {
         self.id = id; self.title = title; self.channel = channel; self.details = details
         self.duration = duration; self.thumbGradient = thumbGradient
         self.thumbURL = thumbURL; self.thumbData = thumbData; self.videoURL = videoURL
         self.authorAvatarURL = authorAvatarURL; self.authorAvatarData = authorAvatarData
         self.likes = likes; self.liked = liked; self.saved = saved
         self.views = views; self.commentCount = commentCount; self.publishedAt = publishedAt
+        self.publishState = publishState
     }
 
-    /// "1.2K views · 3h" — built from what we actually counted.
+    /// "1.2K views · 3h" — or upload status while the publisher's copy is still syncing.
     var meta: String {
+        if let status = publishState.statusLabel { return status }
         let viewPart = views == 1 ? "1 view" : "\(formatCount(views)) views"
         return "\(viewPart) · \(RelativeTime.since(publishedAt))"
     }
@@ -413,13 +444,15 @@ struct Short: Identifiable {
     var likeCount: Int
     var views: Int
     let publishedAt: Date
+    var publishState: VideoPublishState
 
     init(id: UUID = UUID(), channel: String, caption: String,
          gradient: [Color], imageURL: String? = nil, imageData: Data? = nil,
          videoURL: String? = nil,
          authorAvatarURL: String? = nil, authorAvatarData: Data? = nil,
          liked: Bool = false, bookmarked: Bool = false, following: Bool = false,
-         likeCount: Int = 0, views: Int = 0, publishedAt: Date = Date()) {
+         likeCount: Int = 0, views: Int = 0, publishedAt: Date = Date(),
+         publishState: VideoPublishState = .published) {
         self.id = id; self.channel = channel
         self.caption = caption; self.gradient = gradient; self.imageURL = imageURL
         self.imageData = imageData; self.videoURL = videoURL
@@ -427,6 +460,7 @@ struct Short: Identifiable {
         self.liked = liked; self.bookmarked = bookmarked; self.following = following
         self.likeCount = likeCount
         self.views = views; self.publishedAt = publishedAt
+        self.publishState = publishState
     }
 }
 
