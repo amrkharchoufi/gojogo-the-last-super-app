@@ -72,7 +72,6 @@ struct StoriesBrowserView: View {
                         .foregroundStyle(GGColor.blue)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         // Present viewer on top of this sheet — do not dismiss back to Home.
         .fullScreenCover(isPresented: Binding(

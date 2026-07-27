@@ -45,6 +45,13 @@ struct GojoDeliveryView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(GGColor.sheetBG)
         }
+        .sheet(isPresented: $app.showMerchantPartner) {
+            MerchantPartnerView()
+                .environmentObject(app)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
         .sheet(isPresented: $app.showDeliveryAddressSheet) {
             DeliveryAddressSheet()
                 .environmentObject(app)
@@ -152,6 +159,10 @@ private struct DeliveryBrowseView: View {
                 Wordmark(size: 22, trailing: "delivery")
             }
             Spacer()
+            // Shown only to a restaurant's owner (restaurants are created in
+            // Gojo Admin, so there is nothing here for anyone else). Beside it,
+            // the courier prototype, still waiting on Phase 3 dispatch.
+            MerchantHeaderButton()
             PartnerHeaderButton(role: .courier)
         }
         .padding(.horizontal, 20)

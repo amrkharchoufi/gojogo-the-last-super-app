@@ -63,6 +63,13 @@ final class APIClient {
         _ = try await raw("DELETE", path, body: nil)
     }
 
+    /// DELETE that answers with the object it changed — a menu editor deletes a
+    /// dish and gets the whole restaurant back, so it re-renders from the
+    /// server's version rather than patching its own copy.
+    func deleteReturning<T: Decodable>(_ path: String) async throws -> T {
+        try await request("DELETE", path, body: nil)
+    }
+
     private func request<T: Decodable>(_ method: String, _ path: String, body: Data?) async throws -> T {
         let data = try await raw(method, path, body: body)
         return try decoder.decode(T.self, from: data)

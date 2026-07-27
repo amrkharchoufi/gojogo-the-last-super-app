@@ -42,7 +42,6 @@ struct CloseFriendsView: View {
                         .disabled(saving)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .task { await load() }
     }

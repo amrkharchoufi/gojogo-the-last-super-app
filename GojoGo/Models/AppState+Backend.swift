@@ -34,6 +34,7 @@ extension AppState {
             await refreshOwnCounts()
             await refreshEconomy()
             await refreshDelivery()
+            await refreshMerchantPartner()
             await connectMessaging()
             await refreshNotifications()
             enablePushNotifications()
@@ -564,8 +565,20 @@ extension AppState {
                     merged.imageData = imageData ?? slides.first?.imageData
                     merged.mediaItems = server.mediaItems.enumerated().map { index, item in
                         var item = item
-                        if index < slides.count { item.imageData = slides[index].imageData }
+                        if index < slides.count {
+                            item.imageData = slides[index].imageData
+                            // Keep the local playable ref if the server omitted video.
+                            if (item.videoURL == nil || item.videoURL?.isEmpty == true),
+                               let local = slides[index].videoURL, !local.isEmpty {
+                                item.videoURL = local
+                            }
+                        }
                         return item
+                    }
+                    if (merged.videoURL == nil || merged.videoURL?.isEmpty == true),
+                       let local = videoURL ?? slides.first(where: \.isVideo)?.videoURL,
+                       !local.isEmpty {
+                        merged.videoURL = local
                     }
                     posts[i] = merged
                 }
@@ -578,8 +591,26 @@ extension AppState {
         }
     }
 
+    /// Uploads a carousel slide. Video slides carry a poster (`imageData`) plus
+    /// the movie (`videoURL`) — both must go up, otherwise the post comes back
+    /// looking like a still photo.
     private func uploadSlide(imageData: Data?, videoURL: String?) async throws
         -> (imageUrl: String?, videoUrl: String?)? {
+        var imageUrl: String? = nil
+        var videoUrl: String? = nil
+
+        if let ref = videoURL, !ref.isEmpty {
+            if ref.hasPrefix("https://") || ref.hasPrefix("http://") {
+                videoUrl = ref
+            } else if let resolved = VideoLibrary.resolve(ref),
+                      let fileURL = URL(string: resolved), fileURL.isFileURL,
+                      let data = try? Data(contentsOf: fileURL) {
+                let type = fileURL.pathExtension.lowercased() == "mov"
+                    ? "video/quicktime" : "video/mp4"
+                videoUrl = try await APIClient.shared.uploadMedia(data, contentType: type)
+            }
+        }
+
         if let data = imageData {
             let type = APIClient.imageContentType(for: data)
             let payload: Data
@@ -591,23 +622,11 @@ extension AppState {
                 payload = data
             }
             let finalType = payload == data ? type : "image/jpeg"
-            let url = try await APIClient.shared.uploadMedia(payload, contentType: finalType)
-            return (imageUrl: url, videoUrl: nil)
+            imageUrl = try await APIClient.shared.uploadMedia(payload, contentType: finalType)
         }
-        if let ref = videoURL, !ref.isEmpty {
-            if ref.hasPrefix("https://") || ref.hasPrefix("http://") {
-                return (imageUrl: nil, videoUrl: ref)
-            }
-            if let resolved = VideoLibrary.resolve(ref),
-               let fileURL = URL(string: resolved), fileURL.isFileURL,
-               let data = try? Data(contentsOf: fileURL) {
-                let type = fileURL.pathExtension.lowercased() == "mov" ? "video/quicktime" : "video/mp4"
-                let url = try await APIClient.shared.uploadMedia(data, contentType: type)
-                return (imageUrl: nil, videoUrl: url)
-            }
-            return nil
-        }
-        return nil
+
+        if imageUrl == nil && videoUrl == nil { return nil }
+        return (imageUrl: imageUrl, videoUrl: videoUrl)
     }
 
     func syncFrameSeen(frameID: UUID) {

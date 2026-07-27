@@ -68,6 +68,14 @@ gojogo:
   economy:
     admin:
       token: ${ECONOMY_ADMIN_TOKEN:}
+  # Partner review (PartnerAdminController). /v1/partner/admin/** exists only
+  # while this token is set to 24+ characters; unset, those paths 404 and
+  # nobody can approve a merchant, so delivery can never gain a restaurant.
+  # Unlike the economy token this one is meant to stay set — approving partners
+  # is ongoing operational work, not a one-off wipe.
+  partner:
+    admin:
+      token: ${PARTNER_ADMIN_TOKEN:}
   # APNs push (activity notifications). All empty → push disabled (sender
   # no-ops). key-base64 is the base64 of the Apple .p8 token-auth key file.
   apns:

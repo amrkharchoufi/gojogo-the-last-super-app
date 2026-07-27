@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// App-wide keyboard helpers. Tap-outside is installed once on the key window
-/// (doesn't cancel button taps); scroll + a Done toolbar cover the rest.
+/// (doesn't cancel button taps); interactive scroll/swipe dismisses the rest.
 enum Keyboard {
     static func dismiss() {
         UIApplication.shared.sendAction(
@@ -12,9 +12,8 @@ enum Keyboard {
 }
 
 extension View {
-    /// Makes the keyboard dismissible for this subtree: interactive scroll
-    /// dismiss, and a Done button on the system keyboard toolbar (covers
-    /// number pads that have no Return key).
+    /// Makes the keyboard dismissible for this subtree via interactive scroll
+    /// (swipe down) and tap-outside. No keyboard accessory toolbar.
     func dismissesKeyboard() -> some View {
         modifier(DismissesKeyboardModifier())
     }
@@ -24,13 +23,6 @@ private struct DismissesKeyboardModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollDismissesKeyboard(.interactively)
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { Keyboard.dismiss() }
-                        .fontWeight(.semibold)
-                }
-            }
             .background(KeyboardDismissInstallerBridge())
     }
 }

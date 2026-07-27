@@ -106,6 +106,47 @@ class ApnsPushSender {
         }
     }
 
+    /**
+     * Best-effort push for something the platform itself decided — a partner
+     * approval or rejection. Push-only, like a chat message: there is no actor
+     * to render an activity row around, and the decision already lives on the
+     * application the user can open.
+     *
+     * @param type  the payload's {@code type}, which is how iOS routes the tap
+     * @param refId the object the tap should open, or null
+     */
+    void notifySystem(UUID recipientId, String title, String body, String type, UUID refId) {
+        if (!props.enabled() || keyBroken) return;
+        executor.submit(() -> {
+            try {
+                var devices = tokens.findByProfileId(recipientId);
+                if (devices.isEmpty()) return;
+                byte[] payload = systemPayload(title, body, type, refId);
+                String jwt = jwt();
+                for (DeviceToken device : devices) {
+                    send(device, jwt, payload);
+                }
+            } catch (Exception e) {
+                log.debug("APNs system push failed: {}", e.toString());
+            }
+        });
+    }
+
+    private byte[] systemPayload(String title, String body, String type, UUID refId)
+            throws Exception {
+        Map<String, Object> alert = new LinkedHashMap<>();
+        alert.put("title", title);
+        alert.put("body", body);
+        Map<String, Object> aps = new LinkedHashMap<>();
+        aps.put("alert", alert);
+        aps.put("sound", "default");
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("aps", aps);
+        root.put("type", type);
+        if (refId != null) root.put("refId", refId.toString());
+        return json.writeValueAsBytes(root);
+    }
+
     private byte[] messagePayload(String title, String body, UUID conversationId) throws Exception {
         Map<String, Object> alert = new LinkedHashMap<>();
         alert.put("title", title);

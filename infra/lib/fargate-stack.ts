@@ -54,6 +54,21 @@ export class GojoGoFargateStack extends cdk.Stack {
     const apnsSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'ApnsKey',
       'arn:aws:secretsmanager:us-east-1:578109959809:secret:gojogo/apns-key-cmCUid');
 
+    // Partner review (PartnerAdminController). Unlike the economy cleanup token
+    // — which is passed per-deploy precisely so a plain deploy turns cleanup
+    // back off — this one has to *persist*: approving merchants is ongoing work,
+    // and a deploy that quietly emptied it would take the review queue offline
+    // and, with it, any way for delivery to gain a restaurant. So it's a
+    // generated secret rather than context, which also keeps it out of the task
+    // definition in cleartext. Read it once with:
+    //   aws secretsmanager get-secret-value --secret-id gojogo/partner-admin-token \
+    //     --query SecretString --output text
+    const partnerAdminSecret = new secretsmanager.Secret(this, 'PartnerAdminToken', {
+      secretName: 'gojogo/partner-admin-token',
+      description: 'X-Partner-Admin-Token for /v1/partner/admin/** (KYC review)',
+      generateSecretString: { passwordLength: 48, excludePunctuation: true },
+    });
+
     // --- Roles -------------------------------------------------------------
     // Execution role: pulls the image + reads the container secrets at launch.
     const executionRole = new iam.Role(this, 'ExecutionRole', {
@@ -64,6 +79,7 @@ export class GojoGoFargateStack extends cdk.Stack {
     });
     props.database.secret!.grantRead(executionRole);
     apnsSecret.grantRead(executionRole);
+    partnerAdminSecret.grantRead(executionRole);
 
     // Task role: the app's own runtime permissions (was the App Runner instance role).
     const taskRole = new iam.Role(this, 'TaskRole', {
@@ -137,6 +153,7 @@ export class GojoGoFargateStack extends cdk.Stack {
       secrets: {
         DB_PASSWORD: ecs.Secret.fromSecretsManager(props.database.secret!, 'password'),
         APNS_KEY_BASE64: ecs.Secret.fromSecretsManager(apnsSecret),
+        PARTNER_ADMIN_TOKEN: ecs.Secret.fromSecretsManager(partnerAdminSecret),
       },
     });
 

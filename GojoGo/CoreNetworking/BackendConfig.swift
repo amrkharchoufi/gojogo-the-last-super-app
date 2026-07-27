@@ -4,7 +4,27 @@ import Foundation
 enum BackendConfig {
     // Backend now runs on ECS/Fargate behind an ALB (private RDS). Was the App
     // Runner default domain (https://f6kp8hx2j2.us-east-1.awsapprunner.com).
-    static let apiBaseURL = URL(string: "https://api.gojogo.app")!
+    static let apiBaseURL = Self.overrideBaseURL ?? URL(string: "https://api.gojogo.app")!
+
+    /// DEBUG-only escape hatch for pointing a simulator build at a backend
+    /// running on this Mac, so a milestone's UI can be driven before it's
+    /// deployed. Same shape as the `GG_AUTOLOGIN_*` E2E hook:
+    ///
+    ///     xcrun simctl launch <udid> com.gojo.gojogo \
+    ///       --console SIMCTL_CHILD_GG_API_BASE_URL=http://localhost:8080
+    ///
+    /// Cleartext localhost needs `NSAllowsLocalNetworking` in Info.plist, which
+    /// ATS permits without weakening anything for real hosts. Release builds
+    /// ignore this entirely — the constant below is the only URL they can use.
+    private static var overrideBaseURL: URL? {
+        #if DEBUG
+        guard let raw = ProcessInfo.processInfo.environment["GG_API_BASE_URL"],
+              let url = URL(string: raw) else { return nil }
+        return url
+        #else
+        return nil
+        #endif
+    }
     static let cognitoRegion = "us-east-1"
     static let cognitoClientId = "5gouehsu6bgaur82gcebiubvt0"
     static var cognitoEndpoint: URL {

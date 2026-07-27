@@ -22,7 +22,7 @@ class MenuSection {
     @GeneratedValue
     private UUID id;
 
-    @Column(name = "merchant_id", nullable = false, insertable = false, updatable = false)
+    @Column(name = "merchant_id", nullable = false)
     private UUID merchantId;
 
     @Column(name = "name", nullable = false)
@@ -31,12 +31,27 @@ class MenuSection {
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
 
+    // Read-only side; MenuItem.sectionId writes the column (see Merchant.menu).
     @OneToMany(fetch = FetchType.LAZY)
-    @JoinColumn(name = "section_id")
+    @JoinColumn(name = "section_id", insertable = false, updatable = false)
     @OrderBy("sortOrder")
     private List<MenuItem> items = new ArrayList<>();
 
     protected MenuSection() {
+    }
+
+    MenuSection(UUID merchantId, String name, int sortOrder) {
+        this.merchantId = merchantId;
+        this.name = name;
+        this.sortOrder = sortOrder;
+    }
+
+    void rename(String name) {
+        this.name = name;
+    }
+
+    void moveTo(int sortOrder) {
+        this.sortOrder = sortOrder;
     }
 
     UUID getId() {

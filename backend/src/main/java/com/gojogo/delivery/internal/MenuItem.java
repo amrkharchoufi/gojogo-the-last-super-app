@@ -16,7 +16,7 @@ class MenuItem {
     @GeneratedValue
     private UUID id;
 
-    @Column(name = "section_id", nullable = false, insertable = false, updatable = false)
+    @Column(name = "section_id", nullable = false)
     private UUID sectionId;
 
     @Column(name = "name", nullable = false)
@@ -41,6 +41,27 @@ class MenuItem {
     private int sortOrder;
 
     protected MenuItem() {
+    }
+
+    MenuItem(UUID sectionId, int sortOrder) {
+        this.sectionId = sectionId;
+        this.sortOrder = sortOrder;
+    }
+
+    void apply(String name, String detail, int priceCents, String imageUrl,
+               boolean popular, boolean available) {
+        this.name = name;
+        this.detail = detail == null ? "" : detail;
+        this.priceCents = priceCents;
+        this.imageUrl = imageUrl;
+        this.popular = popular;
+        this.available = available;
+    }
+
+    /** Moves the dish to another section of the same menu. */
+    void moveTo(UUID sectionId, int sortOrder) {
+        this.sectionId = sectionId;
+        this.sortOrder = sortOrder;
     }
 
     UUID getId() {

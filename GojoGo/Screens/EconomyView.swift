@@ -801,11 +801,11 @@ struct SellerChatView: View {
                             if msg.fromUser { Spacer(minLength: 40) }
                             Text(msg.text)
                                 .font(.system(size: 14))
-                                .foregroundStyle(msg.fromUser ? Color.black : Color.white)
+                                .foregroundStyle(msg.fromUser ? GGColor.onAccent : GGColor.textPrimary)
                                 .padding(.horizontal, 14).padding(.vertical, 10)
                                 .background(
                                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .fill(msg.fromUser ? Color.white : GGColor.ink(0.12))
+                                        .fill(msg.fromUser ? GGColor.white : GGColor.ink(0.12))
                                 )
                             if !msg.fromUser { Spacer(minLength: 40) }
                         }
@@ -825,9 +825,9 @@ struct SellerChatView: View {
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.black)
+                        .foregroundStyle(GGColor.onAccent)
                         .frame(width: 40, height: 40)
-                        .background(Circle().fill(Color.white))
+                        .background(Circle().fill(GGColor.white))
                 }
                 .buttonStyle(PressableStyle())
             }

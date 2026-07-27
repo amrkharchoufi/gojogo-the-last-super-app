@@ -17,14 +17,28 @@ interface MerchantRepository extends JpaRepository<Merchant, UUID> {
      * Catalog browse, fastest first. Empty strings mean "no filter" rather than
      * nulls — a JPQL {@code :param is null} on an untyped bind is the kind of
      * thing that only fails once it reaches Postgres.
+     *
+     * <p>Both flags have to be right: {@code active} is the owner saying
+     * they're open, {@code suspended} is the platform saying they're not.
      */
     @Query("select distinct m from Merchant m left join m.categories c "
-        + "where m.active = true "
+        + "where m.active = true and m.suspended = false "
         + "and (:category = '' or c = :category) "
         + "and (:q = '' or lower(m.name) like concat('%', :q, '%') "
         + "     or lower(m.cuisine) like concat('%', :q, '%')) "
         + "order by m.etaMinutes asc, m.name asc")
     List<Merchant> browse(@Param("category") String category, @Param("q") String q, Pageable page);
+
+    /** The restaurant this profile manages, if they have one. */
+    Optional<Merchant> findFirstByOwnerId(UUID ownerId);
+}
+
+interface MenuSectionRepository extends JpaRepository<MenuSection, UUID> {
+
+    List<MenuSection> findByMerchantIdOrderBySortOrderAsc(UUID merchantId);
+
+    @Query("select coalesce(max(s.sortOrder), -1) from MenuSection s where s.merchantId = :merchantId")
+    int maxSortOrder(@Param("merchantId") UUID merchantId);
 }
 
 interface MenuItemRepository extends JpaRepository<MenuItem, UUID> {
@@ -38,6 +52,17 @@ interface MenuItemRepository extends JpaRepository<MenuItem, UUID> {
         + "where i.sectionId = s.id and s.merchantId = :merchantId and i.id in :ids")
     List<MenuItem> findForMerchant(@Param("merchantId") UUID merchantId,
                                    @Param("ids") Collection<UUID> ids);
+
+    List<MenuItem> findBySectionIdOrderBySortOrderAsc(UUID sectionId);
+
+    /** Whether this restaurant has anything a customer could actually order —
+     *  the bar for letting the owner publish it. */
+    @Query("select count(i) from MenuItem i, MenuSection s "
+        + "where i.sectionId = s.id and s.merchantId = :merchantId and i.available = true")
+    long countAvailableForMerchant(@Param("merchantId") UUID merchantId);
+
+    @Query("select coalesce(max(i.sortOrder), -1) from MenuItem i where i.sectionId = :sectionId")
+    int maxSortOrder(@Param("sectionId") UUID sectionId);
 }
 
 interface AddressRepository extends JpaRepository<Address, UUID> {

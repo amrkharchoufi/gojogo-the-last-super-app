@@ -11,18 +11,30 @@ import PhotosUI
 struct PickedMovie: Transferable {
     let url: URL
 
+    private static func importMovie(_ received: ReceivedTransferredFile) throws -> PickedMovie {
+        let ext = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gojogo-\(UUID().uuidString).\(ext)")
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try FileManager.default.removeItem(at: dest)
+        }
+        try FileManager.default.copyItem(at: received.file, to: dest)
+        return Self(url: dest)
+    }
+
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(contentType: .movie) { movie in
             SentTransferredFile(movie.url)
-        } importing: { received in
-            let dest = FileManager.default.temporaryDirectory
-                .appendingPathComponent("gojogo-\(UUID().uuidString).\(received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension)")
-            if FileManager.default.fileExists(atPath: dest.path) {
-                try FileManager.default.removeItem(at: dest)
-            }
-            try FileManager.default.copyItem(at: received.file, to: dest)
-            return Self(url: dest)
-        }
+        } importing: { try importMovie($0) }
+        FileRepresentation(contentType: .mpeg4Movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { try importMovie($0) }
+        FileRepresentation(contentType: .quickTimeMovie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { try importMovie($0) }
+        FileRepresentation(contentType: .video) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { try importMovie($0) }
     }
 }
 
@@ -40,12 +52,15 @@ enum ComposeMediaIngest {
 
     static func attachment(from item: PhotosPickerItem,
                            defaultKind: ComposeMediaKind) async -> ComposeAttachment? {
-        let isMovie = item.supportedContentTypes.contains { $0.conforms(to: .movie) || $0.conforms(to: .video) }
+        let isMovie = item.supportedContentTypes.contains {
+            $0.conforms(to: .movie) || $0.conforms(to: .mpeg4Movie)
+                || $0.conforms(to: .quickTimeMovie) || $0.conforms(to: .video)
+        }
 
         if isMovie {
-            if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                let thumb = await videoThumbnail(url: movie.url) ?? placeholderPoster(for: defaultKind)
-                let duration = await videoDurationLabel(url: movie.url)
+            if let url = await loadMovieURL(from: item) {
+                let thumb = await videoThumbnail(url: url) ?? placeholderPoster(for: defaultKind)
+                let duration = await videoDurationLabel(url: url)
                 let kind: ComposeMediaKind = {
                     switch defaultKind {
                     case .short: return .short
@@ -57,14 +72,11 @@ enum ComposeMediaIngest {
                     kind: kind,
                     imageData: thumb,
                     durationLabel: duration,
-                    videoURL: movie.url
+                    videoURL: url
                 )
             }
-            return ComposeAttachment(
-                kind: defaultKind == .textOnly ? .photo : defaultKind,
-                imageData: placeholderPoster(for: defaultKind),
-                durationLabel: "0:08"
-            )
+            // Don't invent a still with a fake duration — skip unreadable movies.
+            return nil
         }
 
         if let data = try? await item.loadTransferable(type: Data.self),
@@ -74,6 +86,27 @@ enum ComposeMediaIngest {
         }
 
         return nil
+    }
+
+    /// Prefer FileRepresentation; fall back to writing raw bytes for pickers
+    /// that only hand us `Data`.
+    private static func loadMovieURL(from item: PhotosPickerItem) async -> URL? {
+        if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
+            return movie.url
+        }
+        guard let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty else {
+            return nil
+        }
+        // Reject image payloads that leaked into the movie branch.
+        if UIImage(data: data) != nil { return nil }
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gojogo-\(UUID().uuidString).mov")
+        do {
+            try data.write(to: dest, options: .atomic)
+            return dest
+        } catch {
+            return nil
+        }
     }
 
     static func videoThumbnail(url: URL) async -> Data? {

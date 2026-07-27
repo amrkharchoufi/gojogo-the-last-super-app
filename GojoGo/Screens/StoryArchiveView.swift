@@ -41,7 +41,6 @@ struct StoryArchiveView: View {
             .navigationTitle("Archive")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }
-            .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $buildingHighlight) {
             StoryHighlightEditor(frameIDs: Array(selection)) {
@@ -314,7 +313,6 @@ struct StoryHighlightEditor: View {
                         .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || saving)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .presentationDetents([.medium])
         .onAppear { title = existing?.title ?? "" }
@@ -378,7 +376,6 @@ struct StoryHighlightPickerSheet: View {
                         .foregroundStyle(GGColor.accent)
                 }
             }
-            .preferredColorScheme(.dark)
         }
         .presentationDetents([.medium])
         .sheet(isPresented: $creating) {

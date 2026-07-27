@@ -327,6 +327,22 @@ final class AppState: ObservableObject {
     @Published var deliveryNotice: String? = nil
     var deliveryNoticeTask: Task<Void, Never>?
 
+    // Merchant partner — running a restaurant on GojoDelivery (Phase 2b M6).
+    // Distinct from the driver/courier `partner*` state below: that one is the
+    // gig-worker prototype waiting on Phase 3 dispatch, this one is live.
+    // Restaurants are created in Gojo Admin; the app only runs one.
+    // See AppState+Partner.swift.
+    /// The user's partner account, or nil if they aren't a partner.
+    @Published var merchantAccount: MerchantAccount? = nil
+    /// Their restaurant — only once an application is approved.
+    @Published var merchantStorefront: MerchantStorefront? = nil
+    @Published var showMerchantPartner: Bool = false
+    @Published var merchantBusy: Bool = false
+    /// Transient message shown over the merchant sheet — which covers
+    /// GojoDelivery, so `deliveryNotice` would render behind it.
+    @Published var merchantNotice: String? = nil
+    var merchantNoticeTask: Task<Void, Never>?
+
     // Partner (Become a driver / delivery partner)
     /// Roles the user has fully onboarded into (can go online).
     @Published var partnerRoles: Set<PartnerRole> = []
@@ -1867,6 +1883,11 @@ final class AppState: ObservableObject {
         deliveryNotice = nil
         deliveryAddresses = []
         selectedDeliveryAddressID = nil
+        merchantNoticeTask?.cancel()
+        merchantNotice = nil
+        merchantAccount = nil
+        merchantStorefront = nil
+        showMerchantPartner = false
         WorldSocket.shared.disconnect()
         MessagingStore.shared.reset()
         PushRegistrar.shared.reset()
