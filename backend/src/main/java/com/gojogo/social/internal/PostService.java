@@ -139,7 +139,9 @@ class PostService {
     void delete(UUID me, UUID postId) {
         Post post = posts.findById(postId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such post"));
-        if (!post.getAuthorId().equals(me)) {
+        // `actsFor`, not `equals`: a post published as one of your business
+        // profiles is still yours to delete, whichever identity you're switched to.
+        if (!profiles.actsFor(me, post.getAuthorId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your post");
         }
         posts.delete(post);

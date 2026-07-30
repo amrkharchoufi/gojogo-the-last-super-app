@@ -59,9 +59,9 @@ class VideoCommentService {
         VideoComment comment = comments.findById(commentId).orElseThrow(
             () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such comment"));
         // Your own comment, or any comment on your own video.
-        boolean mine = comment.getAuthorId().equals(me);
+        boolean mine = profiles.actsFor(me, comment.getAuthorId());
         boolean onMyVideo = videos.findById(comment.getVideoId())
-            .map(v -> v.getAuthorId().equals(me)).orElse(false);
+            .map(v -> profiles.actsFor(me, v.getAuthorId())).orElse(false);
         if (!mine && !onMyVideo) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your comment");
         }

@@ -123,10 +123,11 @@ record StoryHighlightDetailDto(UUID id, UUID ownerId, String title, String cover
 
 record SaveHighlightRequest(@NotBlank @Size(max = 60) String title,
                             @Size(max = 500) String coverUrl,
-                            @Size(max = 100) List<UUID> frameIds) {
+                            @Size(max = 100) List<UUID> frameIds,
+                            UUID actAsProfileId) {
 }
 
-record CloseFriendsRequest(@Size(max = 500) List<UUID> profileIds) {
+record CloseFriendsRequest(@Size(max = 500) List<UUID> profileIds, UUID actAsProfileId) {
 }
 
 record CloseFriendDto(UUID id, String name, String handle, String avatarUrl) {

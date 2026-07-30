@@ -123,6 +123,17 @@ class ProfileService implements ProfileApi {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public boolean actsFor(UUID callerProfileId, UUID profileId) {
+        if (callerProfileId.equals(profileId)) {
+            return true;
+        }
+        return businesses.findById(profileId)
+            .map(b -> b.getOwnerProfileId().equals(callerProfileId))
+            .orElse(false);
+    }
+
+    @Override
     @Transactional
     public void setBusinessVerified(UUID businessProfileId, boolean verified) {
         businesses.findById(businessProfileId).ifPresent(business -> {

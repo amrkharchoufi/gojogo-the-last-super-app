@@ -231,7 +231,7 @@ class VideoService {
 
     private Video requireOwned(UUID me, UUID videoId) {
         Video video = require(videoId);
-        if (!video.getAuthorId().equals(me)) {
+        if (!profiles.actsFor(me, video.getAuthorId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your video");
         }
         return video;

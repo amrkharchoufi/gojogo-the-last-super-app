@@ -113,8 +113,8 @@ class StoryEngagementService {
     void deleteReply(UUID me, UUID commentId) {
         StoryComment comment = comments.findById(commentId).orElseThrow(
             () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such reply"));
-        boolean isSender = comment.getAuthorId().equals(me);
-        boolean ownsStory = stories.liveFrame(comment.getFrameId()).getAuthorId().equals(me);
+        boolean isSender = profiles.actsFor(me, comment.getAuthorId());
+        boolean ownsStory = profiles.actsFor(me, stories.liveFrame(comment.getFrameId()).getAuthorId());
         if (!isSender && !ownsStory) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your reply");
         }
@@ -148,7 +148,9 @@ class StoryEngagementService {
     @Transactional(readOnly = true)
     List<StoryViewerDto> viewers(UUID me, UUID frameId) {
         StoryFrame frame = stories.liveFrame(frameId);
-        if (!frame.getAuthorId().equals(me)) {
+        // The owner of the business that posted it counts as the author here —
+        // otherwise a business's story has viewers nobody can see.
+        if (!profiles.actsFor(me, frame.getAuthorId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your story");
         }
         List<StoryView> rows = views.findByFrameIdOrderByViewedAtDesc(frameId, PageRequest.of(0, MAX_VIEWERS));

@@ -157,7 +157,7 @@ class StoryHighlightService {
             if (frame == null) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such story frame: " + frameId);
             }
-            if (!frame.getAuthorId().equals(me)) {
+            if (!profiles.actsFor(me, frame.getAuthorId())) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only highlight your own stories");
             }
             highlightFrames.save(new StoryHighlightFrame(highlightId, frameId, order++));
@@ -168,7 +168,7 @@ class StoryHighlightService {
     private StoryHighlight mine(UUID me, UUID highlightId) {
         StoryHighlight highlight = highlights.findById(highlightId).orElseThrow(
             () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such highlight"));
-        if (!highlight.getOwnerId().equals(me)) {
+        if (!profiles.actsFor(me, highlight.getOwnerId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your highlight");
         }
         return highlight;

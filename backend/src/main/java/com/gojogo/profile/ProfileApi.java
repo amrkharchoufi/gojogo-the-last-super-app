@@ -43,6 +43,16 @@ public interface ProfileApi {
     UUID requireActingProfile(UUID callerProfileId, UUID actAsProfileId);
 
     /**
+     * Whether the caller may manage content authored by {@code profileId} —
+     * true for their own, and for any business profile they own.
+     *
+     * <p>The counterpart to {@link #requireActingProfile}: anything you can
+     * publish as a business, you must be able to edit and delete as its owner,
+     * whichever identity the client happens to be switched to at the time.
+     */
+    boolean actsFor(UUID callerProfileId, UUID profileId);
+
+    /**
      * Grants or revokes the verified badge on a business. Reserved for a
      * partner approval/suspension — this is the only way a business becomes
      * verified, and the owner-scoped edit surface deliberately has no path to it.

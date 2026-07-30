@@ -270,9 +270,11 @@ class StoryHighlightController {
         this.current = current;
     }
 
+    /** Your archive, or one of your business profiles' ({@code asProfileId}). */
     @GetMapping("/v1/stories/archive")
-    List<StoryFrameDto> archive(@AuthenticationPrincipal Jwt jwt) {
-        return highlights.archive(current.require(jwt).id());
+    List<StoryFrameDto> archive(@AuthenticationPrincipal Jwt jwt,
+                                @RequestParam(required = false) UUID asProfileId) {
+        return highlights.archive(current.actingId(jwt, asProfileId));
     }
 
     /** Someone else's highlights when {@code profileId} is given, yours otherwise. */
@@ -292,7 +294,7 @@ class StoryHighlightController {
     @ResponseStatus(HttpStatus.CREATED)
     StoryHighlightDto create(@AuthenticationPrincipal Jwt jwt,
                              @Valid @RequestBody SaveHighlightRequest request) {
-        return highlights.create(current.require(jwt).id(), request);
+        return highlights.create(current.actingId(jwt, request.actAsProfileId()), request);
     }
 
     @PutMapping("/v1/stories/highlights/{highlightId}")
@@ -308,13 +310,17 @@ class StoryHighlightController {
     }
 
     @GetMapping("/v1/stories/close-friends")
-    List<CloseFriendDto> closeFriends(@AuthenticationPrincipal Jwt jwt) {
-        return highlights.closeFriendsOf(current.require(jwt).id());
+    List<CloseFriendDto> closeFriends(@AuthenticationPrincipal Jwt jwt,
+                                      @RequestParam(required = false) UUID asProfileId) {
+        return highlights.closeFriendsOf(current.actingId(jwt, asProfileId));
     }
 
+    /** A business keeps its own close-friends audience: the list belongs to
+     *  whichever identity posts the story, not to the person behind it. */
     @PutMapping("/v1/stories/close-friends")
     List<CloseFriendDto> setCloseFriends(@AuthenticationPrincipal Jwt jwt,
                                          @Valid @RequestBody CloseFriendsRequest request) {
-        return highlights.setCloseFriends(current.require(jwt).id(), request.profileIds());
+        return highlights.setCloseFriends(current.actingId(jwt, request.actAsProfileId()),
+            request.profileIds());
     }
 }

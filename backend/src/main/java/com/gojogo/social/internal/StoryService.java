@@ -251,7 +251,7 @@ class StoryService {
     @Transactional
     void delete(UUID me, UUID frameId) {
         StoryFrame frame = liveFrame(frameId);
-        if (!frame.getAuthorId().equals(me)) {
+        if (!profiles.actsFor(me, frame.getAuthorId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your story");
         }
         frame.softDelete();
