@@ -23,8 +23,19 @@ record PartnerDocumentDto(UUID id, String kind, String contentType, OffsetDateTi
  * @param missingDocuments the required kinds not yet uploaded — what the app
  *                         renders as the checklist, computed here so the client
  *                         never has to know a kind's rules
+ * @param identityRequired whether an IDV vendor is answering the identity half.
+ *                         False on an environment with no vendor configured,
+ *                         where identity is still proved by uploading an ID —
+ *                         which is why {@code requiredDocuments} above changes
+ *                         shape with it rather than being a fixed list
+ * @param identityStatus   where that check stands, as a
+ *                         {@code com.gojogo.kyc.IdentityStatus} name
+ * @param identityReason   why it was refused, in words meant for the applicant
  * @param canEdit          whether the form is open; false while under review
  *                         and once approved
+ * @param canSubmit        everything the server would check on submit, answered
+ *                         in advance — identity included, so the app never
+ *                         offers a button that is going to 400
  * @param refId            the restaurant an approval created, so the app can go
  *                         straight to the menu editor
  */
@@ -37,6 +48,7 @@ record PartnerAccountDto(UUID id, String kind, String status,
                          String reviewNote, UUID refId,
                          List<PartnerDocumentDto> documents,
                          List<String> requiredDocuments, List<String> missingDocuments,
+                         boolean identityRequired, String identityStatus, String identityReason,
                          boolean canEdit, boolean canSubmit,
                          OffsetDateTime submittedAt, OffsetDateTime reviewedAt,
                          OffsetDateTime createdAt) {

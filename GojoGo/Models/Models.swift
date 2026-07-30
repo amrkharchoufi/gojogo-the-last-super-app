@@ -1392,12 +1392,10 @@ enum PartnerOnboardingStep: Int, Equatable, Comparable {
     }
 }
 
-enum IDDocumentType: String, CaseIterable, Identifiable {
-    case idCard = "National ID"
-    case passport = "Passport"
-    var id: String { rawValue }
-    var icon: String { self == .idCard ? "person.text.rectangle.fill" : "book.closed.fill" }
-}
+// `IDDocumentType` used to live here — the app asked which document you were
+// holding and let you tap a tile to say you'd photographed it. Sumsub asks that
+// question now, inside its own flow, against the list of documents its level
+// actually accepts in your country. Ours was always a guess.
 
 enum CourierVehicle: String, CaseIterable, Identifiable {
     case onFeet = "On feet"
@@ -1437,15 +1435,18 @@ enum DriverVehicle: String, CaseIterable, Identifiable {
 }
 
 /// KYC + vehicle data captured during onboarding.
+/// The partner application's *local* half.
+///
+/// Identity is deliberately absent. Proving who someone is belongs to the IDV
+/// vendor and to the backend's `kyc` module — the app used to collect a name, a
+/// document number and two "captured" checkboxes that nothing ever verified, and
+/// keeping that alongside a real check would be worse than useless: it would
+/// look like a second opinion.
+///
+/// What's left is the vehicle side, which is still the local prototype waiting
+/// on the Phase 3 `dispatch` module (SPECS §4).
 struct PartnerApplication: Equatable {
     var role: PartnerRole
-
-    // Identity (both roles)
-    var fullName: String = ""
-    var idType: IDDocumentType = .idCard
-    var idNumber: String = ""
-    var idPhotoCaptured: Bool = false
-    var selfieCaptured: Bool = false
 
     // Driver — vehicle type + (for car/motorcycle) papers
     var driverVehicle: DriverVehicle = .car
@@ -1461,12 +1462,10 @@ struct PartnerApplication: Equatable {
     // Courier — vehicle type
     var vehicleType: CourierVehicle = .motorbike
 
-    /// Whether every required field for the role is filled / captured.
-    var isComplete: Bool {
-        let identityDone = !fullName.trimmingCharacters(in: .whitespaces).isEmpty
-            && !idNumber.trimmingCharacters(in: .whitespaces).isEmpty
-            && idPhotoCaptured && selfieCaptured
-        guard identityDone else { return false }
+    /// Whether the vehicle half is filled in. The identity half is the vendor's
+    /// answer, not a field on this struct — `AppState.partnerKYCComplete`
+    /// combines the two.
+    var vehicleDetailsComplete: Bool {
         switch role {
         case .driver:
             // Trottinettes are identity-only — no licence or vehicle papers.

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		GGMAPBOX000000000000001 /* MapboxMaps in Frameworks */ = {isa = PBXBuildFile; productRef = GGMAPBOX000000000000002 /* MapboxMaps */; };
+		GGSUMSUB000000000000001 /* IdensicMobileSDK in Frameworks */ = {isa = PBXBuildFile; productRef = GGSUMSUB000000000000002 /* IdensicMobileSDK */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -20,6 +21,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				GGMAPBOX000000000000001 /* MapboxMaps in Frameworks */,
+				GGSUMSUB000000000000001 /* IdensicMobileSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -62,6 +64,7 @@
 			name = GojoGo;
 			packageProductDependencies = (
 				GGMAPBOX000000000000002 /* MapboxMaps */,
+				GGSUMSUB000000000000002 /* IdensicMobileSDK */,
 			);
 			productName = GojoGo;
 			productType = "com.apple.product-type.application";
@@ -92,6 +95,7 @@
 			mainGroup = GG00000000000000000001;
 			packageReferences = (
 				GGMAPBOX000000000000003 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */,
+				GGSUMSUB000000000000003 /* XCRemoteSwiftPackageReference "IdensicMobileSDK-iOS" */,
 			);
 			productRefGroup = GG00000000000000000005 /* Products */;
 			projectDirPath = "";
@@ -261,6 +265,7 @@
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "GojoGo uses your location to show the map, set your pickup point, and share your location in chats.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "GojoGo needs the microphone to record voice messages and audio for your posts.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "GojoGo saves photos and videos from your chats to your library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "GojoGo needs your photo library so you can attach a saved photo of your ID when verifying your identity.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -299,6 +304,7 @@
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "GojoGo uses your location to show the map, set your pickup point, and share your location in chats.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "GojoGo needs the microphone to record voice messages and audio for your posts.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "GojoGo saves photos and videos from your chats to your library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "GojoGo needs your photo library so you can attach a saved photo of your ID when verifying your identity.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -354,6 +360,14 @@
 				minimumVersion = 11.0.0;
 			};
 		};
+		GGSUMSUB000000000000003 /* XCRemoteSwiftPackageReference "IdensicMobileSDK-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SumSubstance/IdensicMobileSDK-iOS.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 1.45.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -361,6 +375,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = GGMAPBOX000000000000003 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */;
 			productName = MapboxMaps;
+		};
+		GGSUMSUB000000000000002 /* IdensicMobileSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = GGSUMSUB000000000000003 /* XCRemoteSwiftPackageReference "IdensicMobileSDK-iOS" */;
+			productName = IdensicMobileSDK;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

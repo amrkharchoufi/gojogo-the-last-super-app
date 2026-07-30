@@ -34,6 +34,26 @@ enum PartnerKind {
             case COURIER -> EnumSet.of(DocumentKind.ID_FRONT, DocumentKind.SELFIE);
         };
     }
+
+    /**
+     * The same list once an IDV vendor is doing the identity half.
+     *
+     * <p>With Sumsub configured, an ID card and a selfie uploaded into our own
+     * bucket are not evidence a reviewer should be weighing — the vendor has
+     * already matched the document to a live face, and asking for a second copy
+     * would mean storing identity papers we chose not to hold. So the identity
+     * kinds drop out and what remains is what a vendor cannot answer: whether
+     * this business is licensed to trade.
+     *
+     * <p>A {@code DRIVER} or {@code COURIER} is therefore left needing no
+     * uploads at all, which is correct — their entire check is the vendor's.
+     * Vehicle papers arrive with Phase 3 (SPECS §4) and are a different claim.
+     */
+    Set<DocumentKind> requiredDocuments(boolean identityVerifiedByVendor) {
+        Set<DocumentKind> required = EnumSet.copyOf(requiredDocuments());
+        if (identityVerifiedByVendor) required.removeIf(DocumentKind::isIdentity);
+        return required;
+    }
 }
 
 /**
@@ -68,5 +88,17 @@ enum DocumentKind {
     BUSINESS_LICENSE,
     TAX_CERTIFICATE,
     FOOD_PERMIT,
-    BANK_DETAILS
+    BANK_DETAILS;
+
+    /**
+     * Whether this paper proves <em>a person</em> rather than a business.
+     *
+     * <p>The line an IDV vendor draws: identity is what Sumsub checks properly —
+     * document authenticity, a live face matched to it — and what this platform
+     * would rather not keep a copy of. A trading licence is a different claim
+     * about a different subject, and no vendor level answers it.
+     */
+    boolean isIdentity() {
+        return this == ID_FRONT || this == ID_BACK || this == SELFIE;
+    }
 }

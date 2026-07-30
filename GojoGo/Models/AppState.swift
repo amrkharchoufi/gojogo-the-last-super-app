@@ -356,6 +356,14 @@ final class AppState: ObservableObject {
     @Published var businessNotice: String? = nil
     var businessNoticeTask: Task<Void, Never>?
 
+    // Identity verification (Sumsub, via the backend `kyc` module).
+    /// The signed-in person's identity check. Defaults to `.unavailable` so an
+    /// app that hasn't asked the server yet — or is talking to a backend with no
+    /// IDV vendor configured — shows nothing rather than a broken button.
+    @Published var identity: IdentityVerification = .unavailable
+    /// True while the SDK is being launched or a verdict is being fetched.
+    @Published var identityBusy: Bool = false
+
     // Partner (Become a driver / delivery partner)
     /// Roles the user has fully onboarded into (can go online).
     @Published var partnerRoles: Set<PartnerRole> = []
@@ -365,6 +373,10 @@ final class AppState: ObservableObject {
     @Published var partnerApplication = PartnerApplication(role: .driver)
     @Published var partnerAgreedToTerms: Bool = false
     @Published var partnerStakeProcessing: Bool = false
+    /// Transient message over the partner cover (a verification that wouldn't
+    /// start, a check that couldn't be read).
+    @Published var partnerNotice: String? = nil
+    var partnerNoticeTask: Task<Void, Never>?
     /// Non-nil while the partner dashboard (working UI) is presented.
     @Published var partnerDashboardRole: PartnerRole? = nil
     @Published var partnerOnline: Bool = false
@@ -2958,6 +2970,9 @@ final class AppState: ObservableObject {
         partnerStakeProcessing = false
         partnerStep = .rules
         withAnimation(.easeInOut(duration: 0.28)) { partnerOnboardingRole = role }
+        // Fetched here rather than on connect: only this flow needs it, and by
+        // the time the rules and stake pages are done the answer is waiting.
+        Task { await refreshIdentity() }
     }
 
     func cancelPartnerOnboarding() {
@@ -2986,11 +3001,12 @@ final class AppState: ObservableObject {
         }
     }
 
-    var partnerKYCComplete: Bool { partnerApplication.isComplete }
-
     /// Submit the completed KYC → become a partner.
+    ///
+    /// `partnerKYCComplete` lives in `AppState+Identity.swift`: the identity half
+    /// is the vendor's verdict, not a field on the application.
     func submitPartnerKYC() {
-        guard let role = partnerOnboardingRole, partnerApplication.isComplete else { return }
+        guard let role = partnerOnboardingRole, partnerKYCComplete else { return }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         partnerRoles.insert(role)
         // A verified partner keeps the name from their ID on file.

@@ -17,11 +17,20 @@
  * into it is an {@code ownerId} on the merchant row, which is what lets it
  * authorise "edit my own restaurant" without asking anyone about KYC.
  *
- * <p>Identity documents are <strong>private</strong>. They go through
- * {@link com.gojogo.media.MediaDocumentApi}, never {@code /v1/media/presign},
- * because everything the latter mints is world-readable from S3 today. The
- * module stores object keys, and a reviewer reads one through a 10-minute
- * presigned GET.
+ * <p><strong>Who proves identity.</strong> Personal identity is
+ * {@link com.gojogo.kyc.IdentityVerificationApi}'s job — an IDV vendor matching
+ * a real document to a live face, which no reviewer does well from a phone
+ * photo. This module keeps the question a vendor cannot answer: whether this
+ * <em>business</em> should trade here. So a vendor verdict is a precondition for
+ * submitting an application, and approval remains a human act. On an environment
+ * with no vendor configured the identity documents come back into the required
+ * list and the reviewer decides both halves, exactly as before.
+ *
+ * <p>The business documents that remain are <strong>private</strong>. They go
+ * through {@link com.gojogo.media.MediaDocumentApi}, never
+ * {@code /v1/media/presign}, because everything the latter mints is
+ * world-readable from S3 today. The module stores object keys, and a reviewer
+ * reads one through a 10-minute presigned GET.
  */
 @org.springframework.modulith.ApplicationModule(displayName = "Partner")
 package com.gojogo.partner;
