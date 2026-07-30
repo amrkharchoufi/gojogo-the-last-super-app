@@ -149,6 +149,13 @@ export class GojoGoFargateStack extends cdk.Stack {
         //   cdk deploy GojoGoFargateStack -c economyAdminToken=$(openssl rand -hex 24)
         ECONOMY_ADMIN_TOKEN:
           (this.node.tryGetContext('economyAdminToken') as string | undefined) ?? '',
+        // Browser origins allowed to call the API (comma-separated). Empty
+        // means no CORS headers at all, which is right while the only client is
+        // the iOS app — native apps aren't subject to CORS. GoJoAdmin is a
+        // browser client, so its origin goes here when it exists:
+        //   cdk deploy GojoGoFargateStack -c webAllowedOrigins=https://admin.gojogo.app
+        WEB_ALLOWED_ORIGINS:
+          (this.node.tryGetContext('webAllowedOrigins') as string | undefined) ?? '',
       },
       secrets: {
         DB_PASSWORD: ecs.Secret.fromSecretsManager(props.database.secret!, 'password'),

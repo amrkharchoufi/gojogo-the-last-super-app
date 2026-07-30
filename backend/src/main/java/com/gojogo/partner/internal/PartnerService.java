@@ -107,7 +107,11 @@ class PartnerService {
      *  comes back with the key, so an abandoned upload leaves no row. */
     @Transactional(readOnly = true)
     DocumentUploadResponse presignDocument(UUID me, UUID accountId, DocumentUploadRequest request) {
-        PartnerAccount account = requireEditable(me, accountId);
+        return presignDocumentFor(requireEditable(me, accountId), request);
+    }
+
+    private DocumentUploadResponse presignDocumentFor(PartnerAccount account,
+                                                      DocumentUploadRequest request) {
         parseDocumentKind(request.kind());
         MediaDocumentApi.DocumentUpload upload =
             privateMedia.presignDocumentUpload(account.getUserId(), "partner", request.contentType());
@@ -122,7 +126,10 @@ class PartnerService {
      */
     @Transactional
     PartnerAccountDto attachDocument(UUID me, UUID accountId, AttachDocumentRequest request) {
-        PartnerAccount account = requireEditable(me, accountId);
+        return attachDocumentTo(requireEditable(me, accountId), request);
+    }
+
+    private PartnerAccountDto attachDocumentTo(PartnerAccount account, AttachDocumentRequest request) {
         DocumentKind kind = parseDocumentKind(request.kind());
         // The key must be one we minted for this applicant — otherwise an
         // attach could point the reviewer at any object in the bucket.
@@ -143,7 +150,10 @@ class PartnerService {
 
     @Transactional
     PartnerAccountDto deleteDocument(UUID me, UUID accountId, UUID documentId) {
-        PartnerAccount account = requireEditable(me, accountId);
+        return deleteDocumentFrom(requireEditable(me, accountId), documentId);
+    }
+
+    private PartnerAccountDto deleteDocumentFrom(PartnerAccount account, UUID documentId) {
         PartnerDocument document = documents.findById(documentId)
             .filter(d -> d.getAccountId().equals(account.getId()))
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such document"));
@@ -160,7 +170,10 @@ class PartnerService {
      */
     @Transactional
     PartnerAccountDto submit(UUID me, UUID accountId) {
-        PartnerAccount account = requireEditable(me, accountId);
+        return submitAccount(requireEditable(me, accountId));
+    }
+
+    private PartnerAccountDto submitAccount(PartnerAccount account) {
         List<String> missing = missingFields(account);
         if (!missing.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -192,13 +205,74 @@ class PartnerService {
 
     // MARK: The reviewer's side
 
+    /**
+     * Creates or edits an application <em>on behalf of</em> a merchant — the
+     * operator's own path, since every applicant endpoint is scoped to the
+     * caller and restaurants are created in the admin tool (2026-07-27).
+     *
+     * <p>Deliberately the same {@link #save} the applicant would have used: one
+     * write path, one set of rules. What the admin gets is the right to name
+     * whose application it is.
+     */
+    @Transactional
+    PartnerAccountDto adminSave(UUID ownerId, SavePartnerApplicationRequest request) {
+        return save(ownerId, request);
+    }
+
+    /** Hands an application the operator filled in to the queue, so the same
+     *  completeness rules apply to an admin-typed form as to a merchant's. */
+    @Transactional
+    PartnerAccountDto adminSubmit(UUID accountId) {
+        PartnerAccount account = requireExisting(accountId);
+        if (!account.getStatus().isEditable()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, editBlockedMessage(account));
+        }
+        return submitAccount(account);
+    }
+
     @Transactional(readOnly = true)
-    List<ReviewApplicationDto> queue(String statusName, int limit) {
+    DocumentUploadResponse adminPresignDocument(UUID accountId, DocumentUploadRequest request) {
+        return presignDocumentFor(requireEditableExisting(accountId), request);
+    }
+
+    @Transactional
+    ReviewApplicationDto adminAttachDocument(UUID accountId, AttachDocumentRequest request) {
+        PartnerAccount account = requireEditableExisting(accountId);
+        attachDocumentTo(account, request);
+        return toReview(account);
+    }
+
+    @Transactional
+    ReviewApplicationDto adminDeleteDocument(UUID accountId, UUID documentId) {
+        PartnerAccount account = requireEditableExisting(accountId);
+        deleteDocumentFrom(account, documentId);
+        return toReview(account);
+    }
+
+    /**
+     * A fresh signed link to one paper. The queue payload carries links too,
+     * but they expire in ten minutes — a console left open on a long review
+     * needs to be able to ask again without re-reading the whole application.
+     */
+    @Transactional(readOnly = true)
+    ReviewDocumentDto adminDocument(UUID accountId, UUID documentId) {
+        PartnerAccount account = requireExisting(accountId);
+        PartnerDocument document = documents.findById(documentId)
+            .filter(d -> d.getAccountId().equals(account.getId()))
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such document"));
+        return toReviewDocument(document);
+    }
+
+    @Transactional(readOnly = true)
+    List<ReviewApplicationDto> queue(String statusName, String kindName, int limit) {
         Collection<PartnerStatus> statuses = statusName == null || statusName.isBlank()
             ? QUEUE_DEFAULT
             : List.of(parseStatus(statusName));
+        PartnerKind kind = kindName == null || kindName.isBlank() ? null : parseKind(kindName);
         List<PartnerAccount> page = accounts.findByStatusInOrderBySubmittedAtAscCreatedAtAsc(
-            statuses, PageRequest.of(0, Math.clamp(limit, 1, 100)));
+            statuses, PageRequest.of(0, Math.clamp(limit, 1, 100))).stream()
+            .filter(a -> kind == null || a.getKind() == kind)
+            .toList();
         Map<UUID, List<PartnerDocument>> byAccount = documents
             .findByAccountIdInOrderByKindAsc(page.stream().map(PartnerAccount::getId).toList())
             .stream().collect(Collectors.groupingBy(PartnerDocument::getAccountId));
@@ -308,6 +382,16 @@ class PartnerService {
 
     private PartnerAccount requireEditable(UUID me, UUID accountId) {
         PartnerAccount account = require(me, accountId);
+        if (!account.getStatus().isEditable()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, editBlockedMessage(account));
+        }
+        return account;
+    }
+
+    /** The admin twin of {@link #requireEditable}: any application, but still
+     *  only while it is open — an approved partner's details are theirs. */
+    private PartnerAccount requireEditableExisting(UUID accountId) {
+        PartnerAccount account = requireExisting(accountId);
         if (!account.getStatus().isEditable()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, editBlockedMessage(account));
         }

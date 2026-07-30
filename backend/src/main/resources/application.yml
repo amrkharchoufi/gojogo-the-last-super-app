@@ -68,14 +68,21 @@ gojogo:
   economy:
     admin:
       token: ${ECONOMY_ADMIN_TOKEN:}
-  # Partner review (PartnerAdminController). /v1/partner/admin/** exists only
-  # while this token is set to 24+ characters; unset, those paths 404 and
-  # nobody can approve a merchant, so delivery can never gain a restaurant.
-  # Unlike the economy token this one is meant to stay set — approving partners
-  # is ongoing operational work, not a one-off wipe.
+  # Partner review (PartnerAdminController). Two ways in: `group` is the real
+  # operator identity — a Cognito group carried in the reviewer's own ID token,
+  # which is what GoJoAdmin signs in with and what makes a decision
+  # attributable; `token` is break-glass, one shared secret with no identity,
+  # for the operator with no console. Unset token = group-only, which is the
+  # intended end state.
   partner:
     admin:
       token: ${PARTNER_ADMIN_TOKEN:}
+      group: ${PARTNER_ADMIN_GROUP:platform-admin}
+  # Browser origins allowed to call this API (comma-separated). Empty — the
+  # default — emits no CORS headers at all, which is correct while the only
+  # client is the iOS app. GoJoAdmin's origin goes here when it exists.
+  web:
+    allowed-origins: ${WEB_ALLOWED_ORIGINS:}
   # APNs push (activity notifications). All empty → push disabled (sender
   # no-ops). key-base64 is the base64 of the Apple .p8 token-auth key file.
   apns:

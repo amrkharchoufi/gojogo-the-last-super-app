@@ -166,6 +166,22 @@ export class GojoGoAuthStack extends cdk.Stack {
     // The client can only advertise Google once the IdP exists.
     this.userPoolClient.node.addDependency(googleIdp);
 
+    // Platform operators (Phase 2e M2). Membership arrives in the user's own ID
+    // token as a `cognito:groups` claim, which is what /v1/partner/admin/**
+    // checks — so a reviewer signs in as themselves and every KYC decision can
+    // name a person, instead of everyone sharing one secret. GoJoAdmin will
+    // sign in with the same pool (ARCHITECTURE §10b).
+    //
+    // Adding someone is deliberately a manual, auditable act:
+    //   aws cognito-idp admin-add-user-to-group --user-pool-id <pool> \
+    //     --username <email> --group-name platform-admin
+    new cognito.CfnUserPoolGroup(this, 'PlatformAdminGroup', {
+      userPoolId: this.userPool.userPoolId,
+      groupName: 'platform-admin',
+      description: 'Platform operators: partner/KYC review and the GoJoAdmin console',
+      precedence: 0,
+    });
+
     new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId });
     new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, 'IssuerUri', {

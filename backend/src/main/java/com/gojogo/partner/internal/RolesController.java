@@ -29,12 +29,14 @@ class RolesController {
     private final PartnerAccountRepository accounts;
     private final ProfileApi profiles;
     private final PartnerCurrentProfile current;
+    private final PlatformAdmins admins;
 
     RolesController(PartnerAccountRepository accounts, ProfileApi profiles,
-                    PartnerCurrentProfile current) {
+                    PartnerCurrentProfile current, PlatformAdmins admins) {
         this.accounts = accounts;
         this.profiles = profiles;
         this.current = current;
+        this.admins = admins;
     }
 
     @GetMapping("/v1/me/roles")
@@ -53,7 +55,10 @@ class RolesController {
             partners,
             merchantIds(partners),
             approved(partners, "DRIVER"),
-            approved(partners, "COURIER"));
+            approved(partners, "COURIER"),
+            // Read from the caller's own token, not from a table: platform
+            // operators are a Cognito group, so the claim is the fact.
+            admins.isPlatformAdmin(jwt));
     }
 
     private static List<UUID> merchantIds(List<PartnerRole> partners) {
@@ -80,7 +85,7 @@ class RolesController {
 
 record MyRolesResponse(UUID profileId, boolean hasBusiness, List<BusinessRole> businesses,
                        List<PartnerRole> partners, List<UUID> merchantIds,
-                       boolean isDriver, boolean isCourier) {
+                       boolean isDriver, boolean isCourier, boolean isPlatformAdmin) {
 }
 
 record BusinessRole(UUID profileId, String handle, String displayName, String avatarUrl,

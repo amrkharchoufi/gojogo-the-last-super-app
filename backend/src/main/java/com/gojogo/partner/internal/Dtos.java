@@ -1,5 +1,6 @@
 package com.gojogo.partner.internal;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -59,6 +60,16 @@ record SavePartnerApplicationRequest(@NotBlank @Size(max = 16) String kind,
                                      @Size(max = 80) String city,
                                      @Size(max = 200) String addressLine,
                                      Double latitude, Double longitude) {
+}
+
+/**
+ * An operator filing an application for a merchant (Phase 2e M2). The
+ * application itself is the same object the merchant would have written — only
+ * the "whose is it" part is new, and it is named rather than assumed.
+ */
+record AdminCreateApplicationRequest(UUID ownerProfileId,
+                                     @Size(max = 60) String ownerHandle,
+                                     @Valid @NotNull SavePartnerApplicationRequest application) {
 }
 
 /** Asks for somewhere to put one document. The key that comes back is what the
