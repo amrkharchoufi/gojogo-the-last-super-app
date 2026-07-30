@@ -343,6 +343,19 @@ final class AppState: ObservableObject {
     @Published var merchantNotice: String? = nil
     var merchantNoticeTask: Task<Void, Never>?
 
+    // Business profiles — a business IS a profile (Phase 2e M1).
+    // See AppState+Business.swift.
+    /// The business profiles this account runs, newest first.
+    @Published var ownedBusinesses: [BusinessIdentity] = []
+    /// Who new content is published as: nil = you, otherwise one of the above.
+    /// Mirrors `ActingIdentity.shared`, which is what the stores actually read.
+    @Published var actingBusinessID: UUID? = nil
+    @Published var showBusinessProfiles: Bool = false
+    @Published var businessBusy: Bool = false
+    /// Transient message over the business sheet (a taken handle, a failed save).
+    @Published var businessNotice: String? = nil
+    var businessNoticeTask: Task<Void, Never>?
+
     // Partner (Become a driver / delivery partner)
     /// Roles the user has fully onboarded into (can go online).
     @Published var partnerRoles: Set<PartnerRole> = []
@@ -1888,6 +1901,11 @@ final class AppState: ObservableObject {
         merchantAccount = nil
         merchantStorefront = nil
         showMerchantPartner = false
+        businessNoticeTask?.cancel()
+        businessNotice = nil
+        ownedBusinesses = []
+        showBusinessProfiles = false
+        stopActingAsBusiness()
         WorldSocket.shared.disconnect()
         MessagingStore.shared.reset()
         PushRegistrar.shared.reset()

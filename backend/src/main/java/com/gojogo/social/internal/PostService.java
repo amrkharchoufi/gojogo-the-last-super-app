@@ -3,6 +3,7 @@ package com.gojogo.social.internal;
 import com.gojogo.media.MediaApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.profile.ProfileKind;
 import com.gojogo.social.PostCreated;
 import com.gojogo.social.PostLiked;
 import org.springframework.context.ApplicationEventPublisher;
@@ -215,11 +216,12 @@ class PostService {
 
     static AuthorSummary toAuthorSummary(ProfileDto author, UUID authorId, Set<UUID> followedByMe) {
         if (author == null) {
-            return new AuthorSummary(authorId, "Deleted user", null, null, false);
+            return new AuthorSummary(authorId, "Deleted user", null, null, false, false, false);
         }
         String name = author.displayName() != null ? author.displayName() : author.handle();
         return new AuthorSummary(author.id(), name, author.handle(), author.avatarUrl(),
-            followedByMe.contains(author.id()));
+            followedByMe.contains(author.id()),
+            author.kind() == ProfileKind.BUSINESS, author.verified());
     }
 
     private void requireExists(UUID postId) {

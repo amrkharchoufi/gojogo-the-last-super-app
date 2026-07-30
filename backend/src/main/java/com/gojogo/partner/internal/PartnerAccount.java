@@ -39,6 +39,11 @@ class PartnerAccount {
     @Column(name = "business_name", nullable = false)
     private String businessName;
 
+    /** The public identity this application commerce-enables (Phase 2e M1).
+     *  Null for an application written before business profiles existed. */
+    @Column(name = "business_profile_id")
+    private UUID businessProfileId;
+
     @Column(name = "category", nullable = false)
     private String category = "";
 
@@ -104,8 +109,9 @@ class PartnerAccount {
     void apply(String businessName, String category, String description, String logoUrl,
                String contactName, String contactPhone, String contactEmail,
                String country, String city, String addressLine,
-               Double latitude, Double longitude) {
+               Double latitude, Double longitude, UUID businessProfileId) {
         this.businessName = businessName;
+        this.businessProfileId = businessProfileId;
         this.category = orEmpty(category);
         this.description = orEmpty(description);
         this.logoUrl = logoUrl == null || logoUrl.isBlank() ? null : logoUrl;
@@ -181,6 +187,7 @@ class PartnerAccount {
     PartnerKind getKind() { return kind; }
     PartnerStatus getStatus() { return status; }
     String getBusinessName() { return businessName; }
+    UUID getBusinessProfileId() { return businessProfileId; }
     String getCategory() { return category; }
     String getDescription() { return description; }
     String getLogoUrl() { return logoUrl; }

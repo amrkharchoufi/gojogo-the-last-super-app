@@ -38,7 +38,9 @@ final class StoriesStore {
     @discardableResult
     func create(_ frames: [CreateStoryFrameBody]) async throws -> [StoryFrameDTO] {
         let created: [StoryFrameDTO] = try await APIClient.shared
-            .post("/v1/stories", body: CreateStoryBody(frames: frames))
+            .post("/v1/stories",
+                  body: CreateStoryBody(frames: frames,
+                                        actAsProfileId: ActingIdentity.shared.actAsProfileId))
         for frame in created {
             remoteFrameIds.insert(frame.id)
         }

@@ -50,7 +50,7 @@ class VideoController {
     @ResponseStatus(HttpStatus.CREATED)
     VideoResponse create(@AuthenticationPrincipal Jwt jwt,
                          @Valid @RequestBody CreateVideoRequest request) {
-        return videos.create(current.require(jwt).id(), request);
+        return videos.create(current.actingId(jwt, request.actAsProfileId()), request);
     }
 
     @GetMapping("/v1/videos/{videoId}")
@@ -73,14 +73,16 @@ class VideoController {
 
     @PostMapping("/v1/videos/{videoId}/like")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    void like(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID videoId) {
-        videos.like(current.require(jwt).id(), videoId);
+    void like(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID videoId,
+              @RequestParam(required = false) UUID actAs) {
+        videos.like(current.actingId(jwt, actAs), videoId);
     }
 
     @DeleteMapping("/v1/videos/{videoId}/like")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    void unlike(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID videoId) {
-        videos.unlike(current.require(jwt).id(), videoId);
+    void unlike(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID videoId,
+                @RequestParam(required = false) UUID actAs) {
+        videos.unlike(current.actingId(jwt, actAs), videoId);
     }
 
     @PostMapping("/v1/videos/{videoId}/save")
@@ -131,7 +133,7 @@ class VideoCommentController {
     @ResponseStatus(HttpStatus.CREATED)
     VideoCommentResponse create(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID videoId,
                                 @Valid @RequestBody CreateVideoCommentRequest request) {
-        return comments.create(current.require(jwt).id(), videoId, request.text());
+        return comments.create(current.actingId(jwt, request.actAsProfileId()), videoId, request.text());
     }
 
     @DeleteMapping("/v1/video-comments/{commentId}")

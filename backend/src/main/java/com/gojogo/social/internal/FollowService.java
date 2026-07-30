@@ -2,6 +2,7 @@ package com.gojogo.social.internal;
 
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.profile.ProfileKind;
 import com.gojogo.social.UserFollowed;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -58,6 +59,13 @@ class FollowService {
     ProfileViewResponse view(UUID me, UUID profileId) {
         ProfileDto profile = requireProfile(profileId);
         String name = profile.displayName() != null ? profile.displayName() : profile.handle();
+        // A business is a profile, so this is the public read for one too — the
+        // extra block is the only difference, and it's null for a person.
+        BusinessBlock business = profile.kind() == ProfileKind.BUSINESS
+            ? profiles.findBusiness(profileId).map(b -> new BusinessBlock(b.ownerProfileId(),
+                b.contactPhone(), b.contactEmail(), b.websiteUrl(), b.addressLine(),
+                b.city(), b.country(), b.latitude(), b.longitude(), b.openingHours())).orElse(null)
+            : null;
         return new ProfileViewResponse(
             profile.id(),
             name,
@@ -69,7 +77,11 @@ class FollowService {
             follows.countByFolloweeId(profileId),
             follows.countByFollowerId(profileId),
             me.equals(profileId),
-            follows.existsById(new Follow.Key(me, profileId)));
+            follows.existsById(new Follow.Key(me, profileId)),
+            profile.kind().name(),
+            profile.verified(),
+            business != null && me.equals(business.ownerProfileId()),
+            business);
     }
 
     private ProfileDto requireProfile(UUID profileId) {

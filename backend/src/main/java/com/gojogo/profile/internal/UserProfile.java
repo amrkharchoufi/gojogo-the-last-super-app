@@ -4,12 +4,16 @@ import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+
+import com.gojogo.profile.ProfileKind;
 
 import java.time.OffsetDateTime;
 import java.util.HashSet;
@@ -24,8 +28,13 @@ class UserProfile {
     @GeneratedValue
     private UUID id;
 
-    @Column(name = "cognito_sub", nullable = false, unique = true, length = 64)
+    /** Null for a business — a business has no sign-in of its own, its owner does. */
+    @Column(name = "cognito_sub", unique = true, length = 64)
     private String cognitoSub;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    private ProfileKind kind = ProfileKind.PERSON;
 
     @Column(length = 320)
     private String email;
@@ -77,6 +86,14 @@ class UserProfile {
         this.updatedAt = OffsetDateTime.now();
     }
 
+    /** A business profile: no Cognito subject, no email of its own. */
+    static UserProfile business(String handle, String displayName) {
+        UserProfile profile = new UserProfile(null, null, handle);
+        profile.kind = ProfileKind.BUSINESS;
+        profile.displayName = displayName;
+        return profile;
+    }
+
     @PreUpdate
     void touch() {
         this.updatedAt = OffsetDateTime.now();
@@ -88,6 +105,10 @@ class UserProfile {
 
     String getCognitoSub() {
         return cognitoSub;
+    }
+
+    ProfileKind getKind() {
+        return kind;
     }
 
     String getEmail() {

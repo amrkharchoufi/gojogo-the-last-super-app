@@ -111,7 +111,14 @@ Extends live `partner` machinery; the application object is unchanged, `kind=DRI
 
 ---
 
-## 8. Business profiles, act-as, roles (2e M1)
+## 8. Business profiles, act-as, roles (2e M1) — **BUILT 2026-07-30**
+
+Refinements the build made to this spec (§11.4: update SPECS when a build refines it):
+- `category` and `bio` are **not** duplicated onto `business_profile` — a business reuses the profile columns it already has; the extension table holds only contact / address / hours / `verified` / owner.
+- Act-as also covers likes and follows (query param `?actAs=`), not just creates. **iOS deliberately uses it for creation only**: reads are decorated for the caller, so a business like would read back unliked.
+- `maxBusinessesPerOwner` is a Java constant (5) until the config registry (§14) exists in 2e M3.
+- Handle changes on a business skip the two-month cooldown — that rule protects a person's identity, not a shop's signage.
+
 
 - **Model:** `profile.kind = PERSON | BUSINESS`; business fields (category from the vision's taxonomy, description, address + geo, hours JSON, contact, links) on a `business_profile` extension table (`profile` schema); `owner_profile_id` → the owning person. **CONFIG** max businesses per owner (default 5). Team members/multi-owner: DEFERRED (single owner until GoJoAdmin needs roles).
 - **Act-as:** mutation endpoints that create content (`posts`, `stories`, `videos`, media presign) accept optional `actAsProfileId`; server verifies `owner_profile_id == caller` else 403. Reads are unchanged (a business profile is just a profile). Likes/comments *as* a business: allowed, same mechanism. No second token, no session switch server-side; the iOS switcher is pure client state.

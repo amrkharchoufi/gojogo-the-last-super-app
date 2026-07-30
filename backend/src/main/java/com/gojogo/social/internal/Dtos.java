@@ -8,7 +8,9 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
-record AuthorSummary(UUID id, String name, String handle, String avatarUrl, boolean following) {
+/** @param business a business profile — the app draws the badge from this, not from the category text */
+record AuthorSummary(UUID id, String name, String handle, String avatarUrl, boolean following,
+                     boolean business, boolean verified) {
 }
 
 record MediaItemDto(UUID id, String imageUrl, String videoUrl) {
@@ -26,10 +28,11 @@ record CreateMediaItem(@Size(max = 500) String imageUrl, @Size(max = 500) String
 }
 
 record CreatePostRequest(@Size(max = 5000) String text, Float imageAspect,
-                         @Size(max = 10) List<CreateMediaItem> mediaItems) {
+                         @Size(max = 10) List<CreateMediaItem> mediaItems,
+                         UUID actAsProfileId) {
 }
 
-record CreateCommentRequest(@NotBlank @Size(max = 2000) String text) {
+record CreateCommentRequest(@NotBlank @Size(max = 2000) String text, UUID actAsProfileId) {
 }
 
 record CommentResponse(UUID id, AuthorSummary author, String text, boolean liked,
@@ -67,7 +70,8 @@ record StoryMusicDto(UUID trackId, String title, String artist, String artworkUr
  * posting through a rolling deploy; it maps to one IMAGE frame per URL.
  */
 record CreateStoryRequest(@Valid @Size(max = 10) List<CreateStoryFrame> frames,
-                          @Size(max = 10) List<@NotBlank @Size(max = 500) String> frameImageUrls) {
+                          @Size(max = 10) List<@NotBlank @Size(max = 500) String> frameImageUrls,
+                          UUID actAsProfileId) {
 
     boolean isEmpty() {
         return (frames == null || frames.isEmpty())
@@ -128,7 +132,20 @@ record CloseFriendsRequest(@Size(max = 500) List<UUID> profileIds) {
 record CloseFriendDto(UUID id, String name, String handle, String avatarUrl) {
 }
 
+/**
+ * @param kind     PERSON or BUSINESS
+ * @param isOwner  the viewer owns this business profile — what turns the
+ *                 profile screen into the owner's own
+ * @param business the business-only block; null for a person
+ */
 record ProfileViewResponse(UUID id, String name, String handle, String avatarUrl, String bio,
                            String category, long postCount, long followerCount,
-                           long followingCount, boolean isOwn, boolean following) {
+                           long followingCount, boolean isOwn, boolean following,
+                           String kind, boolean verified, boolean isOwner,
+                           BusinessBlock business) {
+}
+
+record BusinessBlock(UUID ownerProfileId, String contactPhone, String contactEmail,
+                     String websiteUrl, String addressLine, String city, String country,
+                     Double latitude, Double longitude, String openingHours) {
 }

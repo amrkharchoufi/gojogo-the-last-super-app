@@ -35,6 +35,7 @@ extension AppState {
             await refreshEconomy()
             await refreshDelivery()
             await refreshMerchantPartner()
+            await refreshBusinessProfiles()
             await connectMessaging()
             await refreshNotifications()
             enablePushNotifications()
@@ -666,7 +667,19 @@ extension AppState {
                     followerCount: view.followerCount,
                     followingCount: view.followingCount,
                     isOwn: view.isOwn,
-                    following: view.following)
+                    following: view.following,
+                    isBusiness: view.kind == "BUSINESS",
+                    verified: view.verified ?? false,
+                    isBusinessOwner: view.isOwner ?? false,
+                    business: view.business.map {
+                        BusinessContact(phone: $0.contactPhone ?? "",
+                                        email: $0.contactEmail ?? "",
+                                        website: $0.websiteUrl ?? "",
+                                        addressLine: $0.addressLine ?? "",
+                                        city: $0.city ?? "",
+                                        country: $0.country ?? "",
+                                        openingHours: $0.openingHours ?? "")
+                    })
                 let authorPosts = try await ProfileStore.shared.posts(of: profileId)
                 let mapped = authorPosts.map { SocialStore.shared.map($0) }
                 for post in mapped where !posts.contains(where: { $0.id == post.id }) {

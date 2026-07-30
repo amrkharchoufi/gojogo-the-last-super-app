@@ -130,6 +130,14 @@ struct ProfileUser: Identifiable {
     var followingCount: Int
     var isOwn: Bool
     var following: Bool
+    /// A business profile (Phase 2e M1). A business *is* a profile, so this
+    /// screen renders one — these three just change what it shows.
+    var isBusiness: Bool = false
+    /// KYC-approved. The only badge in the app that means anything.
+    var verified: Bool = false
+    /// The viewer owns this business — turns the page into theirs to edit.
+    var isBusinessOwner: Bool = false
+    var business: BusinessContact? = nil
 
     static func own(from user: GGUser, posts: Int) -> ProfileUser {
         ProfileUser(
@@ -145,6 +153,28 @@ struct ProfileUser: Identifiable {
             isOwn: true,
             following: false
         )
+    }
+}
+
+/// The business-only block on a profile: how to reach it and where it is.
+struct BusinessContact: Equatable {
+    var phone: String
+    var email: String
+    var website: String
+    var addressLine: String
+    var city: String
+    var country: String
+    var openingHours: String
+
+    var addressSummary: String {
+        [addressLine, city, country]
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .joined(separator: ", ")
+    }
+
+    var isEmpty: Bool {
+        addressSummary.isEmpty && phone.isEmpty && email.isEmpty
+            && website.isEmpty && openingHours.isEmpty
     }
 }
 

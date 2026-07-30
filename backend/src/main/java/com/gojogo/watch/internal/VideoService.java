@@ -3,6 +3,7 @@ package com.gojogo.watch.internal;
 import com.gojogo.media.MediaApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.profile.ProfileKind;
 import com.gojogo.social.SocialGraphApi;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
@@ -206,12 +207,13 @@ class VideoService {
     VideoChannel channel(ProfileDto profile, UUID profileId,
                          Map<UUID, Long> followerCounts, Set<UUID> followedByMe) {
         if (profile == null) {
-            return new VideoChannel(profileId, "Deleted user", null, null, 0, false);
+            return new VideoChannel(profileId, "Deleted user", null, null, 0, false, false, false);
         }
         String name = profile.displayName() != null ? profile.displayName() : profile.handle();
         return new VideoChannel(profile.id(), name, profile.handle(), profile.avatarUrl(),
             followerCounts.getOrDefault(profile.id(), 0L),
-            followedByMe.contains(profile.id()));
+            followedByMe.contains(profile.id()),
+            profile.kind() == ProfileKind.BUSINESS, profile.verified());
     }
 
     Map<UUID, Long> followerCounts(Collection<UUID> ids) {

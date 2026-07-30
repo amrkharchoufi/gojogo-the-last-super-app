@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 @RestController
 class MediaController {
 
@@ -28,9 +30,12 @@ class MediaController {
     @PostMapping("/v1/media/presign")
     PresignResponse presign(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody PresignRequest request) {
         var profile = profiles.createOrFetch(jwt.getSubject(), jwt.getClaimAsString("email"));
-        return presign.presign(profile.id(), request.contentType());
+        // Uploading as a business only decides which profile folder the object
+        // lands in — but it is still an ownership claim, so it is verified.
+        UUID owner = profiles.requireActingProfile(profile.id(), request.actAsProfileId());
+        return presign.presign(owner, request.contentType());
     }
 }
 
-record PresignRequest(@NotBlank String contentType) {
+record PresignRequest(@NotBlank String contentType, UUID actAsProfileId) {
 }

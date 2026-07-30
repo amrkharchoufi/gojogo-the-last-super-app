@@ -41,7 +41,7 @@ class PostController {
     @PostMapping("/v1/posts")
     @ResponseStatus(HttpStatus.CREATED)
     PostResponse create(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody CreatePostRequest request) {
-        return posts.create(current.require(jwt).id(), request);
+        return posts.create(current.actingId(jwt, request.actAsProfileId()), request);
     }
 
     @GetMapping("/v1/posts/{postId}")
@@ -57,14 +57,16 @@ class PostController {
 
     @PostMapping("/v1/posts/{postId}/like")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    void like(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID postId) {
-        posts.like(current.require(jwt).id(), postId);
+    void like(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID postId,
+              @RequestParam(required = false) UUID actAs) {
+        posts.like(current.actingId(jwt, actAs), postId);
     }
 
     @DeleteMapping("/v1/posts/{postId}/like")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    void unlike(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID postId) {
-        posts.unlike(current.require(jwt).id(), postId);
+    void unlike(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID postId,
+                @RequestParam(required = false) UUID actAs) {
+        posts.unlike(current.actingId(jwt, actAs), postId);
     }
 
     @PostMapping("/v1/posts/{postId}/bookmark")
@@ -100,7 +102,7 @@ class CommentController {
     @ResponseStatus(HttpStatus.CREATED)
     CommentResponse create(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID postId,
                            @Valid @RequestBody CreateCommentRequest request) {
-        return comments.create(current.require(jwt).id(), postId, request.text());
+        return comments.create(current.actingId(jwt, request.actAsProfileId()), postId, request.text());
     }
 
     @PostMapping("/v1/comments/{commentId}/like")
@@ -147,14 +149,16 @@ class FollowController {
 
     @PostMapping("/v1/profiles/{profileId}/follow")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    void follow(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId) {
-        follows.follow(current.require(jwt).id(), profileId);
+    void follow(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId,
+                @RequestParam(required = false) UUID actAs) {
+        follows.follow(current.actingId(jwt, actAs), profileId);
     }
 
     @DeleteMapping("/v1/profiles/{profileId}/follow")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    void unfollow(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId) {
-        follows.unfollow(current.require(jwt).id(), profileId);
+    void unfollow(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId,
+                  @RequestParam(required = false) UUID actAs) {
+        follows.unfollow(current.actingId(jwt, actAs), profileId);
     }
 }
 
@@ -177,7 +181,7 @@ class StoryController {
     @PostMapping("/v1/stories")
     @ResponseStatus(HttpStatus.CREATED)
     List<StoryFrameDto> create(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody CreateStoryRequest request) {
-        return stories.create(current.require(jwt).id(), request);
+        return stories.create(current.actingId(jwt, request.actAsProfileId()), request);
     }
 
     @PostMapping("/v1/stories/frames/{frameId}/seen")

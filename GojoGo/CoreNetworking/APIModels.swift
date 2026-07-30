@@ -78,6 +78,114 @@ struct ProfileViewDTO: Decodable {
     var followingCount: Int
     var isOwn: Bool
     var following: Bool
+    // Business profiles (Phase 2e M1). All optional so a build either side of a
+    // backend roll still decodes the view.
+    var kind: String?          // "PERSON" | "BUSINESS"
+    var verified: Bool?
+    /// The viewer owns this business — what turns a business page into "yours".
+    var isOwner: Bool?
+    var business: BusinessBlockDTO?
+}
+
+/// The business-only half of a profile view; nil for a person.
+struct BusinessBlockDTO: Decodable {
+    var ownerProfileId: UUID?
+    var contactPhone: String?
+    var contactEmail: String?
+    var websiteUrl: String?
+    var addressLine: String?
+    var city: String?
+    var country: String?
+    var latitude: Double?
+    var longitude: Double?
+    var openingHours: String?
+}
+
+// MARK: - Business profiles (owner side)
+
+/// One business the caller runs — the profile half and the business half in one
+/// payload, because to everyone outside the profile module they are one identity.
+struct BusinessProfileDTO: Decodable, Identifiable {
+    var id: UUID
+    var handle: String
+    var displayName: String?
+    var bio: String?
+    var category: String?
+    var avatarUrl: String?
+    var ownerProfileId: UUID?
+    var verified: Bool
+    var contactPhone: String?
+    var contactEmail: String?
+    var websiteUrl: String?
+    var addressLine: String?
+    var city: String?
+    var country: String?
+    var latitude: Double?
+    var longitude: Double?
+    var openingHours: String?
+}
+
+struct CreateBusinessBody: Encodable {
+    var displayName: String
+    var handle: String?
+    var category: String?
+    var bio: String?
+    var avatarUrl: String?
+    var contactPhone: String?
+    var contactEmail: String?
+    var websiteUrl: String?
+    var addressLine: String?
+    var city: String?
+    var country: String?
+    var latitude: Double?
+    var longitude: Double?
+    var openingHours: String?
+}
+
+/// PATCH semantics: a nil field means unchanged, not cleared.
+struct UpdateBusinessBody: Encodable {
+    var displayName: String?
+    var handle: String?
+    var category: String?
+    var bio: String?
+    var avatarUrl: String?
+    var contactPhone: String?
+    var contactEmail: String?
+    var websiteUrl: String?
+    var addressLine: String?
+    var city: String?
+    var country: String?
+    var latitude: Double?
+    var longitude: Double?
+    var openingHours: String?
+}
+
+/// `GET /v1/me/roles` — what this account can be right now. Roles are derived
+/// server-side (owning a business, an approved application), never stored.
+struct MyRolesDTO: Decodable {
+    var profileId: UUID
+    var hasBusiness: Bool
+    var businesses: [BusinessRoleDTO]
+    var partners: [PartnerRoleDTO]
+    var merchantIds: [UUID]?
+    var isDriver: Bool?
+    var isCourier: Bool?
+}
+
+struct BusinessRoleDTO: Decodable {
+    var profileId: UUID
+    var handle: String
+    var displayName: String?
+    var avatarUrl: String?
+    var category: String?
+    var verified: Bool
+}
+
+struct PartnerRoleDTO: Decodable {
+    var kind: String
+    var status: String
+    var refId: UUID?
+    var businessProfileId: UUID?
 }
 
 struct AuthorSummaryDTO: Decodable {
@@ -86,6 +194,9 @@ struct AuthorSummaryDTO: Decodable {
     var handle: String?
     var avatarUrl: String?
     var following: Bool
+    /// Business profiles (Phase 2e M1) — optional so an older backend decodes.
+    var business: Bool?
+    var verified: Bool?
 }
 
 struct MediaItemDTO: Decodable {
@@ -121,6 +232,9 @@ struct CreatePostBody: Encodable {
     var text: String?
     var imageAspect: Double?
     var mediaItems: [CreateMediaItemBody]
+    /// Post as a business profile you own; nil posts as yourself. Verified
+    /// server-side against ownership — never a client-side trust.
+    var actAsProfileId: String?
 }
 
 struct CommentDTO: Decodable {
@@ -134,6 +248,7 @@ struct CommentDTO: Decodable {
 
 struct CreateCommentBody: Encodable {
     var text: String
+    var actAsProfileId: String?
 }
 
 // MARK: - Watch (long-form + shorts)
@@ -147,6 +262,8 @@ struct VideoChannelDTO: Decodable {
     var avatarUrl: String?
     var subscriberCount: Int
     var subscribed: Bool
+    var business: Bool?
+    var verified: Bool?
 }
 
 /// Optional past `id` for the same reason story frames are: an app build either
@@ -180,6 +297,7 @@ struct CreateVideoBody: Encodable {
     var thumbUrl: String?
     var videoUrl: String
     var durationSeconds: Int?
+    var actAsProfileId: String?
 }
 
 /// A nil field means "leave it alone" server-side, not "clear it".
@@ -267,6 +385,7 @@ struct CreateStoryFrameBody: Encodable {
 
 struct CreateStoryBody: Encodable {
     var frames: [CreateStoryFrameBody]
+    var actAsProfileId: String?
 }
 
 struct StoryReactionBody: Encodable {
@@ -333,6 +452,7 @@ struct CloseFriendDTO: Decodable {
 
 struct PresignBody: Encodable {
     var contentType: String
+    var actAsProfileId: String?
 }
 
 struct PresignDTO: Decodable {

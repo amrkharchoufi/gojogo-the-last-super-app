@@ -74,7 +74,8 @@ final class WatchStore {
                 thumbUrl: String?, videoUrl: String, durationSeconds: Int?) async throws -> VideoDTO {
         let body = CreateVideoBody(kind: kind, title: title, description: description,
                                    thumbUrl: thumbUrl, videoUrl: videoUrl,
-                                   durationSeconds: durationSeconds)
+                                   durationSeconds: durationSeconds,
+                                   actAsProfileId: ActingIdentity.shared.actAsProfileId)
         let dto: VideoDTO = try await APIClient.shared.post("/v1/videos", body: body)
         register(dto)
         return dto
@@ -128,7 +129,9 @@ final class WatchStore {
 
     func addComment(_ text: String, to videoID: UUID) async throws -> Comment {
         let dto: VideoCommentDTO = try await APIClient.shared
-            .post("/v1/videos/\(path(videoID))/comments", body: CreateCommentBody(text: text))
+            .post("/v1/videos/\(path(videoID))/comments",
+                  body: CreateCommentBody(text: text,
+                                          actAsProfileId: ActingIdentity.shared.actAsProfileId))
         return mapComment(dto)
     }
 

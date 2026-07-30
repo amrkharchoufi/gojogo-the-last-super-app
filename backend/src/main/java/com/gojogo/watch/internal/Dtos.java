@@ -17,7 +17,8 @@ import java.util.UUID;
  * @param subscribed      whether you follow them; the Subscribe button's state
  */
 record VideoChannel(UUID id, String name, String handle, String avatarUrl,
-                    long subscriberCount, boolean subscribed) {
+                    long subscriberCount, boolean subscribed,
+                    boolean business, boolean verified) {
 }
 
 /**
@@ -47,7 +48,8 @@ record CreateVideoRequest(@Size(max = 16) String kind,
                           @Size(max = 5000) String description,
                           @Size(max = 500) String thumbUrl,
                           @NotBlank @Size(max = 500) String videoUrl,
-                          @PositiveOrZero Integer durationSeconds) {
+                          @PositiveOrZero Integer durationSeconds,
+                          UUID actAsProfileId) {
 }
 
 /** Editing a published video. A null field is "leave it", not "clear it". */
@@ -60,5 +62,5 @@ record VideoCommentResponse(UUID id, VideoChannel author, String text, boolean l
                             int likeCount, OffsetDateTime createdAt) {
 }
 
-record CreateVideoCommentRequest(@NotBlank @Size(max = 2000) String text) {
+record CreateVideoCommentRequest(@NotBlank @Size(max = 2000) String text, UUID actAsProfileId) {
 }

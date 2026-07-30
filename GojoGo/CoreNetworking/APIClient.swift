@@ -112,7 +112,11 @@ final class APIClient {
     /// `onProgress` is 0…1 for the PUT body (not the presign round-trip).
     func uploadMedia(_ data: Data, contentType: String,
                      onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> String {
-        let presign: PresignDTO = try await post("/v1/media/presign", body: PresignBody(contentType: contentType))
+        // Uploading while acting as a business only decides which profile
+        // folder the object lands in; the server re-checks the ownership claim.
+        let actAs = await MainActor.run { ActingIdentity.shared.actAsProfileId }
+        let presign: PresignDTO = try await post(
+            "/v1/media/presign", body: PresignBody(contentType: contentType, actAsProfileId: actAs))
         guard let url = URL(string: presign.uploadUrl) else {
             throw APIError.http(status: -1, message: "Bad upload URL")
         }

@@ -15,9 +15,28 @@ struct ComposePostView: View {
                 GGColor.bg.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        // Publishing as a business is easy to forget you turned
+                        // on, and a post is the expensive place to find out.
+                        if let business = app.actingBusiness {
+                            HStack(spacing: 8) {
+                                Image(systemName: "briefcase.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                                Text("Posting as \(business.name)")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Spacer(minLength: 0)
+                                Button("Post as you") { app.stopActingAsBusiness() }
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(GGColor.accent)
+                            }
+                            .foregroundStyle(GGColor.textPrimary)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .glass(cornerRadius: 14, fillOpacity: 0.06, borderOpacity: 0.12)
+                        }
+
                         HStack(alignment: .top, spacing: 12) {
-                            UserAvatar(size: 40, letter: String(app.user.name.prefix(1)),
-                                       imageURL: app.user.avatarURL)
+                            UserAvatar(size: 40,
+                                       letter: String(app.publishingAsName.prefix(1)),
+                                       imageURL: app.actingBusiness?.avatarURL ?? app.user.avatarURL)
                             TextField("Share something…", text: $text, axis: .vertical)
                                 .font(.system(size: 16))
                                 .foregroundStyle(GGColor.textPrimary)

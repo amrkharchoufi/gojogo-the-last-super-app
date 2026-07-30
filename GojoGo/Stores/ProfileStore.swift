@@ -43,6 +43,31 @@ final class ProfileStore {
         return profile
     }
 
+    // MARK: Business profiles (Phase 2e M1)
+    //
+    // A business is a profile, so there is no "get a business" read here: the
+    // public read is the ordinary profile view, which now carries the business
+    // block. What's below is the owner's side only.
+
+    func createBusiness(_ body: CreateBusinessBody) async throws -> BusinessProfileDTO {
+        try await APIClient.shared.post("/v1/profiles/businesses", body: body)
+    }
+
+    func myBusinesses() async throws -> [BusinessProfileDTO] {
+        try await APIClient.shared.get("/v1/profiles/businesses/mine")
+    }
+
+    func updateBusiness(_ id: UUID, _ body: UpdateBusinessBody) async throws -> BusinessProfileDTO {
+        try await APIClient.shared.patch(
+            "/v1/profiles/businesses/\(id.uuidString.lowercased())", body: body)
+    }
+
+    /// What this account can be right now — businesses owned, applications,
+    /// provisioned merchants. Derived server-side; there is no role table.
+    func roles() async throws -> MyRolesDTO {
+        try await APIClient.shared.get("/v1/me/roles")
+    }
+
     func view(_ id: UUID) async throws -> ProfileViewDTO {
         try await APIClient.shared.get("/v1/profiles/\(id.uuidString.lowercased())")
     }

@@ -73,6 +73,12 @@ struct ProfileView: View {
 
     private var isOwn: Bool { profile.isOwn }
 
+    /// The id of the business being viewed, when it's one of yours.
+    private var businessID: UUID? {
+        guard profile.isBusinessOwner else { return nil }
+        return app.ownedBusinesses.first { $0.handle.lowercased() == profile.handle.lowercased() }?.id
+    }
+
     /// Tabs available for this profile. Everyone gets a customizable Home first.
     private var tabs: [ProfileTab] {
         isOwn
@@ -287,6 +293,11 @@ struct ProfileView: View {
         .sheet(isPresented: $app.showEditProfile) {
             EditProfileSheet().environmentObject(app)
         }
+        // The identity switcher opens from this screen only — one owner per
+        // AppState-driven sheet, or it silently refuses to present.
+        .sheet(isPresented: $app.showBusinessProfiles) {
+            BusinessProfilesView().environmentObject(app)
+        }
         .sheet(isPresented: Binding(
             get: { app.editingVideoID != nil },
             set: { if !$0 { app.closeVideoDetails() } }
@@ -360,10 +371,21 @@ struct ProfileView: View {
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(GGColor.textPrimary)
                 if isOwn {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(GGColor.ink(0.85))
-                } else {
+                    // The chevron is the identity switcher now: you, or one of
+                    // your business profiles (Phase 2e M1).
+                    Button {
+                        app.showBusinessProfiles = true
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(GGColor.ink(0.85))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } else if profile.verified {
+                    // Earned through a KYC'd partner approval — the only way
+                    // this badge is ever granted.
                     Image(systemName: "checkmark.seal.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(GGColor.ink(0.9))
@@ -387,6 +409,12 @@ struct ProfileView: View {
                         app.showEditProfile = true
                     } label: {
                         Label("Edit profile", systemImage: "pencil")
+                    }
+                    Button {
+                        app.showBusinessProfiles = true
+                    } label: {
+                        Label(app.hasBusinessProfile ? "Business profiles" : "Create business profile",
+                              systemImage: "briefcase")
                     }
                     Button {
                         if let i = tabs.firstIndex(of: .saved) {
@@ -550,7 +578,28 @@ struct ProfileView: View {
                 .foregroundStyle(GGColor.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if !isOwn {
+            if profile.isBusiness, let business = profile.business, !business.isEmpty {
+                businessBlock(business)
+            }
+
+            if isOwn, let acting = app.actingBusiness {
+                Button {
+                    app.showBusinessProfiles = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "briefcase.fill").font(.system(size: 11, weight: .semibold))
+                        Text("Publishing as \(acting.name)")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(GGColor.textPrimary)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .glassCapsule()
+                }
+                .buttonStyle(PressableStyle())
+                .padding(.top, 6)
+            }
+
+            if !isOwn && !profile.isBusiness {
                 HStack(spacing: 6) {
                     Circle().fill(GGColor.ink(0.35)).frame(width: 18, height: 18)
                     (Text("Followed by ")
@@ -564,6 +613,43 @@ struct ProfileView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 12)
+    }
+
+    /// Where a business is and how to reach it. Rendered from the profile view's
+    /// business block — the app never stores a second copy of it.
+    @ViewBuilder
+    private func businessBlock(_ business: BusinessContact) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !business.addressSummary.isEmpty {
+                businessLine("mappin.and.ellipse", business.addressSummary)
+            }
+            if !business.openingHours.isEmpty {
+                businessLine("clock", business.openingHours)
+            }
+            if !business.phone.isEmpty {
+                businessLine("phone", business.phone)
+            }
+            if !business.email.isEmpty {
+                businessLine("envelope", business.email)
+            }
+            if !business.website.isEmpty {
+                businessLine("link", business.website)
+            }
+        }
+        .padding(.top, 6)
+    }
+
+    private func businessLine(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(GGColor.textSecondary)
+                .frame(width: 16)
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(GGColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: Actions
@@ -587,6 +673,24 @@ struct ProfileView: View {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                             app.openActivity()
                         }
+                    }
+                }
+            } else if profile.isBusinessOwner {
+                // Your own business page: following yourself is meaningless, so
+                // this is where you run it from.
+                HStack(spacing: 8) {
+                    profileButton(app.actingBusinessID == businessID ? "Publishing as this" : "Publish as this") {
+                        if let businessID { app.actAsBusiness(businessID) }
+                    }
+                    profileButton("Manage") { app.showBusinessProfiles = true }
+                    ShareLink(item: "https://gojogo.app/@\(profile.handle)") {
+                        Text("Share")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(GGColor.textPrimary)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 34)
+                            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(GGColor.ink(0.12)))
                     }
                 }
             } else {

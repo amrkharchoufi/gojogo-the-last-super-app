@@ -28,7 +28,8 @@ record PartnerDocumentDto(UUID id, String kind, String contentType, OffsetDateTi
  *                         straight to the menu editor
  */
 record PartnerAccountDto(UUID id, String kind, String status,
-                         String businessName, String category, String description, String logoUrl,
+                         String businessName, UUID businessProfileId,
+                         String category, String description, String logoUrl,
                          String contactName, String contactPhone, String contactEmail,
                          String country, String city, String addressLine,
                          Double latitude, Double longitude,
@@ -47,6 +48,7 @@ record MyPartnerResponse(PartnerAccountDto account) {
 
 record SavePartnerApplicationRequest(@NotBlank @Size(max = 16) String kind,
                                      @NotBlank @Size(max = 120) String businessName,
+                                     UUID businessProfileId,
                                      @Size(max = 60) String category,
                                      @Size(max = 600) String description,
                                      @Size(max = 600) String logoUrl,

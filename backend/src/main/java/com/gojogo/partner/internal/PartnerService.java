@@ -5,6 +5,7 @@ import com.gojogo.delivery.MerchantRegistration;
 import com.gojogo.media.MediaApi;
 import com.gojogo.media.MediaDocumentApi;
 import com.gojogo.partner.PartnerReviewed;
+import com.gojogo.profile.ProfileApi;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -43,16 +44,18 @@ class PartnerService {
     private final MerchantProvisioningApi merchants;
     private final MediaDocumentApi privateMedia;
     private final MediaApi media;
+    private final ProfileApi profiles;
     private final ApplicationEventPublisher events;
 
     PartnerService(PartnerAccountRepository accounts, PartnerDocumentRepository documents,
                    MerchantProvisioningApi merchants, MediaDocumentApi privateMedia,
-                   MediaApi media, ApplicationEventPublisher events) {
+                   MediaApi media, ProfileApi profiles, ApplicationEventPublisher events) {
         this.accounts = accounts;
         this.documents = documents;
         this.merchants = merchants;
         this.privateMedia = privateMedia;
         this.media = media;
+        this.profiles = profiles;
         this.events = events;
     }
 
@@ -85,10 +88,14 @@ class PartnerService {
         if (!account.getStatus().isEditable()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, editBlockedMessage(account));
         }
+        // Linking a business profile is an ownership claim, so it goes through
+        // the same server-side check that guards acting as one (403 if not theirs).
+        UUID businessProfileId = request.businessProfileId() == null ? null
+            : profiles.requireActingProfile(me, request.businessProfileId());
         account.apply(request.businessName().trim(), request.category(), request.description(),
             request.logoUrl(), request.contactName(), request.contactPhone(),
             request.contactEmail(), request.country(), request.city(), request.addressLine(),
-            request.latitude(), request.longitude());
+            request.latitude(), request.longitude(), businessProfileId);
         // The logo is ordinary public media (it ends up on the storefront), so
         // it goes through the normal reference tracking; the KYC papers do not.
         // (Collections.singletonList, not List.of — the logo is optional.)
@@ -220,6 +227,7 @@ class PartnerService {
         if (account.getStatus() == PartnerStatus.SUSPENDED) {
             account.restore(OffsetDateTime.now());
             merchants.setMerchantSuspended(account.getProvisionedRefId(), false);
+            setBusinessVerified(account, true);
             publish(account);
             return toReview(account);
         }
@@ -239,6 +247,9 @@ class PartnerService {
             account.getUserId(), account.getBusinessName(), account.getCategory(),
             account.getLogoUrl(), account.getLatitude(), account.getLongitude()));
         account.approve(refId, OffsetDateTime.now());
+        // The verified badge is the KYC review's, not the owner's: this is the
+        // only place it is granted (SPECS.md §8 — no paid verification).
+        setBusinessVerified(account, true);
         publish(account);
         return toReview(account);
     }
@@ -268,8 +279,15 @@ class PartnerService {
         }
         account.suspend(note, OffsetDateTime.now());
         merchants.setMerchantSuspended(account.getProvisionedRefId(), true);
+        setBusinessVerified(account, false);
         publish(account);
         return toReview(account);
+    }
+
+    private void setBusinessVerified(PartnerAccount account, boolean verified) {
+        if (account.getBusinessProfileId() != null) {
+            profiles.setBusinessVerified(account.getBusinessProfileId(), verified);
+        }
     }
 
     private void publish(PartnerAccount account) {
@@ -387,7 +405,8 @@ class PartnerService {
         boolean editable = account.getStatus().isEditable();
         return new PartnerAccountDto(
             account.getId(), account.getKind().name(), account.getStatus().name(),
-            account.getBusinessName(), account.getCategory(), account.getDescription(),
+            account.getBusinessName(), account.getBusinessProfileId(),
+            account.getCategory(), account.getDescription(),
             account.getLogoUrl(), account.getContactName(), account.getContactPhone(),
             account.getContactEmail(), account.getCountry(), account.getCity(),
             account.getAddressLine(), account.getLatitude(), account.getLongitude(),

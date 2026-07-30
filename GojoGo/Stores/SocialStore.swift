@@ -53,7 +53,8 @@ final class SocialStore {
         let body = CreatePostBody(
             text: text,
             imageAspect: imageAspect,
-            mediaItems: slides.map { CreateMediaItemBody(imageUrl: $0.imageUrl, videoUrl: $0.videoUrl) })
+            mediaItems: slides.map { CreateMediaItemBody(imageUrl: $0.imageUrl, videoUrl: $0.videoUrl) },
+            actAsProfileId: ActingIdentity.shared.actAsProfileId)
         let dto: PostDTO = try await APIClient.shared.post("/v1/posts", body: body)
         return map(dto)
     }
@@ -98,7 +99,9 @@ final class SocialStore {
 
     func addComment(_ text: String, to postId: UUID) async throws -> Comment {
         let dto: CommentDTO = try await APIClient.shared
-            .post("/v1/posts/\(postId.uuidString.lowercased())/comments", body: CreateCommentBody(text: text))
+            .post("/v1/posts/\(postId.uuidString.lowercased())/comments",
+                  body: CreateCommentBody(text: text,
+                                          actAsProfileId: ActingIdentity.shared.actAsProfileId))
         return map(dto)
     }
 
