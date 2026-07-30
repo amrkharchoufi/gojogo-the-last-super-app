@@ -1,0 +1,183 @@
+# GoJoGo — Vision Gap Specs (missing logic, filled)
+
+Companion to [ARCHITECTURE.md](ARCHITECTURE.md). That file owns boundaries + phase sequencing; this file owns the **detailed logic** each vision-driven milestone needs, written down *before* building so a milestone session starts from decisions, not questions. Everything here is GoJoGo-side; GoJoAdmin consumes these APIs per ARCHITECTURE §10b.
+
+Conventions: money is integer **minor units** in a single platform currency (`PLATFORM_CURRENCY`, default config). Values marked **CONFIG** are server-side policy knobs (env/config table), never client constants. Defaults given are starting points, not commitments.
+
+---
+
+## 1. Money flows (payments / GoJo Wallet)
+
+One `payments` schema, double-entry: every movement is a `ledger_entry` (id, idempotency key, debit account, credit account, amount, kind, ref kind/id, created). Accounts are `(user_id | merchant_id | PLATFORM, bucket)` with buckets `AVAILABLE`, `STAKING`, `TOKENS`, `REWARDS`, `ESCROW`. Balances are materialized per account and must equal the entry sum (verified by a nightly job).
+
+**`WalletApi` (public):** `credit`, `debit`, `hold` (→ ESCROW), `release` (ESCROW → back), `capture` (ESCROW → payee), `transfer`, `balanceOf`. All idempotency-keyed; all refuse cross-currency. Verticals call this API only — no vertical touches Stripe.
+
+**Stripe boundary:** external money in/out only. Card charge → ledger credit to the payer's flow (or direct capture); payout = Stripe Connect transfer mirrored as a ledger debit. Stripe is source of truth for charges; the ledger reconciles (webhook-driven). Connect accounts are attached at provisioning time for **every payee kind**: merchant (2e), driver, courier (Phase 3/4), seller, service provider (Phase 5).
+
+**Capture model per transaction type:**
+
+| Transaction | When charged | Escrow? | Settlement |
+|---|---|---|---|
+| Delivery / multi-merchant order | At placement (card or wallet) | Yes — held until `DELIVERED` | Capture splits: merchant sub-totals, courier fee, platform fee (fee policy), tip → courier 100% |
+| Marketplace product | At placement | Yes — held until delivery confirmation (or auto-release after **CONFIG** 72h) | Seller minus platform fee |
+| Digital product | At purchase | No — instant capture | Seller minus platform fee; entitlement granted atomically with capture |
+| Ride | At completion (fare fixed at confirmation; stops re-quote) | No | Driver 100% of fare (token model, no commission); tip 100% |
+| Service booking | Held at booking, captured at completion | Yes | Provider minus platform fee; cancellation fees per policy (§7) |
+| Token pack | At purchase | No | Stripe → `TOKENS` credit at pack rate |
+| Driver stake | At application | `STAKING` (locked) | KYC fee debited from stake; verification reward transferred from stake; remainder refundable **CONFIG** 30 days after account closure with no open disputes |
+
+**Fees:** `payments.fee_policy` — per vertical: percentage bps + fixed minor units, effective-dated. Rides have fee 0 (tokens are the platform's revenue). **Refunds** reverse the original entries (partial allowed), Stripe refund mirrored. **Cash** (vision: "where available"): DEFERRED — spec'd as a `CASH` payment method that creates a courier/driver receivable ledger entry; do not build until a market needs it.
+
+**Receipts:** the order/trip record *is* the receipt (API-rendered); PDF/download deferred to a later polish slice.
+
+---
+
+## 2. Ride lifecycle + fare negotiation (`travel`)
+
+**Pricing engine (suggested fare):** `travel.pricing_config` per vehicle category: base + per-km + per-min (+ optional surge multiplier later, **CONFIG**). Distance/duration from the routing provider (§3). Suggested fare is advisory; the agreed fare is whatever negotiation lands on, floored at **CONFIG** min-fare.
+
+**State machine (`travel.ride`):**
+
+`DRAFT → REQUESTED → NEGOTIATING → CONFIRMED → ARRIVING → IN_TRIP → COMPLETED | CANCELLED_RIDER | CANCELLED_DRIVER | EXPIRED`
+
+- **REQUESTED:** rider submits pickup, destination, category, and either accepts the suggested fare or a custom offer. Dispatch (§3) opens a candidate wave.
+- **NEGOTIATING:** offers are rows (`ride_offer`: driver, amount, state PENDING/ACCEPTED/DECLINED/EXPIRED/WITHDRAWN, TTL). A driver may accept the rider's price (instant match), or counter; the rider may accept a counter, counter back (one more round max — **CONFIG** `maxNegotiationRounds=2`), or ignore. Offer TTL **CONFIG** 30s; request TTL **CONFIG** 5 min → `EXPIRED`. First acceptance in either direction wins atomically (conditional update); all other offers auto-expire.
+- **CONFIRMED:** fare frozen; driver token debit happens **here** (§4); rider sees driver/vehicle/plate/ETA; a `messaging` thread opens with `ConversationContext(kind=RIDE, refId=rideId)`.
+- **ARRIVING / IN_TRIP:** driver position fan-out over the existing WebSocket (same pattern as chat); pickup confirmed by driver tap (+ optional rider PIN **CONFIG**, default off). **Add stop:** allowed IN_TRIP; re-quotes via pricing engine; rider must accept the new fare in-app before rerouting; declined → original route stands.
+- **COMPLETED:** fare charged (§1), mutual rating window opens (**CONFIG** 7 days), `TripCompleted` event published (consumed by `partner` §5 community verification, `notifications`).
+- **Cancellation:** rider free until CONFIRMED; after CONFIRMED a **CONFIG** cancel fee applies once the driver moved; driver cancel refunds tokens + reopens the request (one automatic re-dispatch wave).
+
+**Scheduled rides:** `scheduledAt` on the ride; a claim-and-fire poller (the send-later pattern from messaging) promotes it to REQUESTED at T − **CONFIG** lead (default 10 min). **Book for someone else:** recipient name + phone on the ride; recipient gets tracking via share link (§10) + SMS when SNS is unblocked; the booker pays.
+
+---
+
+## 3. Dispatch matching (platform `dispatch`)
+
+Owns: driver/courier presence + assignment. Redis GEO for positions (updated over WebSocket, **CONFIG** every 5s while available); Postgres (or thin ledger) for assignments and provisioning registries.
+
+- **Provisioning registries:** `dispatch.driver` / `dispatch.courier` rows created by `DriverProvisioningApi`/`CourierProvisioningApi` at partner approval: vehicle category(ies), active vehicle, availability flag, home region. A dual-mode user is one person with both rows; **mode toggle** = availability flags (both may be on; an accepted job in either flips the other to busy).
+- **Candidate search:** radius rings (**CONFIG** 1 → 3 → 7 km waves, 15s apart), filtered by category, availability, not-busy, rating floor **CONFIG**; ranked by `score = w1·proximity + w2·rating + w3·idleTime` (idle time prevents starvation). Wave size **CONFIG** 5.
+- **Offer fan-out:** dispatch pushes the request to the wave over WebSocket; responses route back to the vertical (travel owns negotiation; delivery auto-assigns first-accept). Dispatch records assignment; the vertical owns all further state.
+- **Courier trigger for orders:** search starts at `readyAt − pickupLead` where `readyAt = acceptedAt + prepMinutes` (merchant-set per item, max of the basket) and `pickupLead` **CONFIG** 7 min — the "approaching readiness" logic from the vision.
+- **Performance counters** (vision's driver metrics): acceptance / completion / cancellation rates + rolling 30-day windows, incremented by dispatch events; exposed to the driver dashboard and to matching (rating floor).
+- **Routing/ETA authority:** server calls **Mapbox Directions API** (already the map vendor; server-side token, **CONFIG** swap-able to OSRM later for cost) for authoritative ETAs + route polylines; client Mapbox remains UX-only. ETAs recomputed on each position tick, throttled **CONFIG** 15s.
+
+---
+
+## 4. Driver/courier onboarding logic (`partner` + wallet + dispatch)
+
+Extends live `partner` machinery; the application object is unchanged, `kind=DRIVER|COURIER`.
+
+- **Order of operations:** application → **stake** → KYC → vehicle(s) → approval → provisioning. The $30 stake (**CONFIG** `driverStakeAmount`) is a `WalletApi` hold into `STAKING` and is a *precondition for submission*, not approval — vision: staking funds verification. Insufficient wallet → Stripe top-up inline.
+- **KYC:** `IdentityVerificationApi` (new, inside `partner` or `auth`): `submit(docs) → PENDING | VERIFIED | FAILED(reasons)`. Impl #1 = today's human review surface (manual verdict); impl #2 = external IDV vendor adapter (Persona/Onfido-class) later — same interface, so the vendor is a config swap. KYC fee (**CONFIG**) debited from `STAKING` on submission; resubmission after FAILED charges only **CONFIG** retry fee (default 0).
+- **Vehicles:** `partner.vehicle` — category, make, model, year, color, plate (unique per region), registration + insurance docs via `MediaDocumentApi` (private), 5 photos via `media` (public). States: `SUBMITTED → APPROVED → COMMUNITY_VERIFIED | FLAGGED`. Multiple vehicles allowed; exactly one **active** per driver; each verifies independently. Insurance/registration expiry dates stored → expiry pushes + auto-suspend on lapse (**CONFIG** grace 7 days).
+- **Community vehicle verification:** on the **first** `TripCompleted` for an APPROVED-but-not-verified vehicle, `partner` invites that passenger (push + in-app card, expires **CONFIG** 48h; falls through to the next passenger, max **CONFIG** 3 invites). Passenger confirms: driver matches, photos match, plate matches, roadworthy, no fraud — plus optional photos (private prefix) and comment. All-yes → vehicle `COMMUNITY_VERIFIED`, badge everywhere, reward (**CONFIG**, e.g. $3) transferred from the driver's `STAKING` to the passenger's `REWARDS`. Any-no → `FLAGGED` + application `SUSPENDED` + admin review; the driver receives no new requests meanwhile.
+- **Ride-hailing tokens:** `payments.token_policy` — tokens required per ride, keyed by category + distance band, effective-dated (central updates, no client change — vision). Debit at CONFIRMED; refund on driver-fault cancellation; no refund on completion or rider-fault cancel. Packs: `payments.token_pack` (size, price). Low-balance push at **CONFIG** threshold; a driver below min balance is filtered out by dispatch, not blocked from the app.
+- **Withdrawals:** `AVAILABLE → Stripe Connect payout`; min amount + cooldown **CONFIG**; history from the ledger.
+
+---
+
+## 5. Delivery at full vision — missing pieces
+
+- **Multi-merchant orders:** `delivery.order` becomes the parent (payment, address, recipient, totals); new `delivery.sub_order` per merchant (items, prep state machine — today's order states minus courier states). Courier states live on the parent (single-courier default) or per **leg** when dispatch splits merchants across couriers (**CONFIG** `maxMerchantsPerCourier=3`, split when route cost exceeds threshold). One payment hold; settlement splits per sub-order at capture (§1). Cancellation is per-sub-order until its merchant accepts; full-parent cancel refunds everything.
+- **Handoff integrity:** pickup = 6-char order code on the sub-order (courier shows / merchant confirms; QR of the same code); delivery = **CONFIG** per-order choice of recipient PIN (default), photo (contactless), or plain confirm. Wrong PIN 3× → courier sees support flow, order stays `ARRIVED`.
+- **Ordering for someone else:** recipient name/phone/instructions on the order (fields exist in spirit from addresses); recipient tracking via share link (§10) + SMS later. Booker pays; recipient gets the PIN.
+- **Scheduled orders:** `scheduledAt`; poller promotes to merchant queue at `scheduledAt − prep − pickupLead`; modify/cancel free until promotion ("before preparation begins" — vision).
+- **New categories** (grocery, pharmacy, retail, flowers, electronics, pet, package, errands): merchant `category` + order `kind`. Package delivery = order with pickup+dropoff and no merchant catalog (courier-only). **Errands/shopping assistance:** DEFERRED — free-form baskets break server-side pricing (the one invariant this vertical is built on); revisit as a quoted-then-approved flow.
+- **Disputes** (missing items / wrong / damaged — vision): `delivery.dispute` on a delivered order: reason, items, photos, state `OPEN → RESOLVED_REFUND(full|partial) | RESOLVED_REJECTED`, **CONFIG** window 24h. Resolution is a human act on the admin surface (GoJoAdmin later; token surface now); refund executes via `WalletApi`. Same shape reused by economy/services later.
+- **Order push:** `OrderStatusChanged` finally gets its consumer — `notifications` maps each transition to a push (see §12 matrix). Lands with checkout (2e M3), not Phase 4.
+
+---
+
+## 6. Commerce gaps (`economy`)
+
+- **Product model (merchant catalogs, Phase 5 M1):** `economy.product` (seller merchant, name, description, category, brand, media gallery, specs JSON) + `product_variant` (SKU, option values e.g. size/color, price, stock) + per-variant inventory. **Inventory:** decrement inside the order transaction with a conditional `stock >= qty` update (oversell-proof); restore on cancel/refund. C2C `listing` stays as-is — a listing is not a product.
+- **Cart:** stays client-side (the delivery decision, kept): checkout posts item ids + quantities; server prices everything. One cart per seller context; multi-seller product checkout = the multi-merchant parent/sub-order pattern (§5) reused.
+- **Promotions (missing everywhere in the current plan):** per-vertical `promotion` table, one shared shape: scope (merchant | item/variant), type (`PERCENT` bps | `FIXED`), window, optional code, per-user limit, min basket. Applied server-side at pricing time; the discount is an order line, so receipts and refunds stay honest. Delivery first (2e M3 checkout), economy at Phase 5 M1. Free-delivery promos are a fee-line discount, same mechanism.
+- **Reviews:** per-vertical engagement-style tables (the watch pattern): `review(target, author, rating 1–5, text, photos, created)`, one per buyer per fulfilled order/booking (verified-purchase only), aggregate cached on the target. Merchant reply: one per review. Applies to products, merchants, providers, services; delivery keeps its existing order rating and gains the written+photo form.
+- **Digital products:** `product_kind=DIGITAL` + `digital_asset` (S3 private prefix via `MediaDocumentApi` pattern), `entitlement(user, product, kind = DOWNLOAD | LICENSE | SUBSCRIPTION)` granted at capture; downloads = short-lived signed GET, re-issuable while entitled; license keys = pre-loaded pool or generated; subscriptions = Stripe subscription mirrored to an entitlement with `expiresAt`.
+- **Ownership transfer:** `listing_kind=OWNERSHIP_TRANSFER` + VIN/serial, condition, documents (private). Flow: `INQUIRY → OFFER_ACCEPTED → PAYMENT_HELD (escrow) → DOCS_CONFIRMED (admin checkpoint — a human verifies the paperwork; same posture as KYC review) → TRANSFERRED → RELEASED`. Either side can cancel before DOCS_CONFIRMED → full refund. High-value: **CONFIG** cap on wallet-held amount; above it, flag for manual settlement.
+- **Taxes/shipping:** flat per-merchant config (tax bps, shipping flat/threshold-free). No tax engine — revisit per market.
+
+---
+
+## 7. Services booking (`services`, Phase 5 M3)
+
+- **Provider profile:** provisioned via `partner` (`kind=SERVICE_PROVIDER` → `services.ProviderProvisioningApi`); qualifications/certifications docs private, portfolio public, service areas (regions), languages, response-time stat (computed from messaging first-reply times).
+- **Catalog:** `service` (name, description, category, duration, price | `PRICE_ON_QUOTE`, location kind `AT_PROVIDER | AT_CUSTOMER | REMOTE`, requirements/preparation text, cancellation policy ref).
+- **Availability:** weekly template (slots per weekday) + exception dates; bookable slots = template − exceptions − existing bookings − **CONFIG** buffer; horizon **CONFIG** 60 days.
+- **Booking state machine:** `REQUESTED → CONFIRMED → COMPLETED | DECLINED | CANCELLED_CUSTOMER | CANCELLED_PROVIDER | NO_SHOW`. Payment held at request; provider must confirm within **CONFIG** 24h or auto-decline (auto-release). `PRICE_ON_QUOTE`: provider quotes in the thread → customer accepts → hold. Cancellation policy tiers (**CONFIG** per policy: free until X h before, then Y% fee, no-show 100%); provider cancel always free to customer + counts against provider metrics. Completion: provider marks done, customer has **CONFIG** 48h to dispute (§5 dispute shape), else auto-capture.
+- **Thread:** every booking opens `ConversationContext(kind=BOOKING)`.
+
+---
+
+## 8. Business profiles, act-as, roles (2e M1)
+
+- **Model:** `profile.kind = PERSON | BUSINESS`; business fields (category from the vision's taxonomy, description, address + geo, hours JSON, contact, links) on a `business_profile` extension table (`profile` schema); `owner_profile_id` → the owning person. **CONFIG** max businesses per owner (default 5). Team members/multi-owner: DEFERRED (single owner until GoJoAdmin needs roles).
+- **Act-as:** mutation endpoints that create content (`posts`, `stories`, `videos`, media presign) accept optional `actAsProfileId`; server verifies `owner_profile_id == caller` else 403. Reads are unchanged (a business profile is just a profile). Likes/comments *as* a business: allowed, same mechanism. No second token, no session switch server-side; the iOS switcher is pure client state.
+- **Commerce enablement:** `partner` application carries `business_profile_id`; approval stamps the vertical's provisioned id back. A business with no approval is content-only — exactly the vision's "brand before commerce".
+- **Verified badge:** businesses get `verified=true` only via partner approval (KYC'd); no paid verification.
+- **Role switching (vision "activate roles, switch between roles"):** roles are *derived*, not stored — `hasBusiness` (owned business profiles), `isDriver`/`isCourier` (dispatch registries), `merchantOf` (provisioned verticals). One `GET /v1/me/roles` aggregate powers the iOS profile switcher and mode toggles; no role table to drift.
+
+---
+
+## 9. Storefront JSON contract (2e M4)
+
+One document per merchant (later per business), versioned: `{version, blocks: [...]}` where each block is `{type, id, ...props}` from a **closed set**: `hero` (media, headline, cta → item/section), `featured_items` (item ids), `collection` (title, item ids), `promo_banner` (promotion id), `media_row` (post/video ids — Studio's "import existing content"), `text` (about/policies), `info` (hours/delivery/pickup — rendered from live merchant data, not duplicated). Server validates types + referenced ids on write (400 on unknown type — forward-compat by version bump, the app's optional-decode discipline). Owner-scoped write `/mine/storefront`; public read embedded in the merchant/business payload. iOS renders read-only; unknown block types are skipped silently.
+
+---
+
+## 10. Trust & safety baseline (new — was missing from vision *and* plan)
+
+Required before social scale (and App Store UGC guideline 1.2: report + block + takedown).
+
+- **Blocking:** `social.block(blocker, blocked)` — removes follows both ways, hides each other's content/comments everywhere (feed, stories, watch, search), and `messaging` refuses new 1:1s (existing threads freeze). Exposed via an extended `SocialGraphApi.blockedIds` so other modules filter without owning the table.
+- **Reporting:** platform `moderation` module (new, small): `report(reporterId, targetKind, targetId, reason, note)` — target kinds: post, story, video, comment, message, profile, listing, product, merchant, ride, order. Queue states `OPEN → ACTIONED(hide|remove|suspend) | DISMISSED`; review is human on the admin surface (GoJoAdmin later). `hide` is soft (author still sees it); `suspend` cascades to Cognito disable. Same module records ride/delivery incident reports (vision "reporting tools").
+- **SOS (rides/deliveries):** button IN_TRIP → one-tap call to the local emergency number (**CONFIG** per region), simultaneous notify of the user's **emergency contacts** (`profile.emergency_contact`, max **CONFIG** 5) with a live share link, trip flagged `SOS` (admin surface + event). No PSAP integration claimed.
+- **Live share links (rides, deliveries, later stories):** `share_token(kind, refId, token, expiresAt)` → public unauthenticated `GET /v1/share/{token}` returning a minimal tracking payload (position, ETA, driver first-name/plate) — the vision's "share with trusted contacts" for non-users. Expires at trip end + **CONFIG** 1h. Same token mechanism later backs universal links `https://gojogo.app/s/{token}` for content sharing (deep-link routing is an iOS slice).
+
+---
+
+## 11. Identity gaps (`auth`)
+
+- **Phone signup** (vision lists it; currently email/Google/Apple only): Cognito `phone_number` alias + SMS OTP — **blocked on the existing SNS SMS production item** (PROGRESS "Needs YOU" #3); build only after that clears. Note: app-account phone is distinct from the My World phone identity by design — linking them is a product decision, default *not linked*.
+- **MFA** ("secure their account"): Cognito optional TOTP MFA, settings toggle. Low-effort, post-2e polish.
+- **Account deletion** (App Store requirement, missing): `DELETE /v1/me` → Cognito disable + 30-day grace → hard anonymize (profile scrub, content tombstone, ledger rows kept — legal). Needs a runbook slice alongside trust & safety.
+
+---
+
+## 12. Messaging + notifications coverage
+
+- **`ConversationContext` kinds:** `LISTING` (live) + `RIDE`, `ORDER`, `BOOKING` (each vertical stamps its card; the pattern is proven). **Support chat:** `kind=SUPPORT` conversations with a reserved platform peer; inbox = GoJoAdmin later; until then the card deep-links to mail. Do not build a support agent console in iOS.
+- **Push matrix (each event → push, in-app row, or both):** live today: social events + `MessageSent` + `PartnerReviewed`. To add, in order: `OrderStatusChanged` (2e M3 — placed/accepted/ready/picked-up/arriving/delivered), payment received / payout sent (2e M3), ride offer / confirmed / arriving / completed (Phase 3), token low balance (Phase 3), verification invite + reward (Phase 3), booking requested / confirmed / reminder **CONFIG** 24h+1h (Phase 5), dispute updates (Phase 4). Every new event gets: an `@ApplicationModuleListener` in `notifications`, an activity row, and an APNs template — one pattern, no exceptions.
+
+---
+
+## 13. Search & discovery contract (Phase 5 M4)
+
+- **Index sources (consumers for events already publishing into the void):** `PostCreated`, `ListingCreated` + to-add `ProductUpserted`, `MerchantUpserted`, `VideoPublished`, `ServiceUpserted`, `BusinessProfileUpserted`. Each module owns its document shape; the `search` module owns only the pipeline + query API (index-per-domain, one alias).
+- **Query surface:** `GET /v1/search?q=&kind=&near=&filters=` — kinds: people, businesses, products, menu items, services, videos, posts. Location filter from business geo. Ranking: text relevance × popularity (engagement counts) × distance decay for local kinds; personalization (follow graph boost) later.
+- **Trending / recommendation rails** ("discover trending topics", "featured/trending restaurants"): periodic aggregation jobs over engagement events → cached rails per region; not real-time, **CONFIG** refresh 15 min. Until Phase 5 M4, "trending" surfaces stay recency+engagement sorts from Postgres (the live feed ranking pattern).
+
+---
+
+## 14. Platform config registry
+
+All **CONFIG** knobs above live in one place: environment for infra-ish values, a `platform.config` table (key, value, effective_from) for product policy (fees, token policy, stake, TTLs, radii, windows) — readable by all modules via a tiny `ConfigApi`, cached **CONFIG** 60s, edited from the admin surface later. Effective-dating is what lets GoJoAdmin change token prices "without changing the driver experience" (vision).
+
+---
+
+## 15. Explicitly deferred (decided, not forgotten)
+
+| Item | Why deferred |
+|---|---|
+| Cash payments | Receivable/reconciliation complexity; no market requirement yet (§1) |
+| Errands / shopping assistance | Breaks server-side pricing invariant; needs quote-approve flow (§5) |
+| Team members / staff roles on a business | Single owner until GoJoAdmin needs roles (§8) |
+| GoJoAds | No seam beyond existing engagement events (ARCHITECTURE §10b) |
+| Articles (long-form) | A post kind + editor UX; no dependencies, schedule when social invests |
+| Healthcare-specific compliance | Providers onboard as service providers; no medical records, no claims |
+| Real estate (ownership transfer) | Vision marks it future |
+| PDF receipts/invoices | Order record is the receipt (§1) |
+| Multi-currency | Single `PLATFORM_CURRENCY` until a second market exists |
+| KYC vendor integration | Interface ready (§4); manual review until volume justifies vendor cost |

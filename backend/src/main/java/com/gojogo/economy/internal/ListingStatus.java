@@ -7,8 +7,12 @@ import org.springframework.web.server.ResponseStatusException;
  * Where a listing is in its life. Only {@link #ACTIVE} listings appear in
  * browse; the other two stay visible to the seller (and to anyone who saved
  * the listing) so a sale isn't indistinguishable from a deletion.
+ *
+ * Public (though still in the internal package, so unreachable cross-module):
+ * Spring Data's interface projection returns it through a JDK proxy, and the
+ * proxy can't touch a package-private class — /mine/stats 500'd in prod.
  */
-enum ListingStatus {
+public enum ListingStatus {
     /** Live in the marketplace. */
     ACTIVE,
     /** Taken down by the seller, not sold — relisting is one tap. */

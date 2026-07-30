@@ -2,6 +2,7 @@
 
 Status: **Phase 1 complete** (auth / profile / social / media live); **Phase 2 · Milestones 1–3 deployed** — M1 My World messaging (+ WhatsApp-style setup), M2 platform notifications (activity feed, first consumer of social domain events), M3 APNs push (**activated** — key in Secrets Manager, verified authenticating to Apple; device delivery pending a physical-device test) + messaging polish (reply-linking, typing) — `messaging` module + DynamoDB + WebSocket infra + iOS wiring live in prod (two-user REST + real-time fan-out green), plus a **WhatsApp-style My World setup**: its own phone-verified identity (OTP over SNS + dev-code fallback) and World name/avatar, gated on first entry, separate from the app/social account. See [PROGRESS.md](PROGRESS.md) for deploy URLs, API surface, and known issues.
 Stack: Spring Boot (modular monolith, Spring Modulith) · AWS · Postgres · iOS/SwiftUI client
+Vision alignment (2026-07-30): Phases 3+ re-planned against the full GoJoGo product vision (five pillars: Social & Content · Transportation · Delivery · Commerce · Services). See §2b for the pillar → module map, §10 for the new phase plan, and §10b for the GoJoAdmin integration contract. Only GoJoGo-side work is planned here; GoJoAdmin is a separate build that consumes the seams §10b defines. **[SPECS.md](SPECS.md)** fills the detailed logic every vision milestone needs (money flows, negotiation + dispatch mechanics, multi-merchant orders, bookings, storefront JSON, trust & safety, config registry) — read it before building any Phase 2e+ milestone.
 Budget context: build in small paid milestones. Phase 2 Milestones 1–3 (My World messaging, notifications, APNs push + polish) are deployed; the next spend should finish the remaining Phase 2 loops (live device E2E, social sign-in verification) before spreading into commerce + delivery + Stripe.
 
 ---
@@ -32,17 +33,41 @@ GojoGo is a **superapp**. A flat list of equal modules under-explains how the iO
           ▲ used by ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   VERTICAL PRODUCTS                          │
-│  social · watch · travel · delivery · economy · partner      │
-│  assistant                                                   │
+│  social · watch · travel · delivery · economy · services     │
+│  partner · assistant                                         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 | Layer | Modules | Role |
 |---|---|---|
-| **Platform** | `auth`/`identity`, `media`, `music`, `messaging`, `notifications`, `payments`, `dispatch`, `search` | Reusable capabilities. Verticals compose these; they do not re-implement chat, push, geo-matching, or uploads. |
-| **Verticals** | `social`, `watch` (catalog UX on `media`), `travel`, `delivery`, `economy`, `partner`, `assistant` | Product surfaces the user opens from Collections / My World. Own their domain data; call platform APIs + publish events. |
+| **Platform** | `auth`/`identity`, `media`, `music`, `messaging`, `notifications`, `payments` (incl. **GoJo Wallet**), `dispatch`, `search` | Reusable capabilities. Verticals compose these; they do not re-implement chat, push, geo-matching, uploads, or money movement. |
+| **Verticals** | `social`, `watch` (catalog UX on `media`), `travel`, `delivery`, `economy`, `services` (Phase 5), `partner`, `assistant` | Product surfaces the user opens from Collections / My World. Own their domain data; call platform APIs + publish events. |
 
 **Why this is better than a flat module list:** My World is not “another social feature” — it is the private network shell. Seller chat is commerce, not World Chat. Co-watch Madeleine rooms sit on media + assistant. Dispatch is shared by travel and delivery and must be an explicit module, not an informal “shared engine.”
+
+---
+
+## 2b. Product vision → module map (the five pillars)
+
+The GoJoGo vision is five interconnected pillars plus supporting systems. Nothing in it requires a new architecture — it requires **two structural decisions** and a handful of new/extended modules. Everything else lands inside modules that already exist.
+
+| Vision pillar / system | Lands in | Status | Notes |
+|---|---|---|---|
+| Identity & accounts (phone/email/Google/Apple, roles, business profiles) | `auth` + `profile` (+ `partner` for role approval) | Mostly live | Business profiles + role switching are Phase 2e M1. One Cognito account powers everything, incl. GoJoAdmin later. |
+| Social & content (videos, photos, posts, carousels, articles, follows, likes, saves, trending) | `social`, `watch`, `media`, `music` | Live | Businesses publish through the **same** modules once business-as-profile lands — no separate business content system. Articles = a post kind, later slice. |
+| Transportation (ride-hailing, negotiation, scheduling, safety, vehicle categories) | `travel` + platform `dispatch` | Phase 3 | Fare negotiation is `travel` order state; `dispatch` only matches. Vehicle categories are a `travel` enum, not modules. |
+| Driver & courier platform (modes, onboarding, staking, tokens, earnings) | `partner` (application/KYC — live) + `dispatch` (provisioning) + `payments` wallet (stake, tokens, earnings) | Phase 3 | `partner` already models DRIVER/COURIER kinds and refuses approval until dispatch exists — exactly the seam Phase 3 fills. |
+| Delivery (multi-category, multi-merchant, scheduled, for-someone-else) | `delivery` + `dispatch` | Partially live | Catalog/orders/state machine live; simulated fulfilment job is replaced by dispatch (designed for that). Grocery/pharmacy/retail are merchant **categories**, not new modules. |
+| Commerce (storefronts, products, variants, digital, ownership-transfer) | `economy` (+ `delivery` for food) | Listings live | Grows from C2C listings to merchant catalogs in Phase 5. Storefront config is authored in GoJoAdmin, rendered in GoJoGo. |
+| Services marketplace (providers, catalogs, booking) | **`services`** (new vertical) | Phase 5 | Provisioned through `partner` like every other economic player. |
+| Payments & wallet (balances, staking, tokens, tips, refunds, payouts) | **`payments`** (extended: GoJo Wallet ledger) | Phase 2e | See decision 2 below. |
+| Messaging (users ↔ drivers/couriers/businesses/support) | `messaging` | Live | Seller-chat pattern (`ConversationContext`) generalizes to order/ride threads. |
+| Safety (contacts, live share, SOS, verified identities/vehicles) | `travel`/`delivery` UX + `partner` verification + `messaging` share | Phase 3 | Community vehicle verification is `partner` + a `travel` completion hook. |
+| AI & platform intelligence (recommendations, matching, demand, fraud) | `search`, `dispatch`, `assistant`, feed ranking in verticals | Phase 6 | Feed ranking already live; the rest lands behind existing module APIs. |
+
+**Decision 1 — a business is a profile.** The vision's universal journey ("create a Business Profile, build an audience, then activate commerce") means businesses must be discoverable, followable, content-publishing entities *before* any commerce exists. The cheapest correct model: `profile` gains `kind = PERSON | BUSINESS` plus business fields (category, address, hours, links) and an owning user. The entire social graph, feed, stories, watch, notifications, and search machinery then works for businesses with **zero changes** — a follow is a follow, a post is a post. The owner "acts as" the business on mutations (server-verified ownership, no second token). `partner` keeps owning the *operational* relationship (application, KYC, approval status); an approval flips the business profile's commerce state for its vertical. Do **not** build a parallel `business` module with its own graph — that forks every social feature forever.
+
+**Decision 2 — the wallet is `payments`, and tokens/stakes are ledger rows.** Staking ($30 driver stake), the KYC fee deducted from it, ride-hailing token packs and per-ride deductions, verification rewards paid from a stake, tips, earnings, and refunds are all **internal balance transitions** — one double-entry ledger in the `payments` schema with buckets per user: `available`, `staking` (locked), `tokens`, `rewards`. Stripe (+ Connect) is the only thing that moves external money, and remains source of truth for charges; the ledger reconciles. "Token" is a ledger credit with a policy price — not a crypto asset, no chain, no speculation surface. A public `WalletApi` (credit/debit/hold/release with idempotency keys) is what `travel`, `delivery`, `economy`, `services`, and `partner` call; none of them ever touch Stripe directly.
 
 ---
 
@@ -67,7 +92,7 @@ Use **Spring Modulith** instead of folder-structure convention alone:
 
 **Schema-per-module in one physical Postgres database:**
 
-- Platform/vertical schemas as modules land: `profile.*`, `social.*`, `media.*`, `messaging.*` (Postgres side where needed), `notifications.*`, `economy.*`, `delivery.*`, `travel.*`, `partner.*`, `dispatch.*` (or Redis-primary with a thin Postgres ledger), `payments.*` (ledger only — Stripe is source of truth for charges).
+- Platform/vertical schemas as modules land: `profile.*`, `social.*`, `media.*`, `messaging.*` (Postgres side where needed), `notifications.*`, `economy.*`, `delivery.*`, `travel.*`, `partner.*`, `dispatch.*` (or Redis-primary with a thin Postgres ledger), `services.*`, `payments.*` (the GoJo Wallet double-entry ledger; Stripe is source of truth for external charges).
 - **No foreign keys across schemas. No cross-schema JOINs in application code.** Cross-domain reads go through public APIs or events.
 - Messaging / live position / Madeleine memory may use **DynamoDB** where write patterns demand it; that does not excuse mixing Postgres ownership across modules.
 
@@ -90,7 +115,10 @@ Spring Boot — PLATFORM:
    identity/auth · media · messaging · notifications · payments · dispatch · search
 
 Spring Boot — VERTICALS:
-   social · watch(catalog) · travel · delivery · economy · partner · assistant
+   social · watch(catalog) · travel · delivery · economy · services · partner · assistant
+
+GoJoAdmin (separate web app, later) ──► the SAME Spring Boot REST APIs
+   (owner-JWT for merchant self-service; platform-admin role for review/ops — see §10b)
 
 Shared infra:
    Postgres (RDS) · Redis (cache, sessions, GEO dispatch) · OpenSearch
@@ -112,12 +140,12 @@ Shared infra:
 | `HomeView`, `Post`, `Story`, `Comment`, `ComposePostView` | Vertical | `social` | `social` | Feed, likes, bookmarks, follows — **live**. Stories are the full Instagram surface since Phase 2c (photo/video/text frames, overlays, replies, reactions, viewers, mute, archive, highlights, close friends) |
 | `ProfileView`, `GGUser`, `ProfileUser`, interests | Platform-ish | `profile` | `profile` | CRUD + by-handle — **live** |
 | Presigned upload, post/story media | Platform | `media` | S3 (+ `media` metadata) | CloudFront deferred — **live** (S3 public-read interim). Two public APIs: `MediaApi` for that public product, and `MediaDocumentApi` (2b M6) for KYC papers, which presign into a **private** prefix and are read only through a short-lived signed GET |
-| `ShortsView`, `WatchView`, `VideoItem`, `Short` | Vertical on platform | **`watch`** | `watch` | **Live** — long-form + shorts catalog, authored title/description/thumbnail, likes, saves, distinct-viewer view counts, comments, owner-only edit/delete. Reads `SocialGraphApi` so **subscribers = followers**. Playback is still the direct-S3 object; UGC HLS transcode = Phase 3 |
+| `ShortsView`, `WatchView`, `VideoItem`, `Short` | Vertical on platform | **`watch`** | `watch` | **Live** — long-form + shorts catalog, authored title/description/thumbnail, likes, saves, distinct-viewer view counts, comments, owner-only edit/delete. Reads `SocialGraphApi` so **subscribers = followers**. Playback is still the direct-S3 object; UGC HLS transcode = Phase 6 |
 | `GojoTVView`, `TVShow` | Vertical on platform | `media` (+ later `watch` catalog) | `media` | Still SampleData on client |
 | `GojoTravelView`, `TravelPlace`, `RideOption`, `TravelDriver` | Vertical | `travel` | `travel` | Uses platform `dispatch` + client Mapbox |
-| `GojoDeliveryView`, restaurant/cart/courier | Vertical | `delivery` | `delivery` | Own `AppTab`; **live** (M4) — catalog, server-priced orders, fulfilment state machine. Restaurants enter the catalog only through a `partner` approval (2b M6); merchants manage their own storefront + menu. Will use platform `dispatch` for real couriers (Phase 3) |
+| `GojoDeliveryView`, restaurant/cart/courier | Vertical | `delivery` | `delivery` | Own `AppTab`; **live** (M4) — catalog, server-priced orders, fulfilment state machine. Restaurants enter the catalog only through a `partner` approval (2b M6); merchants manage their own storefront + menu. Will use platform `dispatch` for real couriers (Phase 4 M1) |
 | `EconomyView`, `Product` | Vertical | `economy` | `economy` | Marketplace listings — **live**; `SellerListingsView` is the seller side (edit, pause, mark sold, delete, saves/views) |
-| `MerchantDashboardView` (+ `MerchantPartnerView` shell) | Vertical | `partner` (+ owner-scoped `delivery`) | `partner` | **Built 2b M6, not yet deployed.** Onboarding (apply → private KYC upload → human review → provision) happens in **Gojo Admin**; the app keeps only the owner's dashboard — storefront, open/closed, menu editor — behind a chip shown to a restaurant's owner alone |
+| `MerchantDashboardView` (+ `MerchantPartnerView` shell) | Vertical | `partner` (+ owner-scoped `delivery`) | `partner` | **Live (2b M6, deploy confirmed 2026-07-30).** Onboarding (apply → private KYC upload → human review → provision) happens in **Gojo Admin**; the app keeps only the owner's dashboard — storefront, open/closed, menu editor — behind a chip shown to a restaurant's owner alone |
 | `PartnerFlowView`, `PartnerDashboardView`, KYC/stake | Vertical | `partner` | `partner` | Driver/courier onboarding — the same application with `kind=DRIVER/COURIER`; still local-only in the app, and an approval is refused until Phase 3 `dispatch` gives it somewhere to land |
 | `MadeleineHomeView`, `MadeleineOrb` | Vertical | `assistant` | DynamoDB memory | Bedrock |
 | `SearchView` | Platform | `search` | OpenSearch | Event-indexed; not a domain owner |
@@ -229,7 +257,7 @@ Deepen **one** product loop: **My World**.
 - **My World identity (WhatsApp model, M1 deployed):** My World is a phone-verified space separate from the app/social account. First entry runs a setup (intro pages → phone OTP → World name/avatar), gated by `GET /v1/world/me`; the World profile (phone-keyed, own name+avatar) lives in the `messaging` module + DynamoDB and decorates conversation/message display. OTP over SNS SMS with a dev-code fallback while SNS is sandboxed.
 - Profile DMs on the same module.
 - Platform `notifications`: persist `ActivityItem`-shaped rows from `UserFollowed` / `PostLiked`-style events; in-app `ActivityView` first, APNs second. **M2 built (deployed):** `notifications` module consumes `UserFollowed`/`PostLiked`/`PostCommented` (AFTER_COMMIT listeners) → Postgres rows; `GET /v1/notifications`, unread-count, mark-read; `ActivityView` live. **M3 built (deployed, config-gated):** direct-APNs sender + device-token registration over those rows; iOS remote-notification registration. Activates when an Apple `.p8` key is set (see PROGRESS.md APNs checklist) + tested on a device.
-- **Messaging polish (M3, live + complete):** reply-to linking, outbound typing, **send-later over the wire** (DynamoDB pending partition + a `@Scheduled` claim-and-deliver poller), **World-name reply snippets**, **backend group creation** (comma-separated recipients → 3+ participants). Live video uploads its poster frame (streamable in-chat playback stays with Phase 3's UGC video pipeline). Also fixed in the audit: profile edits + avatar upload now persist to the backend. Still open by design: streamable chat video (Phase 3), and per-message send-later precision is bounded by the 30s poller.
+- **Messaging polish (M3, live + complete):** reply-to linking, outbound typing, **send-later over the wire** (DynamoDB pending partition + a `@Scheduled` claim-and-deliver poller), **World-name reply snippets**, **backend group creation** (comma-separated recipients → 3+ participants). Live video uploads its poster frame (streamable in-chat playback stays with Phase 6's UGC video pipeline). Also fixed in the audit: profile edits + avatar upload now persist to the backend. Still open by design: streamable chat video (Phase 6), and per-message send-later precision is bounded by the 30s poller.
 - **Chat attachments (M4, deployed 2026-07-24):** voice notes (record → `audio/m4a` presign → play in-bubble), system-keyboard stickers, real camera capture, and a real GPS pin. No wire-schema change: audio rides in the media item's file slot, a pin as a `geo:<lat>,<lon>` URI (the `media` module ignores non-S3 URIs). Same milestone hardened the socket — heartbeat ping, escalating backoff, foreground re-dial, and a re-sync of the list + open thread on reconnect, since API Gateway drops idle sockets. See PROGRESS.md "Phase 2 · Milestone 4".
 - **Chat push + read receipts (M5, deployed 2026-07-24):** the `messaging` module publishes a public `MessageSent` event on every delivered message; `notifications` consumes it and fires an APNs alert to recipients the live socket missed (the first *chat-message* push — M3 pushed only the activity feed). `notifications`'s second event source, and the second cross-module event contract after `social`. Also persisted read receipts: `GET …/messages` returns `peerReadMessageId` (server high-water mark) so a "Read" survives reloads/offline gaps. See PROGRESS.md "Phase 2 · Milestone 5".
 - Optional thin OpenSearch for people/handles only — full commerce search waits. **(not in M1)**
@@ -252,17 +280,72 @@ Deepen **one** product loop: **My World**.
 - OpenSearch consumer for `PostCreated` / `ProductCreated`.
 - `partner`: onboarding + KYC document upload. **Built + verified 2026-07-27 (not yet deployed), shipped as Phase 2b M6** — pulled forward out of 2c because it was the blocker for `delivery` being usable at all: the demo catalog was deleted, and the only way a restaurant could exist was a Flyway migration. The module owns the *business relationship* (an application, its KYC documents, and a status a human moves), and is generic by design — `kind` is `RESTAURANT | DRIVER | COURIER`, since a driver's application is the same object with somewhere else to land. On approval it **provisions into a vertical** through that vertical's public API: today only `delivery.MerchantProvisioningApi`, which returns the merchant id; `DRIVER`/`COURIER` are refused at approval time until Phase 3 `dispatch` exists, rather than approved into nothing. The dependency is one-way (`partner → delivery`) and the only trace left in delivery is an `owner_id` on the merchant row — which is the entire basis for its owner-scoped `/v1/delivery/merchants/mine` catalog surface, so delivery never learns that KYC exists. **Two boundary calls worth recording:** approval is a *human* act on a token-guarded surface outside the JWT chain (this app has no admin role — the same constraint that left the music catalog without an ingest endpoint), and **KYC documents are not `media`'s public product**. Everything `/v1/media/presign` mints lands under a world-readable prefix, so `media` gained a second public API, `MediaDocumentApi`, that presigns into a private prefix and hands a reviewer a short-lived signed GET; consumers store object keys, never URLs. **Restaurants are created in Gojo Admin, not in the app** (decided 2026-07-27). The applicant-facing iOS flow was removed; the module and its endpoints are unchanged, and the operator drives the same application → KYC → review → provision path from the admin tool. iOS keeps only the **merchant dashboard** — an owner running their own storefront and menu — gated by `AppState.merchantDashboardEnabled` pending a call on whether that moves to admin too. The one thing this implies and doesn't yet have: an **admin-side create**, since the applicant endpoints are caller-scoped. See PROGRESS.md "Phase 2b · Milestone 6".
 
-### Phase 3 — Dispatch + AI + video pipeline
+### Phase 2e — Commerce spine: business identity, admin seam, wallet (GoJoAdmin-ready)
 
-- Explicit platform **`dispatch`** module (Redis geo) used by `delivery` and `travel`.
-- `travel` ride-hailing on dispatch; client keeps Mapbox for map UX.
-- `assistant`: Madeleine on Bedrock over existing WebSocket; DynamoDB memory; co-watch rooms.
-- UGC video: S3 → MediaConvert → HLS → CloudFront.
-- Profile Home block persistence under `profile`.
+Goal: everything GoJoAdmin needs on its day one already exists as an API, and money can move. This is the highest-leverage phase in the vision plan — every later pillar (transport staking, delivery payment, commerce checkout, services booking) blocks on the wallet, and every economic player's journey starts with a business profile.
 
-### Phase 4 — Extract what earned it
+- **M1 — Business profiles (vision "Phase 1" for every economic player).** `profile.kind = PERSON | BUSINESS` + business fields (category, description, address, opening hours, contact, links) + `owner_profile_id`; one migration. Followable/discoverable/content-publishing immediately, because a business *is* a profile (§2b decision 1). Owner acts-as the business on content mutations: an optional `actAsProfileId` on the existing create endpoints, server-verified against ownership — no second token, no client-side trust. iOS: "Create business profile" from own profile, a switcher chip, business badge on profile/feed surfaces. `partner` applications gain a `business_profile_id` link so an approval knows which public identity it commerce-enables.
+- **M2 — Real admin principal + the missing admin-side create.** GoJoAdmin (and the human reviewer today) needs a real operator identity: a Cognito group (`platform-admin`) surfaced as a role in the JWT, honored by the existing `/v1/partner/admin/**` surface; `PARTNER_ADMIN_TOKEN` stays as break-glass. Add the **admin-side create** PROGRESS flags as missing (applicant endpoints are caller-scoped): `POST /v1/partner/admin/applications` on behalf of a business, plus list/filter and a document-view proxy over `MediaDocumentApi`'s signed GETs. This is the exact surface GoJoAdmin's review console will call.
+- **M3 — Payments + GoJo Wallet.** New platform `payments` module (`payments` schema): Stripe + Connect for external money; internal double-entry ledger with per-user buckets (`available` / `staking` locked / `tokens` / `rewards` / `escrow`) per §2b decision 2 and the capture/settlement table in SPECS §1. Public **`WalletApi`** (credit / debit / hold / release / capture / transfer, idempotency-keyed). First consumer: **delivery checkout** (orders are currently placed with no payment step) + tips + **promotions as order lines** (SPECS §6) + the `OrderStatusChanged` push consumer (SPECS §12); `economy`'s `ConversationContext` seam and the merchant payee from 2b M6 are the next two call sites already waiting. Refunds + transaction history round out the vision's wallet list. Fee/token/policy knobs live in the config registry (SPECS §14), created in this milestone.
+- **M4 — Storefront config (the Studio contract).** A storefront is a versioned JSON block document from a closed block set (spec: SPECS §9) owned by the vertical that owns the catalog — `delivery.merchant` first — written through owner-scoped `/v1/delivery/merchants/mine/storefront`, rendered read-only in GojoDelivery. This is the write API GoJoAdmin's homepage builder drives later; iOS never edits it. Do Profile-Home block persistence (`profile`) in the same slice — same pattern, same JSON-blocks discipline.
+- **M5 — Trust & safety baseline (gap the vision implies but never names; App Store UGC guideline 1.2 makes it a launch blocker).** Blocking in `social` (graph + content + messaging refusal via extended `SocialGraphApi`), a small platform **`moderation`** module (report any target kind, human-reviewed queue on the admin surface), and **account deletion** (Cognito disable → 30-day grace → anonymize). Share-token service (public live-trip/order tracking links for non-users) rides here too since SOS depends on it. Full spec: SPECS §10–§11.
+
+### Phase 3 — Dispatch + Transportation (ride-hailing)
+
+The full rider/driver vision, sequenced so each milestone is a shippable loop. Client keeps Mapbox for map UX; server `dispatch` is the authority (§5). Detailed mechanics — pricing, negotiation state machine, matching waves, staking/token/verification logic: SPECS §2–§4.
+
+- **M1 — Platform `dispatch` module.** Redis GEO presence (driver/courier positions over the existing WebSocket infra), candidate search (proximity, availability, vehicle category), offer/assignment state, and per-kind provisioning registries. Public `DispatchApi` + `DriverProvisioningApi`/`CourierProvisioningApi` — the landing place `partner` approvals have been 409ing toward since 2b M6.
+- **M2 — Driver onboarding completes.** The vision's full pipeline on existing seams: `partner` DRIVER application (live) + **vehicle registration** (category/make/model/year/color/plate + registration/insurance docs via `MediaDocumentApi`, photos via `media`; multiple vehicles, each verified separately) + **$30 stake** as a `WalletApi` hold into the `staking` bucket + **KYC fee** deducted from the stake + approval provisions into `dispatch`. Driver Mode dashboard in iOS: availability toggle, offers, earnings, performance, wallet.
+- **M3 — The ride loop.** `travel` vertical live: request (pickup/destination/category) → dispatch candidates → driver accept / decline / **counteroffer** (fare negotiation is `travel` order state; suggested fare + custom offer + counter rounds) → confirm → live trip (driver position fan-out reuses messaging's WebSocket pattern) → complete → pay via `WalletApi` → mutual rating. Rider↔driver contact = a `messaging` thread with a `ConversationContext(kind=RIDE)`. Scheduled rides and book-for-someone-else reuse the send-later poller pattern and delivery's recipient fields.
+- **M4 — Ride-hailing tokens.** Token packs purchased into the wallet's `tokens` bucket (Stripe → ledger credit); accepting an eligible ride debits tokens per a centrally-managed policy (no commission); balance/usage/history surfaces + low-balance push through `notifications`. Policy lives server-side so pricing changes are config, not client releases.
+- **M5 — Community vehicle verification + safety pack.** `travel` publishes `TripCompleted`; `partner` invites the first passenger(s) to confirm driver/vehicle/plate match + roadworthiness, with optional photos (private prefix). Success → Verified Vehicle badge + passenger reward paid **from the driver's staking balance** (a `WalletApi` transfer); inconsistency → `SUSPENDED` + manual review through the admin surface. Safety pack: emergency contacts, live-trip share (a share link carried over `messaging`), SOS surface, verified-driver/vehicle badges everywhere a trip is shown.
+
+### Phase 4 — Delivery at full vision
+
+Detailed mechanics — sub-orders, handoff codes, scheduling, disputes: SPECS §5.
+
+- **M1 — Real couriers.** `partner` COURIER approvals provision into `dispatch`; the simulated `OrderFulfilmentJob` is deleted and dispatch assignment drives the same state machine and `OrderStatusChanged` events — the swap 2b M4 was explicitly designed for. Courier Mode: availability, offers, live navigation, earnings via wallet.
+- **M2 — Handoff integrity + money.** Pickup verification (QR/order code at the merchant), delivery confirmation (PIN / photo / contactless), tips through the wallet, courier earnings + withdrawal. Courier↔customer contact = `messaging` thread with `ConversationContext(kind=ORDER)`.
+- **M3 — Multi-merchant orders.** One checkout, one payment, sub-orders per merchant (each with its own preparation/fulfilment state), dispatch coordinating pickups/couriers, per-sub-order tracking. The unified-cart UX rides on the existing server-priced order model — sub-orders are the only schema change.
+- **M4 — Breadth.** Scheduled orders + modify/cancel before preparation, order-for-someone-else (recipient fields + recipient-facing tracking), and category expansion — grocery, pharmacy, retail, flowers, package delivery, errands are merchant **categories + order kinds** on the same model, not new modules.
+
+### Phase 5 — Commerce & Services marketplace
+
+Detailed mechanics — product/inventory model, promotions, reviews, digital + ownership-transfer flows, booking rules, search contract: SPECS §6–§7, §13.
+
+- **M1 — Merchant products in `economy`.** Alongside C2C listings: catalog products with variants/sizes/colors, inventory, pricing/discounts, shipping fields, media galleries — created by `partner`-provisioned sellers (`economy.SellerProvisioningApi`, the `MerchantProvisioningApi` pattern), bought through cart + wallet/Stripe checkout. Reviews on products; favorites already exist as saves.
+- **M2 — Special catalogs.** Digital products (files/licenses/subscriptions; delivery = signed URL, no courier) and ownership-transfer listings (VIN/serial, documentation via `MediaDocumentApi`, a transfer-workflow state machine, buyer verification) — both are `economy` product kinds with extra tables, not new modules.
+- **M3 — `services` vertical.** Provider profiles (qualifications, portfolio, service areas, languages), service catalog (duration, pricing, location kind), availability + booking calendar, book → pay (wallet) → complete → review. Provisioned via `partner` (`kind=SERVICE_PROVIDER` → `services.ProviderProvisioningApi`). Contact = `messaging` with `ConversationContext(kind=BOOKING)`.
+- **M4 — Search & discovery, finally.** The OpenSearch consumers for events that have been publishing into the void (`PostCreated`, `ListingCreated`, product/merchant/video events): unified search across businesses, products, menus, services, content; category/location/rating facets. Recommendation surfaces (trending, personalized rails) read from it.
+
+### Phase 6 — AI, video pipeline, platform intelligence
+
+- `assistant`: Madeleine on Bedrock over the existing WebSocket; DynamoDB memory; co-watch rooms.
+- UGC video: S3 → MediaConvert → HLS → CloudFront (unblocks streamable chat video + real Watch playback).
+- Intelligence: recommendation ranking beyond the feed (merchants, products, services), demand prediction + driver-workload balancing inside `dispatch`, fraud heuristics on wallet/ledger events, support tooling. All behind existing module APIs — no new module until one earns it.
+
+### Phase 7 — Extract what earned it
 
 Likely order: `messaging` (already DynamoDB-heavy) → `dispatch` → `media` transcoding workers. Same event contracts; new deployables only when scaling or failure isolation demands it.
+
+---
+
+## 10b. GoJoAdmin integration contract (GoJoGo-side seams, build-ready)
+
+GoJoAdmin (Dashboard · Studio · Economy · GoJoAds) is a separate web app, **not** part of this codebase. GoJoGo's obligation is to make sure that when it's built, it plugs into existing APIs with zero backend rework. The governing rule: **GoJoAdmin gets no private tables and no parallel data path** — everything it does goes through the same public REST surface, so the monolith stays the single system of record and the iOS app could in principle do anything admin can.
+
+| Seam | GoJoGo-side contract | Status |
+|---|---|---|
+| **Identity** | Same Cognito pool. A business owner signs into GoJoAdmin with their GoJoGo account (vision: "signs in to GoJoAdmin using the same account"); GoJoAdmin discovers their businesses via the `owner_profile_id` link (2e M1). Platform operators carry a `platform-admin` Cognito group (2e M2). | 2e M1–M2 |
+| **Onboarding / review** | `partner` is the backbone for *every* economic player (`RESTAURANT` live; `DRIVER`/`COURIER` Phase 3; `SELLER`/`SERVICE_PROVIDER` Phase 5). Admin surface = `/v1/partner/admin/**` (+ the 2e M2 admin-create); KYC docs stay on `MediaDocumentApi`'s private-prefix presign + short-lived signed GET. Restaurant creation already belongs to admin (decided 2026-07-27). | Live + 2e M2 |
+| **Provisioning** | Approval → per-vertical public API, returning an id: `delivery.MerchantProvisioningApi` (live), then `DriverProvisioningApi`/`CourierProvisioningApi` (Phase 3), `economy.SellerProvisioningApi` + `services.ProviderProvisioningApi` (Phase 5). One pattern, one direction (`partner → vertical`). | Pattern live |
+| **Merchant self-service (Economy module)** | The owner-scoped `/mine` surfaces are the data plane GoJoAdmin calls with the owner's own JWT — `/v1/delivery/merchants/mine` (storefront, hours, menu CRUD — live) and its future economy/services siblings. No admin-only mirror of these endpoints. | Live (delivery) |
+| **Studio (content)** | GoJoAdmin publishes through the same `social`/`watch`/`media` APIs, acting-as the business profile (2e M1). Homepage builder writes the storefront JSON-blocks document (2e M4). Content analytics = read endpoints over engagement counts that already exist (views, likes, comments, saves). | 2e M1/M4 |
+| **Dashboard (analytics)** | Domain events are the feed: `OrderPlaced`/`OrderStatusChanged`, `ListingCreated`, `PostLiked`… already publish; aggregate read endpoints (sales, orders, followers, engagement) are added per vertical as GoJoAdmin needs them, scoped to the owner JWT. EventBridge export when out-of-process consumers appear (Phase 7 posture). | Events live |
+| **Money** | Payouts/settlement via Stripe Connect accounts attached at merchant provisioning; balances/earnings via `WalletApi`-backed read endpoints. | 2e M3 |
+| **GoJoAds** | Deferred entirely — no seam reserved beyond content/engagement events. Don't pre-build. | — |
+
+**CORS/web note:** the backend currently serves only the iOS app; GoJoAdmin is a browser client, so its origin needs a CORS allowance when it exists — config, not architecture.
 
 ---
 
@@ -270,7 +353,8 @@ Likely order: `messaging` (already DynamoDB-heavy) → `dispatch` → `media` tr
 
 1. Read **[PROGRESS.md](PROGRESS.md)** first (what’s deployed, stubs, next action).
 2. Use this file for **boundaries and sequencing**, not for live URLs or incident history.
-3. Update `PROGRESS.md` at the end of every milestone; update this file when module ownership or phase order changes.
+3. Use **[SPECS.md](SPECS.md)** for the detailed logic of any Phase 2e+ milestone (money flows, state machines, config knobs) — it holds the decisions so a build session doesn't re-litigate them.
+4. Update `PROGRESS.md` at the end of every milestone; update this file when module ownership or phase order changes; update `SPECS.md` when a build contradicts or refines a spec.
 
 ---
 
