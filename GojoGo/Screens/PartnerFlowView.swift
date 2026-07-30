@@ -55,6 +55,16 @@ struct PartnerOnboardingView: View {
 
             VStack(spacing: 0) {
                 header
+                // This cover sits above everything, so a message posted to the
+                // layer underneath would never be seen — the same lesson as the
+                // merchant sheet. One owner: it is rendered here and nowhere
+                // else in the flow.
+                if let notice = app.partnerNotice {
+                    MerchantNoticeBanner(message: notice) { app.dismissPartnerNotice() }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 10)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
                 Group {
                     switch app.partnerStep {
                     case .rules: PartnerRulesPage(role: role)
@@ -68,6 +78,7 @@ struct PartnerOnboardingView: View {
                     removal: .move(edge: .leading).combined(with: .opacity)))
             }
             .animation(.easeInOut(duration: 0.32), value: app.partnerStep)
+            .animation(.ggOverlay, value: app.partnerNotice)
         }
     }
 
@@ -431,6 +442,9 @@ private struct PartnerKYCPage: View {
             .scrollDismissesKeyboard(.interactively)
             submitButton
         }
+        // The verdict can land while this page is open — a check that was
+        // "in review" when they got here may be done by the time they look.
+        .task { await app.refreshIdentity() }
     }
 
     private var intro: some View {
@@ -438,57 +452,120 @@ private struct PartnerKYCPage: View {
             Text("Verify your identity")
                 .font(.system(size: 24, weight: .bold))
                 .foregroundStyle(GGColor.textPrimary)
-            Text("We need a few documents to keep the community safe. Everything is encrypted.")
+            Text(app.showsIdentityVerification
+                 ? "We check your ID with a licensed verification provider. Your documents go to them, not to us."
+                 : "We need a few documents to keep the community safe. Everything is encrypted.")
                 .explanatory(14)
                 .foregroundStyle(GGColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    // Identity — both roles
+    // MARK: Identity — the vendor's half
+    //
+    // This card is a *rendering of a verdict*, not a form. Everything the person
+    // types or photographs happens inside the Sumsub SDK, which sends it
+    // straight to Sumsub — so there is nothing here to bind, validate, or store.
+    // What used to be here (a name field, a document-number field, and two tiles
+    // you tapped to claim you'd taken a photo) checked nothing at all.
+
     private var identitySection: some View {
-        formCard(title: "Identity", icon: "person.text.rectangle.fill") {
-            docTypePicker
-            fieldRow(title: "Full legal name", placeholder: "As printed on your document",
-                     text: $app.partnerApplication.fullName)
-            fieldRow(title: "\(app.partnerApplication.idType.rawValue) number",
-                     placeholder: app.partnerApplication.idType == .passport ? "e.g. AB1234567" : "Document number",
-                     text: $app.partnerApplication.idNumber,
-                     autocaps: .characters)
-            captureTile(title: "\(app.partnerApplication.idType.rawValue) photo",
-                        subtitle: "Front & back, clearly readable",
-                        icon: app.partnerApplication.idType.icon,
-                        captured: $app.partnerApplication.idPhotoCaptured)
-            captureTile(title: "Selfie check",
-                        subtitle: "A quick photo to match your ID",
-                        icon: "face.smiling",
-                        captured: $app.partnerApplication.selfieCaptured)
+        formCard(title: "Identity", icon: app.identity.status.icon) {
+            if app.showsIdentityVerification {
+                identityStatusRow
+                if let message = identityMessage {
+                    Text(message)
+                        .font(.system(size: 13))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                identityActions
+            } else {
+                // No vendor configured on this backend: identity is proved by
+                // document upload and human review, which is the operator's
+                // journey in Gojo Admin — so say so rather than offering a
+                // button that would fail.
+                Text("Identity checks are handled by our team for this account. "
+                     + "We'll be in touch about your documents.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
-    private var docTypePicker: some View {
-        HStack(spacing: 8) {
-            ForEach(IDDocumentType.allCases) { type in
-                let active = app.partnerApplication.idType == type
-                Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        app.partnerApplication.idType = type
-                        app.partnerApplication.idPhotoCaptured = false
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: type.icon).font(.system(size: 12, weight: .semibold))
-                        Text(type.rawValue).font(.system(size: 13, weight: .semibold))
-                    }
-                    .foregroundStyle(active ? GGColor.onAccent : GGColor.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Capsule().fill(active ? GGColor.white : GGColor.ink(0.08)))
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
+    private var identityStatusRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: app.identity.status.icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(app.identity.isVerified ? GGColor.onAccent : GGColor.textPrimary)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(app.identity.isVerified
+                                          ? GGColor.white : GGColor.ink(0.08)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(identityHeadline)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Text(app.identity.status.label)
+                    .font(.ggMono(10, .semibold))
+                    .tracking(0.4)
+                    .foregroundStyle(GGColor.textTertiary)
             }
+            Spacer(minLength: 0)
+            if app.identityBusy {
+                ProgressView().tint(GGColor.textSecondary)
+            }
+        }
+    }
+
+    private var identityHeadline: String {
+        switch app.identity.status {
+        case .verified: return "Your identity is confirmed"
+        case .inReview: return "We're checking your documents"
+        case .rejected: return "We couldn't verify this"
+        default:        return "Scan your ID and take a selfie"
+        }
+    }
+
+    /// The vendor's own wording when there is any, so a person is told the same
+    /// thing the reviewer saw rather than our paraphrase of it.
+    private var identityMessage: String? {
+        app.identity.isVerified ? nil : app.identity.message
+    }
+
+    @ViewBuilder
+    private var identityActions: some View {
+        if let title = app.identity.actionTitle {
+            Button {
+                app.startIdentityVerification()
+            } label: {
+                Text(title)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(GGColor.onAccent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(Capsule().fill(GGColor.white))
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(app.identityBusy)
+            .opacity(app.identityBusy ? 0.5 : 1)
+        } else if app.identity.status.isPending {
+            // Nothing for them to do but wait — and waiting with no way to ask
+            // is what makes a pending check feel broken.
+            Button {
+                app.recheckIdentity()
+            } label: {
+                Text("Check again")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Capsule().fill(GGColor.ink(0.08)))
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(app.identityBusy)
         }
     }
 

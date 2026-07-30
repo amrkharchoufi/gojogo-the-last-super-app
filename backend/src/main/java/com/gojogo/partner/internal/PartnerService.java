@@ -2,6 +2,8 @@ package com.gojogo.partner.internal;
 
 import com.gojogo.delivery.MerchantProvisioningApi;
 import com.gojogo.delivery.MerchantRegistration;
+import com.gojogo.kyc.IdentityStatus;
+import com.gojogo.kyc.IdentityVerificationApi;
 import com.gojogo.media.MediaApi;
 import com.gojogo.media.MediaDocumentApi;
 import com.gojogo.partner.PartnerReviewed;
@@ -33,6 +35,14 @@ import java.util.stream.Collectors;
  * so the review surface is a token-guarded controller outside the JWT chain —
  * see {@link PartnerAdminController}. Nothing auto-approves: KYC that a machine
  * waves through is not KYC.
+ *
+ * <p>That last sentence still holds with an IDV vendor in the picture, and it is
+ * worth being precise about what changed. Sumsub answers <em>"is this person who
+ * they say they are"</em> — a question a machine genuinely answers better than a
+ * human squinting at a phone photo. It does not answer <em>"should this business
+ * trade on our platform"</em>, which stays a human decision on the same review
+ * surface. So a vendor verdict is a precondition for submission, never a
+ * substitute for approval.
  */
 @Service
 class PartnerService {
@@ -45,17 +55,20 @@ class PartnerService {
     private final MediaDocumentApi privateMedia;
     private final MediaApi media;
     private final ProfileApi profiles;
+    private final IdentityVerificationApi identity;
     private final ApplicationEventPublisher events;
 
     PartnerService(PartnerAccountRepository accounts, PartnerDocumentRepository documents,
                    MerchantProvisioningApi merchants, MediaDocumentApi privateMedia,
-                   MediaApi media, ProfileApi profiles, ApplicationEventPublisher events) {
+                   MediaApi media, ProfileApi profiles, IdentityVerificationApi identity,
+                   ApplicationEventPublisher events) {
         this.accounts = accounts;
         this.documents = documents;
         this.merchants = merchants;
         this.privateMedia = privateMedia;
         this.media = media;
         this.profiles = profiles;
+        this.identity = identity;
         this.events = events;
     }
 
@@ -170,17 +183,24 @@ class PartnerService {
      */
     @Transactional
     PartnerAccountDto submit(UUID me, UUID accountId) {
-        return submitAccount(requireEditable(me, accountId));
+        return submitAccount(requireEditable(me, accountId), true);
     }
 
-    private PartnerAccountDto submitAccount(PartnerAccount account) {
+    /**
+     * @param bySelf whether the applicant is submitting their own application,
+     *               which only changes how a failure is worded — an operator
+     *               reading "verify your identity" would reasonably think it
+     *               meant theirs
+     */
+    private PartnerAccountDto submitAccount(PartnerAccount account, boolean bySelf) {
         List<String> missing = missingFields(account);
         if (!missing.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "Still missing: " + String.join(", ", missing));
         }
+        requireVerifiedIdentity(account, bySelf);
         Set<DocumentKind> uploaded = uploadedKinds(account.getId());
-        Set<DocumentKind> required = new TreeSet<>(account.getKind().requiredDocuments());
+        Set<DocumentKind> required = new TreeSet<>(requiredDocuments(account));
         required.removeAll(uploaded);
         if (!required.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -189,6 +209,51 @@ class PartnerService {
         }
         account.submit(OffsetDateTime.now());
         return toDto(account);
+    }
+
+    /**
+     * Refuses to queue an application from someone who hasn't proved who they
+     * are — the vendor-backed half of KYC.
+     *
+     * <p>Checked at submission rather than approval on purpose: a reviewer's
+     * time is the scarce thing here, and an application that cannot possibly be
+     * approved should never reach their queue. It is also the applicant's
+     * interest — they find out at the moment they can still do something about
+     * it, instead of days later.
+     *
+     * <p>The gate is scoped to the <em>owner</em>, not the business: identity is
+     * a fact about a person, so someone verified as a courier does not verify
+     * again to open a restaurant.
+     *
+     * <p><b>It applies to the admin-side create too</b>, and that is not an
+     * oversight. An operator filing an application on a merchant's behalf can
+     * type their address and upload their licence, but nobody can pass a liveness
+     * check for somebody else — that is the whole thing an IDV vendor is for. So
+     * the owner verifies in the app, once, and the operator's create waits on it.
+     */
+    private void requireVerifiedIdentity(PartnerAccount account, boolean bySelf) {
+        if (!identity.isConfigured()) return;
+        IdentityStatus status = identity.statusOf(account.getUserId()).status();
+        if (status == IdentityStatus.VERIFIED) return;
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, bySelf
+            ? switch (status) {
+                case PENDING, IN_REVIEW -> "We're still checking your ID — you can "
+                    + "submit as soon as that's done";
+                case RESUBMISSION_REQUESTED -> "Your ID check needs another go before "
+                    + "you can submit";
+                case REJECTED -> "Your ID check didn't pass, so this application "
+                    + "can't be submitted";
+                default -> "Verify your identity before submitting";
+            }
+            : "The owner hasn't passed their ID check yet (" + status + ") — they "
+                + "verify in the app, and nobody can do it for them");
+    }
+
+    /** What this application still needs on paper — which depends on whether an
+     *  IDV vendor is answering the identity half (see
+     *  {@link PartnerKind#requiredDocuments(boolean)}). */
+    private Set<DocumentKind> requiredDocuments(PartnerAccount account) {
+        return account.getKind().requiredDocuments(identity.isConfigured());
     }
 
     /** Pulls it back out of the queue so it can be edited again. */
@@ -227,7 +292,7 @@ class PartnerService {
         if (!account.getStatus().isEditable()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, editBlockedMessage(account));
         }
-        return submitAccount(account);
+        return submitAccount(account, false);
     }
 
     @Transactional(readOnly = true)
@@ -481,12 +546,19 @@ class PartnerService {
         Set<DocumentKind> have = uploaded.stream()
             .map(PartnerDocument::getKind)
             .collect(Collectors.toCollection(() -> EnumSet.noneOf(DocumentKind.class)));
-        List<String> required = account.getKind().requiredDocuments().stream()
-            .map(Enum::name).toList();
-        List<String> missing = account.getKind().requiredDocuments().stream()
+        Set<DocumentKind> requiredKinds = requiredDocuments(account);
+        List<String> required = requiredKinds.stream().map(Enum::name).toList();
+        List<String> missing = requiredKinds.stream()
             .filter(kind -> !have.contains(kind))
             .map(Enum::name).toList();
         boolean editable = account.getStatus().isEditable();
+        // The identity check belongs to the person, so it is read per account
+        // rather than stored on one: the same verdict decorates every
+        // application this owner has.
+        IdentityVerificationApi.IdentityCheck check = identity.statusOf(account.getUserId());
+        boolean identityRequired = identity.isConfigured();
+        boolean identityDone = !identityRequired
+            || check.status() == IdentityStatus.VERIFIED;
         return new PartnerAccountDto(
             account.getId(), account.getKind().name(), account.getStatus().name(),
             account.getBusinessName(), account.getBusinessProfileId(),
@@ -500,8 +572,9 @@ class PartnerService {
                     d.getContentType(), d.getUploadedAt()))
                 .toList(),
             required, missing,
+            identityRequired, check.status().name(), check.reason(),
             editable,
-            editable && missing.isEmpty() && missingFields(account).isEmpty(),
+            editable && missing.isEmpty() && identityDone && missingFields(account).isEmpty(),
             account.getSubmittedAt(), account.getReviewedAt(), account.getCreatedAt());
     }
 }

@@ -1,6 +1,15 @@
 {
-  "originHash" : "c48d77ebe93e854e8e2b4bbddf1d5fe4977e5a87efa4e14ea29c90b3e5919e31",
+  "originHash" : "03a5b58075216617c9d2e21f31c189aed4e208cfac29b693a1aff8bd09881b24",
   "pins" : [
+    {
+      "identity" : "idensicmobilesdk-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SumSubstance/IdensicMobileSDK-iOS.git",
+      "state" : {
+        "revision" : "d9a7f3dc1db093eaa9e765453d8a89fc5dbfad3d",
+        "version" : "1.45.1"
+      }
+    },
     {
       "identity" : "mapbox-common-ios",
       "kind" : "remoteSourceControl",

@@ -69,6 +69,12 @@ class SecurityConfig {
                 // bearer token that *is* presented is still validated here, so
                 // a forged one never reaches the group check.
                 .requestMatchers("/v1/partner/admin/**").permitAll()
+                // Sumsub's verdict callback. The caller is a machine with no
+                // Cognito account, so its HMAC signature over the raw body is
+                // the authentication — checked in KycWebhookController before
+                // the body is parsed, and refused outright when no webhook
+                // secret is configured.
+                .requestMatchers(HttpMethod.POST, "/v1/kyc/webhook").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
         return http.build();

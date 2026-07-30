@@ -69,6 +69,23 @@ export class GojoGoFargateStack extends cdk.Stack {
       generateSecretString: { passwordLength: 48, excludePunctuation: true },
     });
 
+    // Sumsub IDV credentials — a JSON secret with three keys: `appToken`,
+    // `secretKey` (signs our calls out) and `webhookSecret` (verifies their
+    // calls in). Created out-of-band like the APNs key, and referenced by ARN
+    // through context so a plain deploy never carries a credential in source:
+    //   cdk deploy GojoGoFargateStack -c sumsubSecretArn=arn:aws:secretsmanager:...
+    //
+    // Absent — the default — the backend gets no Sumsub env at all, the `kyc`
+    // module reports itself unconfigured, and identity falls back to document
+    // upload + human review exactly as it did before the module existed. That
+    // fallback is deliberate: a half-configured IDV integration must not be
+    // able to block partner onboarding.
+    const sumsubSecretArn =
+      (this.node.tryGetContext('sumsubSecretArn') as string | undefined) ?? '';
+    const sumsubSecret = sumsubSecretArn
+      ? secretsmanager.Secret.fromSecretCompleteArn(this, 'Sumsub', sumsubSecretArn)
+      : undefined;
+
     // --- Roles -------------------------------------------------------------
     // Execution role: pulls the image + reads the container secrets at launch.
     const executionRole = new iam.Role(this, 'ExecutionRole', {
@@ -80,6 +97,7 @@ export class GojoGoFargateStack extends cdk.Stack {
     props.database.secret!.grantRead(executionRole);
     apnsSecret.grantRead(executionRole);
     partnerAdminSecret.grantRead(executionRole);
+    sumsubSecret?.grantRead(executionRole);
 
     // Task role: the app's own runtime permissions (was the App Runner instance role).
     const taskRole = new iam.Role(this, 'TaskRole', {
@@ -163,11 +181,28 @@ export class GojoGoFargateStack extends cdk.Stack {
         //   cdk deploy GojoGoFargateStack -c webAllowedOrigins=https://admin.gojogo.app
         WEB_ALLOWED_ORIGINS:
           (this.node.tryGetContext('webAllowedOrigins') as string | undefined) ?? '',
+        // Which Sumsub verification level applicants are put through. Must name
+        // a level that exists in the cockpit; not a secret, so it stays here
+        // where it can be changed without touching the credential.
+        SUMSUB_LEVEL_NAME:
+          (this.node.tryGetContext('sumsubLevelName') as string | undefined)
+          ?? 'id-and-liveness',
       },
       secrets: {
         DB_PASSWORD: ecs.Secret.fromSecretsManager(props.database.secret!, 'password'),
         APNS_KEY_BASE64: ecs.Secret.fromSecretsManager(apnsSecret),
         PARTNER_ADMIN_TOKEN: ecs.Secret.fromSecretsManager(partnerAdminSecret),
+        // Spread, not listed: with no secret configured these keys are absent
+        // entirely, which is what leaves the kyc module off rather than on with
+        // empty credentials.
+        ...(sumsubSecret
+          ? {
+              SUMSUB_APP_TOKEN: ecs.Secret.fromSecretsManager(sumsubSecret, 'appToken'),
+              SUMSUB_SECRET_KEY: ecs.Secret.fromSecretsManager(sumsubSecret, 'secretKey'),
+              SUMSUB_WEBHOOK_SECRET:
+                ecs.Secret.fromSecretsManager(sumsubSecret, 'webhookSecret'),
+            }
+          : {}),
       },
     });
 

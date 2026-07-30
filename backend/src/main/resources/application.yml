@@ -78,6 +78,26 @@ gojogo:
     admin:
       token: ${PARTNER_ADMIN_TOKEN:}
       group: ${PARTNER_ADMIN_GROUP:platform-admin}
+  # Identity verification (Sumsub). All empty → the whole module is off and
+  # identity is proved the way it always was: an ID card uploaded into the
+  # private prefix and a human verdict on the partner review surface. That
+  # fallback is the point of the IdentityVerificationApi seam (SPECS.md §4) —
+  # the vendor is a config swap, not a rewrite.
+  #
+  # app-token decides the environment on its own: a sandbox token is prefixed
+  # `sbx:` and the API host is identical either way, so check the startup log
+  # line before believing a verdict. webhook-secret is a DIFFERENT secret from
+  # secret-key — it is set when the webhook is created in the Sumsub cockpit,
+  # and while it is empty /v1/kyc/webhook refuses everything and the app's
+  # POST /v1/kyc/refresh pull is what moves a verification forward.
+  kyc:
+    sumsub:
+      base-url: ${SUMSUB_BASE_URL:https://api.sumsub.com}
+      app-token: ${SUMSUB_APP_TOKEN:}
+      secret-key: ${SUMSUB_SECRET_KEY:}
+      webhook-secret: ${SUMSUB_WEBHOOK_SECRET:}
+      level-name: ${SUMSUB_LEVEL_NAME:id-and-liveness}
+      token-ttl-seconds: ${SUMSUB_TOKEN_TTL_SECONDS:600}
   # Browser origins allowed to call this API (comma-separated). Empty — the
   # default — emits no CORS headers at all, which is correct while the only
   # client is the iOS app. GoJoAdmin's origin goes here when it exists.
