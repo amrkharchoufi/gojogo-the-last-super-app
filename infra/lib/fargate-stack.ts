@@ -87,6 +87,13 @@ export class GojoGoFargateStack extends cdk.Stack {
     });
     props.mediaBucket.grantPut(taskRole);
     props.mediaBucket.grantDelete(taskRole);
+    // Read, for the KYC papers. A presigned URL carries the *signer's*
+    // permissions, so without this the reviewer's link is signed correctly and
+    // still 403s — which is exactly what it did until the 2e M2 E2E fetched one
+    // (public media/* is world-readable and never needed this, so nothing else
+    // did). Scoped to the private prefix: the app has no business bulk-reading
+    // user media it doesn't already hand out by URL.
+    props.mediaBucket.grantRead(taskRole, 'private/*');
     props.messagingTable.grantReadWriteData(taskRole);
     props.webSocketStage.grantManagementApiAccess(taskRole);
     taskRole.addToPolicy(new iam.PolicyStatement({
