@@ -328,6 +328,27 @@ struct GGTabBar: View {
 
     private var composeStack: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Publishing as a business is easy to forget you switched on, and a
+            // post is the expensive place to find out. This bar is the composer
+            // the app actually opens, so the reminder belongs here.
+            if let business = app.actingBusiness {
+                HStack(spacing: 8) {
+                    Image(systemName: "briefcase.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Posting as \(business.name)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button("Post as you") { app.stopActingAsBusiness() }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Msg.blue)
+                }
+                .foregroundStyle(Msg.label)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .glass(cornerRadius: 16, fillOpacity: 0.08, borderOpacity: 0.14)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             if app.showAttachMenu {
                 AttachGlassMenu()
                     .transition(.asymmetric(

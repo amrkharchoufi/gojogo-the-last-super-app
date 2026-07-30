@@ -29,13 +29,16 @@ extension AppState {
             if worldConversations.isEmpty {
                 worldConversationsLoading = true
             }
+            // Before the feed, not after: the mapper needs to know which author
+            // ids are also this user (their business profiles) or the first
+            // screenful renders a Follow chip on their own shop's posts.
+            await refreshBusinessProfiles()
             await refreshSocial()
             await refreshWatch()
             await refreshOwnCounts()
             await refreshEconomy()
             await refreshDelivery()
             await refreshMerchantPartner()
-            await refreshBusinessProfiles()
             await connectMessaging()
             await refreshNotifications()
             enablePushNotifications()

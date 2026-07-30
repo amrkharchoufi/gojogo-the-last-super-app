@@ -17,6 +17,10 @@ final class SocialStore {
 
     var myProfileId: UUID?
     var myHandle: String = ""
+    /// The business profiles this account owns (Phase 2e M1). Kept in sync by
+    /// `AppState.refreshBusinessProfiles`; content authored by one of these is
+    /// this user's own, whichever identity they're switched to.
+    var ownedBusinessIds: Set<UUID> = []
 
     func reset() {
         remotePostIds = []
@@ -25,6 +29,7 @@ final class SocialStore {
         profileIdByHandle = [:]
         myProfileId = nil
         myHandle = ""
+        ownedBusinessIds = []
     }
 
     func profileId(forHandle handle: String) -> UUID? {
@@ -123,7 +128,9 @@ final class SocialStore {
             PostMediaItem(id: $0.id, imageURL: $0.imageUrl, videoURL: $0.videoUrl)
         }
         let handle = dto.author.handle ?? "user"
-        let isOwn = dto.author.id == myProfileId
+        // Yours, or one of your business profiles' — a Follow chip on your own
+        // shop's post is the tell that the app forgot which identities are you.
+        let isOwn = dto.author.id == myProfileId || ownedBusinessIds.contains(dto.author.id)
         return Post(
             id: dto.id,
             author: handle,

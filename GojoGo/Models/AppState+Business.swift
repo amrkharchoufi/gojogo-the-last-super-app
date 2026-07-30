@@ -81,6 +81,9 @@ extension AppState {
         do {
             let list = try await ProfileStore.shared.myBusinesses()
             ownedBusinesses = list.map(BusinessIdentity.init)
+            // The feed decorates for the person, so the mapper needs to be told
+            // which author ids are also "you" (no Follow chip on your own shop).
+            SocialStore.shared.ownedBusinessIds = Set(ownedBusinesses.map(\.id))
             // A business that's gone (deleted elsewhere) must not stay the
             // identity every new post is published under.
             if let acting = actingBusinessID,
@@ -127,6 +130,7 @@ extension AppState {
             let created = try await ProfileStore.shared.createBusiness(body)
             let identity = BusinessIdentity(created)
             ownedBusinesses.insert(identity, at: 0)
+            SocialStore.shared.ownedBusinessIds.insert(identity.id)
             actAsBusiness(identity.id)
             return true
         } catch {

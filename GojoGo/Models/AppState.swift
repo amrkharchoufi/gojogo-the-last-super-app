@@ -1494,7 +1494,14 @@ final class AppState: ObservableObject {
 
     func isOwnChannel(_ channel: String) -> Bool {
         let key = channel.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased()
-        return !key.isEmpty && key == user.handle.lowercased()
+        guard !key.isEmpty else { return false }
+        // A business you own counts as you wherever the question is "is this
+        // mine to manage" — the same rule the server enforces with
+        // `ProfileApi.actsFor`. This one function gates the delete menus on
+        // posts, videos and shorts, so a business's content is manageable
+        // everywhere or nowhere.
+        return key == user.handle.lowercased()
+            || ownedBusinesses.contains { $0.handle.lowercased() == key }
     }
 
     func isSubscribed(_ channel: String) -> Bool {
