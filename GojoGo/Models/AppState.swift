@@ -326,6 +326,26 @@ final class AppState: ObservableObject {
     /// cancel. Cleared automatically; `deliveryNoticeTask` owns the timer.
     @Published var deliveryNotice: String? = nil
     var deliveryNoticeTask: Task<Void, Never>?
+    /// What checkout will cost, priced by the server (Phase 2e M3). Nil until
+    /// the cart has been quoted — the app never adds up an order itself, so
+    /// this is also what says whether checkout can proceed at all.
+    @Published var deliveryQuote: QuoteDTO? = nil
+    @Published var deliveryQuoting: Bool = false
+    /// The promotion code typed at checkout, and the tip chosen with it. A code,
+    /// never an amount: what it is worth is the server's answer.
+    @Published var deliveryPromotionCode: String = ""
+    @Published var deliveryTipCents: Int = 0
+
+    // GoJo Wallet (Phase 2e M3). One balance for the whole superapp — delivery
+    // spends from it today, Phase 3's stake and ride tokens land in it next.
+    @Published var wallet: WalletDTO? = nil
+    @Published var walletTransactions: [WalletTransactionDTO] = []
+    @Published var showWallet: Bool = false
+    /// True while a hosted checkout is being opened — the top-up buttons go
+    /// quiet rather than starting a second session.
+    @Published var walletBusy: Bool = false
+    @Published var walletNotice: String? = nil
+    var walletNoticeTask: Task<Void, Never>?
 
     // Merchant partner — running a restaurant on GojoDelivery (Phase 2b M6).
     // Distinct from the driver/courier `partner*` state below: that one is the

@@ -298,6 +298,10 @@ struct ProfileView: View {
         .sheet(isPresented: $app.showBusinessProfiles) {
             BusinessProfilesView().environmentObject(app)
         }
+        // Same rule as the switcher above: one owner per AppState-driven sheet.
+        .sheet(isPresented: $app.showWallet) {
+            WalletView().environmentObject(app)
+        }
         .sheet(isPresented: Binding(
             get: { app.editingVideoID != nil },
             set: { if !$0 { app.closeVideoDetails() } }
@@ -415,6 +419,14 @@ struct ProfileView: View {
                     } label: {
                         Label(app.hasBusinessProfile ? "Business profiles" : "Create business profile",
                               systemImage: "briefcase")
+                    }
+                    // The wallet lives here rather than on a tab: it is what
+                    // every vertical spends from, so it belongs to the account
+                    // and not to any one of them.
+                    Button {
+                        app.showWallet = true
+                    } label: {
+                        Label("GoJo Wallet", systemImage: "wallet.bifold")
                     }
                     Button {
                         if let i = tabs.firstIndex(of: .saved) {
