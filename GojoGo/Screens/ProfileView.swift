@@ -298,8 +298,19 @@ struct ProfileView: View {
         .sheet(isPresented: $app.showBusinessProfiles) {
             BusinessProfilesView().environmentObject(app)
         }
-        // Same rule as the switcher above: one owner per AppState-driven sheet.
-        .sheet(isPresented: $app.showWallet) {
+        // Settings opens from this screen only — one owner per AppState-driven
+        // sheet, or it silently refuses to present.
+        .sheet(isPresented: $app.showSettings) {
+            SettingsView().environmentObject(app)
+        }
+        // The wallet is presented by the root instead: delivery checkout opens
+        // it too (a 402 offers a top-up), and the root is the one presenter
+        // that is alive on every screen. It stands down while this profile
+        // sheet is up — same gating shape as the story archive.
+        .sheet(isPresented: Binding(
+            get: { app.showWallet && app.showProfile },
+            set: { app.showWallet = $0 }
+        )) {
             WalletView().environmentObject(app)
         }
         .sheet(isPresented: Binding(
@@ -410,25 +421,6 @@ struct ProfileView: View {
                         Label("New post", systemImage: "plus.square")
                     }
                     Button {
-                        app.showEditProfile = true
-                    } label: {
-                        Label("Edit profile", systemImage: "pencil")
-                    }
-                    Button {
-                        app.showBusinessProfiles = true
-                    } label: {
-                        Label(app.hasBusinessProfile ? "Business profiles" : "Create business profile",
-                              systemImage: "briefcase")
-                    }
-                    // The wallet lives here rather than on a tab: it is what
-                    // every vertical spends from, so it belongs to the account
-                    // and not to any one of them.
-                    Button {
-                        app.showWallet = true
-                    } label: {
-                        Label("GoJo Wallet", systemImage: "wallet.bifold")
-                    }
-                    Button {
                         if let i = tabs.firstIndex(of: .saved) {
                             withAnimation(.easeOut(duration: 0.2)) { tab = i }
                         }
@@ -438,17 +430,16 @@ struct ProfileView: View {
                     ShareLink(item: URL(string: "https://gojogo.app/@\(profile.handle)")!) {
                         Label("Share profile", systemImage: "square.and.arrow.up")
                     }
-                    Button {
-                        app.toggleTheme()
-                    } label: {
-                        Label(app.appTheme == .dark ? "Light mode" : "Dark mode",
-                              systemImage: app.appTheme == .dark ? "sun.max" : "moon")
-                    }
                     Divider()
-                    Button(role: .destructive) {
-                        app.signOut()
+                    // Everything that is about the *account* rather than about
+                    // this screen now lives one level down. This menu had been
+                    // growing an entry per milestone — edit profile, business
+                    // profiles, the wallet, the theme — which is how a menu
+                    // becomes a drawer nobody can find anything in.
+                    Button {
+                        app.showSettings = true
                     } label: {
-                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                        Label("Settings", systemImage: "gearshape")
                     }
                 } else {
                     ShareLink(item: URL(string: "https://gojogo.app/@\(profile.handle)")!) {

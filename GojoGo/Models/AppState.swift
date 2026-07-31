@@ -338,6 +338,9 @@ final class AppState: ObservableObject {
 
     // GoJo Wallet (Phase 2e M3). One balance for the whole superapp — delivery
     // spends from it today, Phase 3's stake and ride tokens land in it next.
+    /// The account's settings sheet — everything that used to be an entry in
+    /// the profile's overflow menu (see SettingsView).
+    @Published var showSettings: Bool = false
     @Published var wallet: WalletDTO? = nil
     @Published var walletTransactions: [WalletTransactionDTO] = []
     @Published var showWallet: Bool = false

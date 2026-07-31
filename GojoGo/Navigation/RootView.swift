@@ -154,6 +154,16 @@ struct MainAppView: View {
         )) {
             CloseFriendsView().environmentObject(app)
         }
+        // The wallet, from anywhere: settings opens it, and so does delivery
+        // checkout when an order is short by more than the balance covers. The
+        // profile declares its own copy (it's a sheet, so this one can't
+        // present over it) and this one stands down while it's up.
+        .sheet(isPresented: Binding(
+            get: { app.showWallet && !app.showProfile },
+            set: { app.showWallet = $0 }
+        )) {
+            WalletView().environmentObject(app)
+        }
         // The long-form player is a fullScreenCover and owns its own comments
         // drawer — presenting from here while it's up dismisses the player.
         .sheet(isPresented: Binding(
