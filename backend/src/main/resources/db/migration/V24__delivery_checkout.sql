@@ -28,10 +28,13 @@ ALTER TABLE delivery.customer_order
     ADD COLUMN paid_at        TIMESTAMPTZ,
     ADD COLUMN settled_at     TIMESTAMPTZ,
 
-    CONSTRAINT customer_order_payment_status_chk
+    -- ADD CONSTRAINT, not a bare CONSTRAINT: inside ALTER TABLE each clause is
+    -- its own ADD, and the inline form that reads fine in a CREATE TABLE is a
+    -- syntax error here.
+    ADD CONSTRAINT customer_order_payment_status_chk
         CHECK (payment_status IN ('UNPAID', 'HELD', 'CAPTURED', 'RELEASED', 'REFUNDED')),
-    CONSTRAINT customer_order_tip_chk CHECK (tip_cents >= 0),
-    CONSTRAINT customer_order_discount_chk CHECK (discount_cents >= 0);
+    ADD CONSTRAINT customer_order_tip_chk CHECK (tip_cents >= 0),
+    ADD CONSTRAINT customer_order_discount_chk CHECK (discount_cents >= 0);
 
 -- Promotions (SPECS §6's shared shape, delivery first). Authored by the
 -- merchant on their own /mine surface; applied server-side at pricing time,
