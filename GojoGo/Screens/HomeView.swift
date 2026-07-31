@@ -618,11 +618,14 @@ struct InstagramPostCard: View {
     @ViewBuilder
     private var captionBlock: some View {
         if let text = live.text, !text.isEmpty {
-            (Text(live.author).fontWeight(.semibold) + Text(" ") + Text(text))
-                .font(.system(size: 15))
-                .foregroundStyle(GGColor.textPrimary)
-                .lineSpacing(3)
-                .lineLimit(3)
+            MentionedText(text: text, mentions: live.mentions,
+                          prefixHandle: live.author,
+                          font: .system(size: 15),
+                          color: GGColor.textPrimary) { handle, profileID in
+                app.openTaggedProfile(handle: handle, profileID: profileID)
+            }
+            .lineSpacing(3)
+            .lineLimit(3)
         } else if live.likeCount > 0 {
             Text("\(formatCount(live.likeCount)) likes")
                 .font(.system(size: 15, weight: .semibold))

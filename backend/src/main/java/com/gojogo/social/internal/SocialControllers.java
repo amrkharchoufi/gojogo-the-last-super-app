@@ -93,16 +93,25 @@ class CommentController {
         this.current = current;
     }
 
+    /** The whole thread — top-level comments, each with its replies nested. */
     @GetMapping("/v1/posts/{postId}/comments")
     List<CommentResponse> forPost(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID postId) {
         return comments.forPost(current.require(jwt).id(), postId);
     }
 
+    /** Posts a comment, or a reply to one when the body carries a {@code parentId}. */
     @PostMapping("/v1/posts/{postId}/comments")
     @ResponseStatus(HttpStatus.CREATED)
     CommentResponse create(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID postId,
                            @Valid @RequestBody CreateCommentRequest request) {
-        return comments.create(current.actingId(jwt, request.actAsProfileId()), postId, request.text());
+        return comments.create(current.actingId(jwt, request.actAsProfileId()), postId,
+            request.text(), request.parentId());
+    }
+
+    /** One comment's replies on their own, for a thread the feed only previewed. */
+    @GetMapping("/v1/comments/{commentId}/replies")
+    List<CommentResponse> replies(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID commentId) {
+        return comments.replies(current.require(jwt).id(), commentId);
     }
 
     @PostMapping("/v1/comments/{commentId}/like")

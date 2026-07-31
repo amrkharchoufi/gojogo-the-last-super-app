@@ -173,7 +173,9 @@ struct ShortCard: View {
     }
 
     private var commentCount: Int {
-        app.commentsByPost[shortID]?.count ?? 0
+        // Replies count too — the badge is how much conversation is there, not
+        // how many threads it happens to be split across.
+        AppState.totalComments(app.commentsByPost[shortID] ?? [])
     }
 
     @ViewBuilder

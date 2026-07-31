@@ -897,12 +897,14 @@ struct ProfileView: View {
                     Spacer(minLength: 0)
                 }
 
-                Text(post.text ?? "")
-                    .font(.system(size: 15))
-                    .foregroundStyle(GGColor.textPrimary)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                MentionedText(text: post.text ?? "", mentions: post.mentions,
+                              font: .system(size: 15),
+                              color: GGColor.textPrimary) { handle, profileID in
+                    app.openTaggedProfile(handle: handle, profileID: profileID)
+                }
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 20) {
                     textAction(post.liked ? "heart.fill" : "heart",

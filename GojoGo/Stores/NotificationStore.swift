@@ -46,6 +46,7 @@ final class NotificationStore {
             text: dto.text,
             timeAgo: BackendDate.relative(dto.createdAt),
             read: dto.read,
-            avatarURL: dto.actor.avatarUrl)
+            avatarURL: dto.actor.avatarUrl,
+            postID: dto.postId)
     }
 }

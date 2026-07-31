@@ -57,7 +57,23 @@ interface PostBookmarkRepository extends JpaRepository<PostBookmark, PostBookmar
 
 interface CommentRepository extends JpaRepository<Comment, UUID> {
 
-    List<Comment> findByPostIdOrderByCreatedAtAsc(UUID postId);
+    /** The thread's spine — replies hang off these, and are fetched separately. */
+    List<Comment> findByPostIdAndParentIdIsNullOrderByCreatedAtAsc(UUID postId);
+
+    /** Every reply under a page of top-level comments, in one query. */
+    List<Comment> findByParentIdInOrderByCreatedAtAsc(Collection<UUID> parentIds);
+
+    List<Comment> findByParentIdOrderByCreatedAtAsc(UUID parentId);
+
+    @Modifying
+    @Query("update Comment c set c.replyCount = c.replyCount + :delta where c.id = :commentId")
+    void bumpReplyCount(@Param("commentId") UUID commentId, @Param("delta") int delta);
+}
+
+interface MentionRepository extends JpaRepository<Mention, UUID> {
+
+    List<Mention> findByTargetKindAndTargetIdIn(MentionTarget targetKind,
+                                                Collection<UUID> targetIds);
 }
 
 interface CommentLikeRepository extends JpaRepository<CommentLike, CommentLike.Key> {

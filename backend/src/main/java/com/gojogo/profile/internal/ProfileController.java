@@ -1,6 +1,7 @@
 package com.gojogo.profile.internal;
 
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.profile.ProfileKind;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -10,6 +11,8 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 class ProfileController {
@@ -47,5 +50,24 @@ class ProfileController {
     HandleAvailabilityResponse handleAvailable(@AuthenticationPrincipal Jwt jwt,
                                                @RequestParam("handle") String handle) {
         return profiles.handleAvailability(jwt.getSubject(), handle);
+    }
+
+    /**
+     * People picker — what the @-tag autocomplete calls on each keystroke.
+     * A blank {@code q} returns an empty list rather than the user table.
+     *
+     * <p>Sits above {@code /v1/profiles/{profileId}} (social's) only because a
+     * literal path segment outranks a variable one; the name is reserved for
+     * this and must not become somebody's username.
+     */
+    @GetMapping("/v1/profiles/search")
+    List<ProfileSearchResult> search(@RequestParam(name = "q", required = false) String query,
+                                     @RequestParam(defaultValue = "10") int limit) {
+        return profiles.search(query, limit).stream()
+            .map(p -> new ProfileSearchResult(p.id(),
+                p.displayName() != null ? p.displayName() : p.handle(),
+                p.handle(), p.avatarUrl(),
+                p.kind() == ProfileKind.BUSINESS, p.verified()))
+            .toList();
     }
 }

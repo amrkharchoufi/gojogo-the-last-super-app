@@ -7,6 +7,7 @@ import com.gojogo.profile.ProfileDto;
 import com.gojogo.profile.ProfileKind;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Limit;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -77,9 +78,42 @@ class ProfileService implements ProfileApi {
         if (ids.isEmpty()) {
             return Map.of();
         }
-        List<UserProfile> found = repository.findByIdIn(ids);
-        // One extra query for the whole batch, and only when a business is in it —
-        // feed decoration must not turn into a query per author.
+        return toDtos(repository.findByIdIn(ids)).stream()
+            .collect(Collectors.toMap(ProfileDto::id, Function.identity()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, ProfileDto> findByHandles(Collection<String> handles) {
+        if (handles.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> canonical = handles.stream()
+            .map(h -> h.toLowerCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+        return toDtos(repository.findByHandleIn(canonical)).stream()
+            .collect(Collectors.toMap(ProfileDto::handle, Function.identity()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ProfileDto> search(String query, int limit) {
+        // A picker that answers an empty box with "everyone" is a picker that
+        // leaks the user list, so the empty query returns nothing at all.
+        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        if (q.isEmpty()) {
+            return List.of();
+        }
+        return toDtos(repository.search(q, Limit.of(Math.clamp(limit, 1, 50))));
+    }
+
+    /**
+     * Batch DTO mapping. One extra query for the whole batch, and only when a
+     * business is in it — feed decoration must not turn into a query per author.
+     * Preserves the incoming order, which is the only thing making
+     * {@link #search} ranking survive the mapping.
+     */
+    private List<ProfileDto> toDtos(List<UserProfile> found) {
         List<UUID> businessIds = found.stream()
             .filter(p -> p.getKind() == ProfileKind.BUSINESS)
             .map(UserProfile::getId)
@@ -89,7 +123,7 @@ class ProfileService implements ProfileApi {
                 .collect(Collectors.toMap(BusinessProfile::getProfileId, Function.identity()));
         return found.stream()
             .map(p -> toDto(p, extras.get(p.getId())))
-            .collect(Collectors.toMap(ProfileDto::id, Function.identity()));
+            .toList();
     }
 
     @Override

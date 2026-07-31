@@ -17,9 +17,20 @@ record AuthorSummary(UUID id, String name, String handle, String avatarUrl, bool
 record MediaItemDto(UUID id, String imageUrl, String videoUrl) {
 }
 
+/**
+ * Someone tagged in a body of text.
+ *
+ * @param handle the handle <em>as it was written</em> — the token the client
+ *               finds in the text to underline. It is not necessarily this
+ *               person's handle today; {@code profileId} is what the tap follows.
+ */
+record MentionDto(UUID profileId, String handle) {
+}
+
 record PostResponse(UUID id, AuthorSummary author, OffsetDateTime createdAt, String text,
                     float imageAspect, List<MediaItemDto> mediaItems,
-                    boolean liked, boolean bookmarked, int likeCount, int commentCount) {
+                    boolean liked, boolean bookmarked, int likeCount, int commentCount,
+                    List<MentionDto> mentions) {
 }
 
 record FeedResponse(List<PostResponse> posts, OffsetDateTime nextBefore) {
@@ -33,11 +44,22 @@ record CreatePostRequest(@Size(max = 5000) String text, Float imageAspect,
                          UUID actAsProfileId) {
 }
 
-record CreateCommentRequest(@NotBlank @Size(max = 2000) String text, UUID actAsProfileId) {
+/** @param parentId the comment being answered; null posts a new top-level comment */
+record CreateCommentRequest(@NotBlank @Size(max = 2000) String text, UUID parentId,
+                            UUID actAsProfileId) {
 }
 
+/**
+ * @param parentId null on a top-level comment
+ * @param replies  the answers under it — always empty on a reply itself, since
+ *                 threads are one level deep
+ * @param replyCount the true total, which is what the "view N replies" control
+ *                 reads; {@code replies} may be a first page of that
+ */
 record CommentResponse(UUID id, AuthorSummary author, String text, boolean liked,
-                       int likeCount, OffsetDateTime createdAt) {
+                       int likeCount, OffsetDateTime createdAt, UUID parentId,
+                       int replyCount, List<MentionDto> mentions,
+                       List<CommentResponse> replies) {
 }
 
 /**

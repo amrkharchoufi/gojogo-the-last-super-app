@@ -315,6 +315,8 @@ struct Post: Identifiable {
     var mediaItems: [PostMediaItem]
     var imageAspect: CGFloat   // height / width hint for layout
     var text: String?
+    /// People tagged in the caption, resolved server-side at publish time.
+    var mentions: [Mention]
     var showFollow: Bool
     var liked: Bool
     var bookmarked: Bool
@@ -345,6 +347,7 @@ struct Post: Identifiable {
          videoURL: String? = nil,
          mediaItems: [PostMediaItem] = [],
          imageAspect: CGFloat = 1.0, text: String? = nil,
+         mentions: [Mention] = [],
          showFollow: Bool = false, liked: Bool = false,
          bookmarked: Bool = false, following: Bool = false,
          likeCount: Int = 0, commentCount: Int = 0,
@@ -355,6 +358,7 @@ struct Post: Identifiable {
         self.videoURL = videoURL
         self.mediaItems = mediaItems
         self.imageAspect = imageAspect; self.text = text
+        self.mentions = mentions
         self.showFollow = showFollow; self.liked = liked
         self.bookmarked = bookmarked; self.following = following
         self.likeCount = likeCount; self.commentCount = commentCount
@@ -662,13 +666,16 @@ struct FileChip: Identifiable {
 
 // MARK: - Activity / notifications
 
+/// Raw values are the server's notification `type` — a new one there needs a
+/// case here or it renders as `.system`.
 enum ActivityKind: String {
-    case like, comment, follow, mention, order, system
+    case like, comment, reply, follow, mention, order, system
 
     var icon: String {
         switch self {
         case .like: return "heart.fill"
         case .comment: return "bubble.right.fill"
+        case .reply: return "arrowshape.turn.up.left.fill"
         case .follow: return "person.fill.badge.plus"
         case .mention: return "at"
         case .order: return "bag.fill"
@@ -679,7 +686,7 @@ enum ActivityKind: String {
     var tint: Color {
         switch self {
         case .like: return Color(hex: "E85D75")
-        case .comment: return GGColor.blue
+        case .comment, .reply: return GGColor.blue
         case .follow: return Color(hex: "7A6CF0")
         case .mention: return Color(hex: "E8B45D")
         case .order: return Color(hex: "5DC98A")
@@ -697,16 +704,49 @@ struct ActivityItem: Identifiable {
     var read: Bool
     var avatarURL: String?
     var previewURL: String?
+    /// What this is about, when it is about something — a tap opens it instead
+    /// of guessing at the user's most recent post.
+    var postID: UUID?
 
     init(id: UUID = UUID(), kind: ActivityKind, actor: String, text: String,
          timeAgo: String, read: Bool = false, avatarURL: String? = nil,
-         previewURL: String? = nil) {
+         previewURL: String? = nil, postID: UUID? = nil) {
         self.id = id; self.kind = kind; self.actor = actor; self.text = text
         self.timeAgo = timeAgo; self.read = read; self.avatarURL = avatarURL
-        self.previewURL = previewURL
+        self.previewURL = previewURL; self.postID = postID
     }
 }
 
+/// Someone tagged in a caption or a comment. `handle` is the handle as it was
+/// written, which is the token to underline in the body; `profileID` is where a
+/// tap goes, and it stays right when that person renames.
+struct Mention: Identifiable, Hashable, Codable {
+    let profileID: UUID
+    let handle: String
+
+    var id: UUID { profileID }
+
+    init(profileID: UUID, handle: String) {
+        self.profileID = profileID
+        self.handle = handle
+    }
+}
+
+/// A row in the @-tag autocomplete. Its own type rather than a reuse of
+/// `PersonSuggestion`, which is the follow-suggestion rail's shape and carries a
+/// `following` flag the picker has no business showing.
+struct MentionCandidate: Identifiable, Hashable {
+    let id: UUID
+    let name: String
+    let handle: String
+    var avatarURL: String?
+    var verified: Bool = false
+    var business: Bool = false
+}
+
+/// One level of nesting, deliberately: `replies` is populated on a top-level
+/// comment and always empty on a reply. Who a reply is answering is carried by
+/// the `@handle` in its own text, not by a deeper tree.
 struct Comment: Identifiable, Hashable {
     let id: UUID
     let author: String
@@ -715,13 +755,24 @@ struct Comment: Identifiable, Hashable {
     var liked: Bool
     var likeCount: Int
     let timeAgo: String
+    /// The comment this answers; nil on a top-level comment.
+    var parentID: UUID?
+    /// The server's true total, which may exceed `replies.count` before the
+    /// thread is expanded.
+    var replyCount: Int
+    var mentions: [Mention]
+    var replies: [Comment]
 
     init(id: UUID = UUID(), author: String, text: String,
          avatarURL: String? = nil, liked: Bool = false,
-         likeCount: Int = 0, timeAgo: String = "just now") {
+         likeCount: Int = 0, timeAgo: String = "just now",
+         parentID: UUID? = nil, replyCount: Int = 0,
+         mentions: [Mention] = [], replies: [Comment] = []) {
         self.id = id; self.author = author; self.text = text
         self.avatarURL = avatarURL; self.liked = liked
         self.likeCount = likeCount; self.timeAgo = timeAgo
+        self.parentID = parentID; self.replyCount = replyCount
+        self.mentions = mentions; self.replies = replies
     }
 }
 

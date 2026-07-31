@@ -501,24 +501,53 @@ extension AppState {
     func refreshComments(for postID: UUID) {
         Task {
             if let live = try? await SocialStore.shared.comments(for: postID) {
+                // The server reads a thread top-down; the sheet reads newest
+                // first. Only the top level flips — replies stay chronological,
+                // which is the only order a conversation makes sense in.
                 commentsByPost[postID] = live.reversed()
-                if let i = posts.firstIndex(where: { $0.id == postID }) {
-                    posts[i].commentCount = live.count
-                }
+                applyCommentCount(AppState.totalComments(live), to: postID)
             }
         }
     }
 
-    func syncNewComment(text: String, postID: UUID, optimisticID: UUID) {
+    /// Pulls a thread's full reply list — the "view all N replies" path, for a
+    /// thread the comments payload only previewed.
+    func refreshReplies(postID: UUID, commentID: UUID) {
+        guard SocialStore.shared.remoteCommentIds.contains(commentID) else { return }
+        Task {
+            guard let live = try? await SocialStore.shared.replies(for: commentID),
+                  var list = commentsByPost[postID],
+                  let i = list.firstIndex(where: { $0.id == commentID }) else { return }
+            list[i].replies = live
+            list[i].replyCount = max(list[i].replyCount, live.count)
+            commentsByPost[postID] = list
+            applyCommentCount(AppState.totalComments(list), to: postID)
+        }
+    }
+
+    func syncNewComment(text: String, postID: UUID, parentID: UUID?, optimisticID: UUID) {
         guard SocialStore.shared.remotePostIds.contains(postID) else { return }
+        // A reply to a comment the server has never heard of (sample content, or
+        // one whose own write is still in flight) would be rejected — post it as
+        // a top-level comment rather than losing it.
+        let parent = parentID.flatMap {
+            SocialStore.shared.remoteCommentIds.contains($0) ? $0 : nil
+        }
         Task {
             do {
-                let real = try await SocialStore.shared.addComment(text, to: postID)
-                if var list = commentsByPost[postID],
-                   let i = list.firstIndex(where: { $0.id == optimisticID }) {
+                let real = try await SocialStore.shared.addComment(text, to: postID,
+                                                                   parentID: parent)
+                guard var list = commentsByPost[postID] else { return }
+                if let i = list.firstIndex(where: { $0.id == optimisticID }) {
                     list[i] = real
-                    commentsByPost[postID] = list
+                } else if let root = real.parentID ?? parent,
+                          let i = list.firstIndex(where: { $0.id == root }),
+                          let r = list[i].replies.firstIndex(where: { $0.id == optimisticID }) {
+                    list[i].replies[r] = real
+                } else {
+                    return
                 }
+                commentsByPost[postID] = list
             } catch {
                 #if DEBUG
                 print("Comment sync failed: \(error.localizedDescription)")

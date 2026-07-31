@@ -26,3 +26,13 @@ record HandleAvailabilityResponse(boolean available, String reason, String norma
 record HandleStatusResponse(String handle, OffsetDateTime handleChangedAt,
                             OffsetDateTime changeAvailableAt, boolean canChangeNow) {
 }
+
+/**
+ * One row of the people picker. Deliberately narrower than {@link
+ * com.gojogo.profile.ProfileDto}: an autocomplete needs a face, a name and a
+ * handle, and must not hand out the email or Cognito subject of everyone whose
+ * username starts with the same two letters.
+ */
+record ProfileSearchResult(java.util.UUID id, String name, String handle, String avatarUrl,
+                           boolean business, boolean verified) {
+}

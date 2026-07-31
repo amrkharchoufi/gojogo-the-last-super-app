@@ -1,7 +1,9 @@
 package com.gojogo.notifications.internal;
 
+import com.gojogo.social.CommentReplied;
 import com.gojogo.social.PostCommented;
 import com.gojogo.social.PostLiked;
+import com.gojogo.social.UserMentioned;
 import com.gojogo.social.StoryReacted;
 import com.gojogo.social.StoryReplied;
 import com.gojogo.social.UserFollowed;
@@ -45,6 +47,25 @@ class NotificationListeners {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     void onComment(PostCommented event) {
         notifications.record(event.postAuthorId(), "comment", event.commenterId(),
+            event.postId(), event.commentId(), event.at());
+    }
+
+    @TransactionalEventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void onReply(CommentReplied event) {
+        notifications.record(event.parentAuthorId(), "reply", event.replierId(),
+            event.postId(), event.replyId(), event.at());
+    }
+
+    /**
+     * A tag reaches someone who follows none of this — which is the point, and
+     * also why the social module suppresses the tag notification for anyone it
+     * is already telling (the post's author, the person being replied to).
+     */
+    @TransactionalEventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void onMention(UserMentioned event) {
+        notifications.record(event.mentionedProfileId(), "mention", event.actorId(),
             event.postId(), event.commentId(), event.at());
     }
 

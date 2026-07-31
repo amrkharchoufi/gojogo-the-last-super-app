@@ -23,11 +23,22 @@ class Comment {
     @Column(name = "author_id", nullable = false)
     private UUID authorId;
 
+    /**
+     * The top-level comment this answers, or null if this <em>is</em> one.
+     * Never points at another reply: threads are one level deep and the service
+     * re-points a reply-to-a-reply at their shared parent.
+     */
+    @Column(name = "parent_id")
+    private UUID parentId;
+
     @Column(nullable = false)
     private String text;
 
     @Column(name = "like_count", nullable = false)
     private int likeCount;
+
+    @Column(name = "reply_count", nullable = false)
+    private int replyCount;
 
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
@@ -35,10 +46,11 @@ class Comment {
     protected Comment() {
     }
 
-    Comment(UUID postId, UUID authorId, String text) {
+    Comment(UUID postId, UUID authorId, String text, UUID parentId) {
         this.postId = postId;
         this.authorId = authorId;
         this.text = text;
+        this.parentId = parentId;
         this.createdAt = OffsetDateTime.now();
     }
 
@@ -58,8 +70,16 @@ class Comment {
         return text;
     }
 
+    UUID getParentId() {
+        return parentId;
+    }
+
     int getLikeCount() {
         return likeCount;
+    }
+
+    int getReplyCount() {
+        return replyCount;
     }
 
     OffsetDateTime getCreatedAt() {

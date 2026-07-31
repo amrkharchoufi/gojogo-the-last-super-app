@@ -26,6 +26,21 @@ public interface ProfileApi {
      */
     Map<UUID, ProfileDto> findByIds(Collection<UUID> ids);
 
+    /**
+     * Resolves a batch of handles at once, keyed by the canonical (lowercase)
+     * handle. Handles that belong to nobody are simply absent — the caller
+     * decides whether that is an error, and for an {@code @tag} in a caption it
+     * is not.
+     */
+    Map<String, ProfileDto> findByHandles(Collection<String> handles);
+
+    /**
+     * Prefix search over handle and display name, for pickers — the @-tag
+     * autocomplete first. Ordered so handle-prefix matches come before
+     * name matches, which is the order a half-typed handle expects.
+     */
+    List<ProfileDto> search(String query, int limit);
+
     /** The business-only fields, absent for a person. */
     Optional<BusinessProfileDto> findBusiness(UUID profileId);
 

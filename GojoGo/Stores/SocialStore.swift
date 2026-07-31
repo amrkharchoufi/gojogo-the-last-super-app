@@ -33,7 +33,13 @@ final class SocialStore {
     }
 
     func profileId(forHandle handle: String) -> UUID? {
-        profileIdByHandle[handle.lowercased()]
+        profileIdByHandle[handle.trimmingCharacters(in: CharacterSet(charactersIn: "@")).lowercased()]
+    }
+
+    /// The current handle for an id this device has seen. The reverse direction
+    /// matters for tags: the id in a tag outlives the handle written next to it.
+    func handle(forProfileId id: UUID) -> String? {
+        profileIdByHandle.first { $0.value == id }?.key
     }
 
     func registerProfile(id: UUID, handle: String) {
@@ -102,12 +108,41 @@ final class SocialStore {
         return list.map { map($0) }
     }
 
-    func addComment(_ text: String, to postId: UUID) async throws -> Comment {
+    /// `parentID` posts a reply instead of a new top-level comment. A reply to a
+    /// reply is re-pointed at their shared parent server-side, so the caller can
+    /// pass whichever comment the user actually tapped.
+    func addComment(_ text: String, to postId: UUID, parentID: UUID? = nil) async throws -> Comment {
         let dto: CommentDTO = try await APIClient.shared
             .post("/v1/posts/\(postId.uuidString.lowercased())/comments",
                   body: CreateCommentBody(text: text,
+                                          parentId: parentID?.uuidString.lowercased(),
                                           actAsProfileId: ActingIdentity.shared.actAsProfileId))
         return map(dto)
+    }
+
+    func replies(for commentId: UUID) async throws -> [Comment] {
+        let list: [CommentDTO] = try await APIClient.shared
+            .get("/v1/comments/\(commentId.uuidString.lowercased())/replies")
+        return list.map { map($0) }
+    }
+
+    // MARK: People picker (@-tag autocomplete)
+
+    func searchProfiles(_ query: String, limit: Int = 8) async throws -> [MentionCandidate] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+        else { return [] }
+        let list: [ProfileSearchResultDTO] = try await APIClient.shared
+            .get("/v1/profiles/search?q=\(encoded)&limit=\(limit)")
+        return list.compactMap { dto in
+            guard let handle = dto.handle else { return nil }
+            registerProfile(id: dto.id, handle: handle)
+            return MentionCandidate(id: dto.id, name: dto.name ?? handle, handle: handle,
+                                    avatarURL: dto.avatarUrl,
+                                    verified: dto.verified ?? false,
+                                    business: dto.business ?? false)
+        }
     }
 
     func likeComment(_ commentId: UUID) async throws {
@@ -142,6 +177,7 @@ final class SocialStore {
             mediaItems: slides,
             imageAspect: CGFloat(dto.imageAspect),
             text: dto.text,
+            mentions: map(dto.mentions),
             showFollow: !dto.author.following && !isOwn,
             liked: dto.liked,
             bookmarked: dto.bookmarked,
@@ -153,6 +189,7 @@ final class SocialStore {
     func map(_ dto: CommentDTO) -> Comment {
         register(dto.author)
         remoteCommentIds.insert(dto.id)
+        let replies = (dto.replies ?? []).map { map($0) }
         return Comment(
             id: dto.id,
             author: dto.author.handle ?? dto.author.name ?? "user",
@@ -160,7 +197,22 @@ final class SocialStore {
             avatarURL: dto.author.avatarUrl,
             liked: dto.liked,
             likeCount: dto.likeCount,
-            timeAgo: BackendDate.relative(dto.createdAt))
+            timeAgo: BackendDate.relative(dto.createdAt),
+            parentID: dto.parentId,
+            // Trust the server's count when it sends one, but never let it read
+            // as fewer replies than are actually in hand.
+            replyCount: max(dto.replyCount ?? 0, replies.count),
+            mentions: map(dto.mentions),
+            replies: replies)
+    }
+
+    /// Also seeds the handle→id table: a tag is often the first time this device
+    /// has heard of that account, and the profile screen opens by handle.
+    private func map(_ dtos: [MentionDTO]?) -> [Mention] {
+        (dtos ?? []).map {
+            registerProfile(id: $0.profileId, handle: $0.handle)
+            return Mention(profileID: $0.profileId, handle: $0.handle)
+        }
     }
 
     private func register(_ author: AuthorSummaryDTO) {

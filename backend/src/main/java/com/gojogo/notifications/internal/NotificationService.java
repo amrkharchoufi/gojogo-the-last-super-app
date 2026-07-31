@@ -98,6 +98,8 @@ class NotificationService {
             case "follow" -> "started following you";
             case "like" -> "liked your post";
             case "comment" -> "commented on your post";
+            case "reply" -> "replied to your comment";
+            case "mention" -> "mentioned you";
             case "story_reaction" -> "reacted to your story";
             case "story_reply" -> "replied to your story";
             default -> "";

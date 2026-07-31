@@ -409,6 +409,12 @@ struct CachedComment: Codable {
     var liked: Bool
     var likeCount: Int
     var timeAgo: String
+    /// Threading and tags arrived after the first caches were written, so these
+    /// decode as absent from an older file rather than failing the whole restore.
+    var parentID: UUID?
+    var replyCount: Int?
+    var mentions: [Mention]?
+    var replies: [CachedComment]?
 }
 
 struct CachedCommentThread: Codable {
@@ -699,11 +705,17 @@ extension CachedComment {
     init(from c: Comment) {
         id = c.id; author = c.author; text = c.text; avatarURL = c.avatarURL
         liked = c.liked; likeCount = c.likeCount; timeAgo = c.timeAgo
+        parentID = c.parentID; replyCount = c.replyCount
+        mentions = c.mentions.isEmpty ? nil : c.mentions
+        replies = c.replies.isEmpty ? nil : c.replies.map(CachedComment.init)
     }
 
     func asDomain() -> Comment {
         Comment(id: id, author: author, text: text, avatarURL: avatarURL,
-                liked: liked, likeCount: likeCount, timeAgo: timeAgo)
+                liked: liked, likeCount: likeCount, timeAgo: timeAgo,
+                parentID: parentID, replyCount: replyCount ?? 0,
+                mentions: mentions ?? [],
+                replies: (replies ?? []).map { $0.asDomain() })
     }
 }
 

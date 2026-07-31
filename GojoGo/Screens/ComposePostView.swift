@@ -8,6 +8,7 @@ struct ComposePostView: View {
     @State private var text = ""
     @State private var pickerItem: PhotosPickerItem?
     @State private var imageData: Data?
+    @StateObject private var autocomplete = MentionAutocomplete()
 
     var body: some View {
         NavigationStack {
@@ -37,11 +38,20 @@ struct ComposePostView: View {
                             UserAvatar(size: 40,
                                        letter: String(app.publishingAsName.prefix(1)),
                                        imageURL: app.actingBusiness?.avatarURL ?? app.user.avatarURL)
-                            TextField("Share something…", text: $text, axis: .vertical)
+                            TextField("Share something… tag people with @",
+                                      text: $text, axis: .vertical)
                                 .font(.system(size: 16))
                                 .foregroundStyle(GGColor.textPrimary)
                                 .lineLimit(4...12)
+                                .autocorrectionDisabled(autocomplete.token != nil)
+                                .textInputAutocapitalization(
+                                    autocomplete.token != nil ? .never : .sentences)
                         }
+
+                        MentionSuggestionBar(autocomplete: autocomplete) { candidate in
+                            text = autocomplete.complete(text, with: candidate)
+                        }
+                        .padding(.horizontal, -20)
 
                         if let imageData, let ui = UIImage(data: imageData) {
                             ZStack(alignment: .topTrailing) {
@@ -94,6 +104,14 @@ struct ComposePostView: View {
                     .foregroundStyle(canPost ? GGColor.accent : GGColor.textTertiary)
                     .disabled(!canPost)
                 }
+            }
+        }
+        .onAppear {
+            autocomplete.localSource = { [weak app] in app?.mentionCandidates ?? [] }
+        }
+        .onChange(of: text) { _, value in
+            withAnimation(.easeOut(duration: 0.15)) {
+                autocomplete.update(for: value, connected: app.backendConnected)
             }
         }
         .onChange(of: pickerItem) { _, item in

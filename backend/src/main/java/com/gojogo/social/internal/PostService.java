@@ -31,17 +31,19 @@ class PostService {
     private final FollowRepository follows;
     private final ProfileApi profiles;
     private final MediaApi media;
+    private final MentionService mentions;
     private final ApplicationEventPublisher events;
 
     PostService(PostRepository posts, PostLikeRepository likes, PostBookmarkRepository bookmarks,
                 FollowRepository follows, ProfileApi profiles, MediaApi media,
-                ApplicationEventPublisher events) {
+                MentionService mentions, ApplicationEventPublisher events) {
         this.posts = posts;
         this.likes = likes;
         this.bookmarks = bookmarks;
         this.follows = follows;
         this.profiles = profiles;
         this.media = media;
+        this.mentions = mentions;
         this.events = events;
     }
 
@@ -62,7 +64,10 @@ class PostService {
                 .flatMap(item -> Stream.of(item.imageUrl(), item.videoUrl()))
                 .toList());
         }
-        post = posts.save(post);
+        post = posts.saveAndFlush(post);
+        // The caption's @tags, resolved once here — see MentionService.
+        mentions.record(MentionTarget.POST, post.getId(), me, post.getText(),
+            post.getId(), null, Set.of());
         events.publishEvent(new PostCreated(post.getId(), me, post.getCreatedAt()));
         return decorate(List.of(post), me).getFirst();
     }
@@ -198,6 +203,7 @@ class PostService {
         Map<UUID, ProfileDto> authors = profiles.findByIds(authorIds);
         Set<UUID> liked = likes.likedPostIds(me, postIds);
         Set<UUID> bookmarked = bookmarks.bookmarkedPostIds(me, postIds);
+        Map<UUID, List<MentionDto>> tagged = mentions.forTargets(MentionTarget.POST, postIds);
         return page.stream().map(post -> {
             ProfileDto author = authors.get(post.getAuthorId());
             return new PostResponse(
@@ -212,7 +218,8 @@ class PostService {
                 liked.contains(post.getId()),
                 bookmarked.contains(post.getId()),
                 post.getLikeCount(),
-                post.getCommentCount());
+                post.getCommentCount(),
+                tagged.getOrDefault(post.getId(), List.of()));
         }).toList();
     }
 

@@ -206,8 +206,16 @@ final class AppState: ObservableObject {
     @Published var watchingDraft: String = ""
     /// When set, ShortsView jumps to this short (e.g. opened from a feed video).
     @Published var focusedShortID: UUID? = nil
+    /// Keyed by post (or video) id, newest thread first. Each entry is a
+    /// top-level comment carrying its own replies — threads are one level deep.
     @Published var commentsByPost: [UUID: [Comment]] = [:]
     @Published var draftComment: String = ""
+    /// The comment the draft answers, if any. Holds whichever comment was
+    /// tapped, including a reply — the server re-points it at the thread root.
+    @Published var replyingToCommentID: UUID? = nil
+    @Published var replyingToHandle: String? = nil
+    /// Threads the user has expanded past their preview.
+    @Published var expandedCommentIDs: Set<UUID> = []
 
     // Activity / notifications
     @Published var notifications: [ActivityItem] = SampleData.notifications
@@ -1455,20 +1463,32 @@ final class AppState: ObservableObject {
     func handleActivityTap(_ item: ActivityItem) {
         showActivity = false
         switch item.kind {
-        case .follow, .mention:
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.openUserProfile(handle: item.actor, avatarURL: item.avatarURL)
-            }
-        case .like, .comment:
-            if let post = myPosts.first {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                    self?.openComments(for: post.id)
-                }
+        case .follow:
+            afterDismiss { $0.openUserProfile(handle: item.actor, avatarURL: item.avatarURL) }
+        case .comment, .reply, .mention, .like:
+            // Whatever it is about, if it's loaded. A tag in particular is
+            // usually on someone else's post, so the old "open my newest post"
+            // fallback would be the wrong thing every time.
+            if let postID = item.postID, posts.contains(where: { $0.id == postID }) {
+                afterDismiss { $0.openComments(for: postID) }
+            } else if item.kind == .mention {
+                afterDismiss { $0.openUserProfile(handle: item.actor, avatarURL: item.avatarURL) }
+            } else if let post = myPosts.first {
+                afterDismiss { $0.openComments(for: post.id) }
             }
         case .order:
             activeTab = .economy
         case .system:
             activeTab = .madeleine
+        }
+    }
+
+    /// Lets the activity sheet finish closing before the next surface opens —
+    /// two presentations in the same runloop turn and neither one shows.
+    private func afterDismiss(_ action: @escaping (AppState) -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self else { return }
+            action(self)
         }
     }
 
@@ -2196,6 +2216,8 @@ final class AppState: ObservableObject {
         }
         commentingPostID = postID
         draftComment = ""
+        cancelReply()
+        expandedCommentIDs = []
         if isVideoThread(postID) {
             if commentsByPost[postID] == nil { commentsByPost[postID] = [] }
             if WatchStore.shared.isLive(postID) { refreshVideoComments(for: postID) }
@@ -2210,44 +2232,141 @@ final class AppState: ObservableObject {
     func closeComments() {
         commentingPostID = nil
         draftComment = ""
+        cancelReply()
+        expandedCommentIDs = []
+    }
+
+    // MARK: Replies
+
+    /// Aims the draft at `comment`. The `@handle` prefix is the reply's own
+    /// record of who it answers — threads are flat, so nothing else carries it.
+    func beginReply(to comment: Comment) {
+        replyingToCommentID = comment.id
+        replyingToHandle = comment.author
+        let handle = comment.author.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        if !handle.isEmpty, handle.lowercased() != user.handle.lowercased() {
+            draftComment = "@\(handle) "
+        }
+        if let parent = threadRoot(of: comment.id) {
+            expandedCommentIDs.insert(parent)
+        }
+    }
+
+    func cancelReply() {
+        replyingToCommentID = nil
+        replyingToHandle = nil
+    }
+
+    func toggleRepliesExpanded(_ commentID: UUID) {
+        if expandedCommentIDs.contains(commentID) {
+            expandedCommentIDs.remove(commentID)
+        } else {
+            expandedCommentIDs.insert(commentID)
+            // A thread whose replies the server hasn't sent yet — ask for them.
+            if let postID = commentingPostID, !isVideoThread(postID),
+               let root = comment(commentID, in: postID),
+               root.replies.count < root.replyCount {
+                refreshReplies(postID: postID, commentID: commentID)
+            }
+        }
     }
 
     func addComment() {
         guard let id = commentingPostID else { return }
         let text = draftComment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        // Video threads live in the watch module, which has no reply table —
+        // the sheet hides the affordance there, and this is the belt to that
+        // braces.
+        let parentID = isVideoThread(id) ? nil : replyingToCommentID
         let comment = Comment(author: user.handle, text: text,
-                              avatarURL: user.avatarURL, timeAgo: "now")
+                              avatarURL: user.avatarURL, timeAgo: "now",
+                              parentID: parentID.flatMap { threadRoot(of: $0) },
+                              mentions: MentionParser.resolveLocally(in: text))
         var list = commentsByPost[id] ?? []
-        list.insert(comment, at: 0)
+        if let parentID, let root = threadRoot(of: parentID),
+           let i = list.firstIndex(where: { $0.id == root }) {
+            list[i].replies.append(comment)
+            list[i].replyCount = max(list[i].replyCount + 1, list[i].replies.count)
+            expandedCommentIDs.insert(root)
+        } else {
+            list.insert(comment, at: 0)
+        }
         commentsByPost[id] = list
-        if let i = posts.firstIndex(where: { $0.id == id }) {
-            posts[i].commentCount = list.count
-        }
-        if let i = videos.firstIndex(where: { $0.id == id }) {
-            videos[i].commentCount = list.count
-        }
+        applyCommentCount(Self.totalComments(list), to: id)
         draftComment = ""
         if isVideoThread(id) {
             syncNewVideoComment(text: text, videoID: id, optimisticID: comment.id)
         } else {
-            syncNewComment(text: text, postID: id, optimisticID: comment.id)
+            syncNewComment(text: text, postID: id, parentID: parentID,
+                           optimisticID: comment.id)
         }
+        cancelReply()
         schedulePersist()
     }
 
     func toggleCommentLike(postID: UUID, commentID: UUID) {
-        guard var list = commentsByPost[postID],
-              let i = list.firstIndex(where: { $0.id == commentID }) else { return }
-        list[i].liked.toggle()
-        list[i].likeCount += list[i].liked ? 1 : -1
+        guard var list = commentsByPost[postID] else { return }
+        var liked = false
+        if let i = list.firstIndex(where: { $0.id == commentID }) {
+            list[i].liked.toggle()
+            list[i].likeCount += list[i].liked ? 1 : -1
+            liked = list[i].liked
+        } else if let (root, reply) = indexOfReply(commentID, in: list) {
+            list[root].replies[reply].liked.toggle()
+            list[root].replies[reply].likeCount += list[root].replies[reply].liked ? 1 : -1
+            liked = list[root].replies[reply].liked
+        } else {
+            return
+        }
         commentsByPost[postID] = list
         if isVideoThread(postID) {
-            syncVideoCommentLike(commentID: commentID, liked: list[i].liked)
+            syncVideoCommentLike(commentID: commentID, liked: liked)
         } else {
-            syncCommentLike(commentID: commentID, liked: list[i].liked)
+            syncCommentLike(commentID: commentID, liked: liked)
         }
         schedulePersist()
+    }
+
+    // MARK: Thread helpers
+
+    /// A comment anywhere in the post's thread, top level or reply.
+    func comment(_ commentID: UUID, in postID: UUID) -> Comment? {
+        guard let list = commentsByPost[postID] else { return nil }
+        if let found = list.first(where: { $0.id == commentID }) { return found }
+        return list.lazy.flatMap(\.replies).first { $0.id == commentID }
+    }
+
+    /// The top-level comment a thread hangs off — itself if it is one. Mirrors
+    /// the server's flattening so the optimistic copy lands where the real one will.
+    func threadRoot(of commentID: UUID) -> UUID? {
+        guard let postID = commentingPostID, let list = commentsByPost[postID] else { return nil }
+        if list.contains(where: { $0.id == commentID }) { return commentID }
+        return list.first { $0.replies.contains { $0.id == commentID } }?.id
+    }
+
+    private func indexOfReply(_ commentID: UUID, in list: [Comment]) -> (Int, Int)? {
+        for (root, comment) in list.enumerated() {
+            if let reply = comment.replies.firstIndex(where: { $0.id == commentID }) {
+                return (root, reply)
+            }
+        }
+        return nil
+    }
+
+    /// Replies count toward a post's comment count — the badge is "how much
+    /// conversation is here", not "how many threads".
+    static func totalComments(_ list: [Comment]) -> Int {
+        list.reduce(0) { $0 + 1 + max($1.replyCount, $1.replies.count) }
+    }
+
+    func applyCommentCount(_ count: Int, to id: UUID) {
+        if let i = posts.firstIndex(where: { $0.id == id }) {
+            posts[i].commentCount = count
+        }
+        if let i = videos.firstIndex(where: { $0.id == id }) {
+            videos[i].commentCount = count
+        }
     }
 
     func playVideo(_ id: UUID) {
@@ -2649,6 +2768,44 @@ final class AppState: ObservableObject {
         )
         showProfile = true
         refreshRemoteProfile(handle: cleaned)
+    }
+
+    /// Opens the profile behind a tapped `@tag`. The id is the reliable half —
+    /// a tag written before someone renamed still carries the right one — but
+    /// the profile screen is keyed by handle, so a known id is resolved back to
+    /// its current handle before opening.
+    func openTaggedProfile(handle: String, profileID: UUID?) {
+        if let profileID, let known = SocialStore.shared.handle(forProfileId: profileID) {
+            openUserProfile(handle: known)
+        } else {
+            openUserProfile(handle: handle)
+        }
+    }
+
+    /// People the picker can offer without asking the server: whoever is already
+    /// on screen. This is the whole source when running on sample content, and
+    /// the instant first page when connected.
+    var mentionCandidates: [MentionCandidate] {
+        var seen: Set<String> = []
+        var out: [MentionCandidate] = []
+        func add(handle rawHandle: String, name: String?, avatarURL: String?) {
+            let handle = rawHandle.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+            guard handle.count >= 2, handle.lowercased() != user.handle.lowercased(),
+                  seen.insert(handle.lowercased()).inserted else { return }
+            out.append(MentionCandidate(
+                id: SocialStore.shared.profileId(forHandle: handle) ?? UUID(),
+                name: name ?? handle, handle: handle, avatarURL: avatarURL))
+        }
+        for post in posts { add(handle: post.author, name: nil, avatarURL: post.avatarURL) }
+        if let id = commentingPostID, let thread = commentsByPost[id] {
+            for comment in thread {
+                add(handle: comment.author, name: nil, avatarURL: comment.avatarURL)
+                for reply in comment.replies {
+                    add(handle: reply.author, name: nil, avatarURL: reply.avatarURL)
+                }
+            }
+        }
+        return out
     }
 
     func closeProfile() {

@@ -205,6 +205,14 @@ struct MediaItemDTO: Decodable {
     var videoUrl: String?
 }
 
+/// Someone tagged in a caption or a comment. `handle` is the handle *as written*
+/// — the token to find in the body text — while `profileId` is what a tap
+/// follows, and it survives that person renaming themselves.
+struct MentionDTO: Decodable {
+    var profileId: UUID
+    var handle: String
+}
+
 struct PostDTO: Decodable {
     var id: UUID
     var author: AuthorSummaryDTO
@@ -216,6 +224,9 @@ struct PostDTO: Decodable {
     var bookmarked: Bool
     var likeCount: Int
     var commentCount: Int
+    /// Optional so a build either side of the tagging deploy still decodes the
+    /// feed rather than dropping it.
+    var mentions: [MentionDTO]?
 }
 
 struct FeedDTO: Decodable {
@@ -237,6 +248,9 @@ struct CreatePostBody: Encodable {
     var actAsProfileId: String?
 }
 
+/// Threads are one level deep: a top-level comment carries its `replies`, and a
+/// reply's own `replies` is always empty. Everything past `createdAt` is
+/// optional so a build predating the threading deploy still decodes.
 struct CommentDTO: Decodable {
     var id: UUID
     var author: AuthorSummaryDTO
@@ -244,11 +258,28 @@ struct CommentDTO: Decodable {
     var liked: Bool
     var likeCount: Int
     var createdAt: String
+    var parentId: UUID?
+    var replyCount: Int?
+    var mentions: [MentionDTO]?
+    var replies: [CommentDTO]?
 }
 
 struct CreateCommentBody: Encodable {
     var text: String
+    /// The comment being answered; nil posts a new top-level comment. A reply to
+    /// a reply is re-pointed at their shared parent server-side.
+    var parentId: String?
     var actAsProfileId: String?
+}
+
+/// One row of the people picker behind the @-tag autocomplete.
+struct ProfileSearchResultDTO: Decodable {
+    var id: UUID
+    var name: String?
+    var handle: String?
+    var avatarUrl: String?
+    var business: Bool?
+    var verified: Bool?
 }
 
 // MARK: - Watch (long-form + shorts)
