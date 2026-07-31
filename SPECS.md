@@ -6,7 +6,17 @@ Conventions: money is integer **minor units** in a single platform currency (`PL
 
 ---
 
-## 1. Money flows (payments / GoJo Wallet)
+## 1. Money flows (payments / GoJo Wallet) — **BUILT 2026-07-31**
+
+Refinements the build made to this spec (§11.4: update SPECS when a build refines it):
+- **Card money always arrives as a wallet top-up**, never as a per-order card charge. The capture table below still holds — an order is charged at placement — but the charge is against the *wallet*, and the card only ever fills the wallet through a Stripe-hosted Checkout session. One payment path for every vertical to integrate, and no card data anywhere in this system.
+- **The courier's delivery fee and tip settle to `PLATFORM`** under their own ledger kinds (`COURIER_FEE`, `TIP`) until Phase 4 M1 creates couriers. Phase 4 changes a payee, not a model.
+- **A promotion is funded by the merchant**, free-delivery included — the discount always comes off the merchant's side of a settlement, so no campaign can reduce what the courier or the platform is paid.
+- **Merchant balances and payouts live on the vertical's `/mine` surface**, not on payments' own REST: only the module that owns a payee can prove the caller owns it, and payments→delivery would be a dependency cycle. Phase 3's drivers arrive the same way.
+- **Payouts debit first and transfer second, in two transactions.** A payout that paid out without debiting is unrecoverable; one that debited and failed is a FAILED row and a reversing entry.
+- **Refunds of a settled order are not built.** Cancelling before delivery releases the hold (the money never left the customer's own escrow); a post-delivery refund is the dispute flow in §5, which is Phase 4. `REFUND` exists as a ledger kind and `WalletApi.refund` is implemented — nothing calls them yet.
+- Buckets are as specified; `EXTERNAL` was added as a fifth owner kind and is the only account allowed a negative balance, since money arriving from outside has to come from somewhere for the entries to balance.
+
 
 One `payments` schema, double-entry: every movement is a `ledger_entry` (id, idempotency key, debit account, credit account, amount, kind, ref kind/id, created). Accounts are `(user_id | merchant_id | PLATFORM, bucket)` with buckets `AVAILABLE`, `STAKING`, `TOKENS`, `REWARDS`, `ESCROW`. Balances are materialized per account and must equal the entry sum (verified by a nightly job).
 
@@ -168,7 +178,11 @@ Required before social scale (and App Store UGC guideline 1.2: report + block + 
 
 ---
 
-## 14. Platform config registry
+## 14. Platform config registry — **BUILT 2026-07-31**
+
+Built as specified (`platform.config`, `ConfigApi`, 60s cache, effective-dated), with two notes: reads always take a **compiled-in default**, so an empty table behaves identically to a populated one and a typo in a value falls back rather than becoming a zero fee; and there is **no write endpoint yet** — values are seeded by migration until GoJoAdmin exists to edit them, the same posture the music catalog and partner review took.
+
+### Original spec
 
 All **CONFIG** knobs above live in one place: environment for infra-ish values, a `platform.config` table (key, value, effective_from) for product policy (fees, token policy, stake, TTLs, radii, windows) — readable by all modules via a tiny `ConfigApi`, cached **CONFIG** 60s, edited from the admin surface later. Effective-dating is what lets GoJoAdmin change token prices "without changing the driver experience" (vision).
 
@@ -179,6 +193,7 @@ All **CONFIG** knobs above live in one place: environment for infra-ish values, 
 | Item | Why deferred |
 |---|---|
 | Cash payments | Receivable/reconciliation complexity; no market requirement yet (§1) |
+| Refunding a *settled* order | Cancelling before delivery releases the hold, which covers the live case; a post-delivery refund needs the dispute flow (§5), Phase 4. `WalletApi.refund` exists and is uncalled. |
 | Errands / shopping assistance | Breaks server-side pricing invariant; needs quote-approve flow (§5) |
 | Team members / staff roles on a business | Single owner until GoJoAdmin needs roles (§8) |
 | GoJoAds | No seam beyond existing engagement events (ARCHITECTURE §10b) |
