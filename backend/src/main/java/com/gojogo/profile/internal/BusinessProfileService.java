@@ -1,5 +1,10 @@
 package com.gojogo.profile.internal;
 
+import com.gojogo.storefront.StorefrontApi;
+import com.gojogo.storefront.StorefrontBlock;
+import com.gojogo.storefront.StorefrontDocument;
+import com.gojogo.storefront.StorefrontReferenceCheck;
+import com.gojogo.storefront.StorefrontSurface;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,12 +30,14 @@ class BusinessProfileService {
     private final UserProfileRepository profiles;
     private final BusinessProfileRepository businesses;
     private final ProfileService profileService;
+    private final StorefrontApi storefronts;
 
     BusinessProfileService(UserProfileRepository profiles, BusinessProfileRepository businesses,
-                           ProfileService profileService) {
+                           ProfileService profileService, StorefrontApi storefronts) {
         this.profiles = profiles;
         this.businesses = businesses;
         this.profileService = profileService;
+        this.storefronts = storefronts;
     }
 
     @Transactional
@@ -137,6 +144,42 @@ class BusinessProfileService {
             business.setOpeningHours(request.openingHours());
         }
         return toResponse(profiles.save(profile), businesses.save(business));
+    }
+
+    // MARK: The home page (SPECS §9, same document contract as a storefront)
+
+    /**
+     * The blocks a business has arranged on its own profile.
+     *
+     * <p>Read through the owner's surface here; the <em>public</em> read is
+     * carried on the profile view {@code social} builds, because that is where a
+     * profile is rendered from and a business is a profile (2e M1). Two readers,
+     * one document — the alternative is the app fetching a page in two calls
+     * with a gap in the middle where the first one shows and the second hasn't
+     * arrived.
+     */
+    @Transactional(readOnly = true)
+    StorefrontDocument home(UUID ownerProfileId, UUID businessProfileId) {
+        requireOwned(ownerProfileId, businessProfileId);
+        return storefronts.documentFor(StorefrontSurface.BUSINESS_HOME, businessProfileId);
+    }
+
+    /**
+     * Rewrites the home page whole.
+     *
+     * <p>No reference check: {@code BUSINESS_HOME} takes no catalog blocks (a
+     * business profile has no catalog — the one it commerce-enables sells
+     * through its vertical's own storefront), and the post and video ids a
+     * {@code media_row} imports render through the ordinary public reads, which
+     * enforce their own visibility. There is nothing here a profile module could
+     * check that isn't already checked where it matters.
+     */
+    @Transactional
+    StorefrontDocument saveHome(UUID ownerProfileId, UUID businessProfileId,
+                                List<StorefrontBlock> blocks) {
+        requireOwned(ownerProfileId, businessProfileId);
+        return storefronts.save(StorefrontSurface.BUSINESS_HOME, businessProfileId, blocks,
+            StorefrontReferenceCheck.NONE);
     }
 
     private BusinessProfile requireOwned(UUID ownerProfileId, UUID businessProfileId) {

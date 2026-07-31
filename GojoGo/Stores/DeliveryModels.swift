@@ -36,6 +36,10 @@ struct MerchantDTO: Decodable {
     let longitude: Double
     /// Empty in browse results; filled by the detail endpoint.
     let menu: [MenuSectionDTO]
+    /// The owner's arrangement of the page above the menu (SPECS §9). Detail
+    /// only, like the menu, and optional-decoded like every field added after a
+    /// release — a backend that predates this milestone simply omits it.
+    let storefront: StorefrontDTO?
 }
 
 struct OrderMerchantDTO: Decodable {

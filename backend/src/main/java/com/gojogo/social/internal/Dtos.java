@@ -1,5 +1,6 @@
 package com.gojogo.social.internal;
 
+import com.gojogo.storefront.StorefrontDocument;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -138,12 +139,15 @@ record CloseFriendDto(UUID id, String name, String handle, String avatarUrl) {
  * @param isOwner  the viewer owns this business profile — what turns the
  *                 profile screen into the owner's own
  * @param business the business-only block; null for a person
+ * @param home     the blocks a business arranged on its own page (SPECS §9);
+ *                 always present, and empty (version 0) for a person and for a
+ *                 business that has never arranged one
  */
 record ProfileViewResponse(UUID id, String name, String handle, String avatarUrl, String bio,
                            String category, long postCount, long followerCount,
                            long followingCount, boolean isOwn, boolean following,
                            String kind, boolean verified, boolean isOwner,
-                           BusinessBlock business) {
+                           BusinessBlock business, StorefrontDocument home) {
 }
 
 record BusinessBlock(UUID ownerProfileId, String contactPhone, String contactEmail,

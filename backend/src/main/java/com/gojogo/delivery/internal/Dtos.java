@@ -1,5 +1,7 @@
 package com.gojogo.delivery.internal;
 
+import com.gojogo.storefront.StorefrontBlock;
+import com.gojogo.storefront.StorefrontDocument;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -19,11 +21,17 @@ record MenuItemDto(UUID id, String name, String detail, int priceCents,
 record MenuSectionDto(UUID id, String name, List<MenuItemDto> items) {
 }
 
-/** A restaurant. {@code menu} is empty in browse results and filled on detail. */
+/**
+ * A restaurant. {@code menu} is empty in browse results and filled on detail,
+ * and so is {@code storefront} — the owner's arrangement of the page above the
+ * menu (SPECS §9), which is always present and empty (version 0) for a
+ * restaurant nobody has arranged, so the app has one code path either way.
+ */
 record MerchantDto(UUID id, String name, String cuisine, double rating, int reviewCount,
                    int etaMinutes, int deliveryFeeCents, String imageUrl, String promo,
                    List<String> tags, List<String> categories,
-                   double latitude, double longitude, List<MenuSectionDto> menu) {
+                   double latitude, double longitude, List<MenuSectionDto> menu,
+                   StorefrontDocument storefront) {
 }
 
 // MARK: The owner's view of their own restaurant (MerchantManagementService)
@@ -75,6 +83,14 @@ record MenuItemRequest(@NotBlank @Size(max = 120) String name,
 }
 
 record SetOpenRequest(boolean open) {
+}
+
+/**
+ * A whole storefront, replacing whatever was there. A null or absent list is an
+ * empty page rather than an error — clearing a storefront should not require
+ * knowing a special verb.
+ */
+record SaveStorefrontRequest(@Size(max = 100) List<StorefrontBlock> blocks) {
 }
 
 record OrderMerchantDto(UUID id, String name, String imageUrl, double latitude, double longitude) {

@@ -191,6 +191,7 @@ final class DeliveryStore {
                                                          popular: item.popular)
                                     })
             },
+            storefront: StorefrontBlock.page(dto.storefront),
             latitude: dto.latitude,
             longitude: dto.longitude)
     }

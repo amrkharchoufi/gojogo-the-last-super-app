@@ -1,5 +1,6 @@
 package com.gojogo.delivery.internal;
 
+import com.gojogo.storefront.StorefrontDocument;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -29,11 +30,14 @@ import java.util.UUID;
 class MerchantManagementController {
 
     private final MerchantManagementService merchants;
+    private final MerchantStorefrontService storefronts;
     private final DeliveryCurrentProfile current;
 
     MerchantManagementController(MerchantManagementService merchants,
+                                 MerchantStorefrontService storefronts,
                                  DeliveryCurrentProfile current) {
         this.merchants = merchants;
+        this.storefronts = storefronts;
         this.current = current;
     }
 
@@ -53,6 +57,25 @@ class MerchantManagementController {
     MyMerchantDto setOpen(@AuthenticationPrincipal Jwt jwt,
                           @RequestBody SetOpenRequest request) {
         return merchants.setOpen(current.require(jwt).id(), request.open());
+    }
+
+    /**
+     * The page a customer sees above the menu (SPECS §9).
+     *
+     * <p>Written whole rather than block-by-block: a page is an ordered list,
+     * and a patch API over an ordered list invents a reordering protocol nobody
+     * asked for. Not called by iOS — this is GoJoAdmin's Studio contract,
+     * answering the owner's own JWT like everything else under {@code /mine}.
+     */
+    @GetMapping("/v1/delivery/merchants/mine/storefront")
+    StorefrontDocument storefront(@AuthenticationPrincipal Jwt jwt) {
+        return storefronts.mine(current.require(jwt).id());
+    }
+
+    @PutMapping("/v1/delivery/merchants/mine/storefront")
+    StorefrontDocument saveStorefront(@AuthenticationPrincipal Jwt jwt,
+                                      @Valid @RequestBody SaveStorefrontRequest request) {
+        return storefronts.save(current.require(jwt).id(), request.blocks());
     }
 
     @PostMapping("/v1/delivery/merchants/mine/sections")

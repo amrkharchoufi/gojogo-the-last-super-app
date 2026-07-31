@@ -2,6 +2,7 @@ package com.gojogo.delivery.internal;
 
 import com.gojogo.delivery.OrderPlaced;
 import com.gojogo.delivery.OrderStatusChanged;
+import com.gojogo.storefront.StorefrontDocument;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
@@ -42,12 +43,14 @@ class DeliveryService {
     private final ApplicationEventPublisher events;
     private final OrderPayments payments;
     private final PromotionService promotions;
+    private final MerchantStorefrontService storefronts;
     private final int serviceFeeCents;
 
     DeliveryService(MerchantRepository merchants, MenuItemRepository menuItems,
                     OrderRepository orders, AddressRepository addresses,
                     DeliveryTimeline timeline, ApplicationEventPublisher events,
                     OrderPayments payments, PromotionService promotions,
+                    MerchantStorefrontService storefronts,
                     @Value("${gojogo.delivery.service-fee-cents:99}") int serviceFeeCents) {
         this.merchants = merchants;
         this.menuItems = menuItems;
@@ -57,6 +60,7 @@ class DeliveryService {
         this.events = events;
         this.payments = payments;
         this.promotions = promotions;
+        this.storefronts = storefronts;
         this.serviceFeeCents = serviceFeeCents;
     }
 
@@ -145,7 +149,7 @@ class DeliveryService {
         // query per row — fine for a catalog of this size, and the alternative
         // (fetch join + Pageable) paginates in memory.
         return merchants.browse(cat, q, PageRequest.of(0, Math.clamp(limit, 1, 50))).stream()
-            .map(m -> toMerchantDto(m, false))
+            .map(m -> toMerchantDto(m, false, StorefrontDocument.empty()))
             .toList();
     }
 
@@ -159,7 +163,9 @@ class DeliveryService {
     MerchantDto merchant(UUID merchantId) {
         Merchant merchant = merchants.findById(merchantId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such restaurant"));
-        return toMerchantDto(merchant, true);
+        // Detail only, like the menu: a browse row shows a card, and shipping
+        // every restaurant's whole page to draw one would be a query per row.
+        return toMerchantDto(merchant, true, storefronts.of(merchantId));
     }
 
     // MARK: Orders
@@ -500,7 +506,8 @@ class DeliveryService {
         return merchants.findById(merchantId).map(Merchant::getName).orElse("Restaurant");
     }
 
-    private static MerchantDto toMerchantDto(Merchant merchant, boolean withMenu) {
+    private static MerchantDto toMerchantDto(Merchant merchant, boolean withMenu,
+                                             StorefrontDocument storefront) {
         List<MenuSectionDto> menu = withMenu
             ? merchant.getMenu().stream()
                 .sorted(Comparator.comparingInt(MenuSection::getSortOrder))
@@ -526,6 +533,7 @@ class DeliveryService {
             List.copyOf(merchant.getCategories()),
             merchant.getLatitude(),
             merchant.getLongitude(),
-            menu);
+            menu,
+            storefront);
     }
 }

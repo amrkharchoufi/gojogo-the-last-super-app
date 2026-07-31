@@ -4,6 +4,9 @@ import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
 import com.gojogo.profile.ProfileKind;
 import com.gojogo.social.UserFollowed;
+import com.gojogo.storefront.StorefrontApi;
+import com.gojogo.storefront.StorefrontDocument;
+import com.gojogo.storefront.StorefrontSurface;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -19,13 +22,15 @@ class FollowService {
     private final FollowRepository follows;
     private final PostRepository posts;
     private final ProfileApi profiles;
+    private final StorefrontApi storefronts;
     private final ApplicationEventPublisher events;
 
     FollowService(FollowRepository follows, PostRepository posts, ProfileApi profiles,
-                  ApplicationEventPublisher events) {
+                  StorefrontApi storefronts, ApplicationEventPublisher events) {
         this.follows = follows;
         this.posts = posts;
         this.profiles = profiles;
+        this.storefronts = storefronts;
         this.events = events;
     }
 
@@ -66,6 +71,14 @@ class FollowService {
                 b.contactPhone(), b.contactEmail(), b.websiteUrl(), b.addressLine(),
                 b.city(), b.country(), b.latitude(), b.longitude(), b.openingHours())).orElse(null)
             : null;
+        // The home page a business arranged for itself (SPECS §9). Read here
+        // because this is where a profile is rendered from and a business is a
+        // profile — but only for a business: a person has no home document, and
+        // asking for one on every profile view would be a query per read to
+        // learn nothing.
+        StorefrontDocument home = business == null
+            ? StorefrontDocument.empty()
+            : storefronts.documentFor(StorefrontSurface.BUSINESS_HOME, profileId);
         return new ProfileViewResponse(
             profile.id(),
             name,
@@ -81,7 +94,8 @@ class FollowService {
             profile.kind().name(),
             profile.verified(),
             business != null && me.equals(business.ownerProfileId()),
-            business);
+            business,
+            home);
     }
 
     private ProfileDto requireProfile(UUID profileId) {

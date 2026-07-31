@@ -335,6 +335,10 @@ final class AppState: ObservableObject {
     /// never an amount: what it is worth is the server's answer.
     @Published var deliveryPromotionCode: String = ""
     @Published var deliveryTipCents: Int = 0
+    /// A restaurant's live promotions, keyed by merchant, loaded only when its
+    /// storefront shows a `promo_banner` (Phase 2e M4) — the block names a
+    /// promotion by id, and the offer itself always comes from the server.
+    @Published var deliveryPromotions: [UUID: [DeliveryPromotionDTO]] = [:]
 
     // GoJo Wallet (Phase 2e M3). One balance for the whole superapp — delivery
     // spends from it today, Phase 3's stake and ride tokens land in it next.

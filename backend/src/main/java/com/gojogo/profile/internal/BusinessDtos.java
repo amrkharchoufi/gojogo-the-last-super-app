@@ -1,8 +1,10 @@
 package com.gojogo.profile.internal;
 
+import com.gojogo.storefront.StorefrontBlock;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -16,6 +18,14 @@ record BusinessProfileResponse(UUID id, String handle, String displayName, Strin
                                String contactPhone, String contactEmail, String websiteUrl,
                                String addressLine, String city, String country,
                                Double latitude, Double longitude, String openingHours) {
+}
+
+/**
+ * A whole home page, replacing whatever was there. Null or absent blocks clear
+ * it — see the merchant storefront's twin, and for the same reason: a page is an
+ * ordered list, so it is written whole.
+ */
+record SaveHomeRequest(@Size(max = 100) List<StorefrontBlock> blocks) {
 }
 
 /** Only the name is required — a brand can exist before its details do. */

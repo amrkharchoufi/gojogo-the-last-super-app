@@ -1,6 +1,7 @@
 package com.gojogo.profile.internal;
 
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.storefront.StorefrontDocument;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -9,6 +10,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -55,6 +57,26 @@ class BusinessProfileController {
                                    @PathVariable UUID businessProfileId,
                                    @Valid @RequestBody UpdateBusinessRequest request) {
         return businesses.update(me(jwt).id(), businessProfileId, request);
+    }
+
+    /**
+     * The business's home page — the same block document a merchant storefront
+     * is (SPECS §9), on the surface that takes no catalog blocks.
+     *
+     * <p>Owner-scoped, and not called by iOS: this is GoJoAdmin's Studio
+     * contract. The public read rides on the profile view.
+     */
+    @GetMapping("/v1/profiles/businesses/{businessProfileId}/home")
+    StorefrontDocument home(@AuthenticationPrincipal Jwt jwt,
+                            @PathVariable UUID businessProfileId) {
+        return businesses.home(me(jwt).id(), businessProfileId);
+    }
+
+    @PutMapping("/v1/profiles/businesses/{businessProfileId}/home")
+    StorefrontDocument saveHome(@AuthenticationPrincipal Jwt jwt,
+                                @PathVariable UUID businessProfileId,
+                                @Valid @RequestBody SaveHomeRequest request) {
+        return businesses.saveHome(me(jwt).id(), businessProfileId, request.blocks());
     }
 
     private ProfileDto me(Jwt jwt) {

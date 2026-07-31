@@ -1276,6 +1276,10 @@ struct DeliveryRestaurant: Identifiable {
     var promo: String?
     var categories: [String]
     var menu: [DeliveryMenuSection]
+    /// The page the owner arranged above the menu (SPECS §9). Empty for every
+    /// restaurant nobody has arranged one for, which renders exactly the screen
+    /// this app rendered before storefronts existed.
+    var storefront: [StorefrontBlock]
     var latitude: Double
     var longitude: Double
 
@@ -1283,13 +1287,14 @@ struct DeliveryRestaurant: Identifiable {
          reviews: String, etaMinutes: Int, feeLabel: String, feeCents: Int = 149,
          imageURL: String? = nil,
          tags: [String] = [], promo: String? = nil, categories: [String] = [],
-         menu: [DeliveryMenuSection] = [],
+         menu: [DeliveryMenuSection] = [], storefront: [StorefrontBlock] = [],
          latitude: Double = 33.5731, longitude: Double = -7.5898) {
         self.id = id; self.name = name; self.cuisine = cuisine
         self.rating = rating; self.reviews = reviews; self.etaMinutes = etaMinutes
         self.feeLabel = feeLabel; self.feeCents = feeCents
         self.imageURL = imageURL; self.tags = tags
         self.promo = promo; self.categories = categories; self.menu = menu
+        self.storefront = storefront
         self.latitude = latitude; self.longitude = longitude
     }
 }

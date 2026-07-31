@@ -138,7 +138,17 @@ Refinements the build made to this spec (§11.4: update SPECS when a build refin
 
 ---
 
-## 9. Storefront JSON contract (2e M4)
+## 9. Storefront JSON contract (2e M4) — **BUILT 2026-07-31**
+
+Built as specified, with five refinements worth recording (§11.4):
+
+- **The document lives in its own platform module** (`storefront` schema, one table keyed by `(surface, owner_id)`), not on the vertical's own table. `economy` and `services` get storefronts on this same contract, and three verticals each holding their own JSON is three renderers that disagree by the second release. The vertical still owns authorisation and references.
+- **The block set is closed per surface, not globally.** `MERCHANT_STOREFRONT` takes all seven; `BUSINESS_HOME` takes `hero` / `media_row` / `text` / `info` only — a catalog block on a page with no catalog is a block whose ids nobody can resolve.
+- **Validation is split, and the split is in the signature.** The module validates shape (type, surface, required properties, lengths, caps, ref kinds, and no property a type has no meaning for); the vertical validates that the ids are its own, passed in as a `StorefrontReferenceCheck` so no save can skip it. A bad id refuses the document whole and names the id.
+- **POST/VIDEO refs are deliberately unvalidated.** `delivery` has no dependency on `social` or `watch`, and imported content renders through reads that enforce their own visibility, so the worst a borrowed id achieves is showing something already public.
+- **Reads never fail.** A document that won't parse comes back empty and logs — the decorative half of a commerce page must not be able to take the functional half down. Public reads are embedded (merchant detail; the profile view `social` builds), and are always present so a client has one code path. iOS renders everything except `media_row`, which it skips like an unknown type.
+
+### Original spec
 
 One document per merchant (later per business), versioned: `{version, blocks: [...]}` where each block is `{type, id, ...props}` from a **closed set**: `hero` (media, headline, cta → item/section), `featured_items` (item ids), `collection` (title, item ids), `promo_banner` (promotion id), `media_row` (post/video ids — Studio's "import existing content"), `text` (about/policies), `info` (hours/delivery/pickup — rendered from live merchant data, not duplicated). Server validates types + referenced ids on write (400 on unknown type — forward-compat by version bump, the app's optional-decode discipline). Owner-scoped write `/mine/storefront`; public read embedded in the merchant/business payload. iOS renders read-only; unknown block types are skipped silently.
 

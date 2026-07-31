@@ -37,6 +37,12 @@ interface MenuSectionRepository extends JpaRepository<MenuSection, UUID> {
 
     List<MenuSection> findByMerchantIdOrderBySortOrderAsc(UUID merchantId);
 
+    /** Which of these sections are this restaurant's — the storefront write
+     *  refuses a block pointing anywhere else, and needs to name the id. */
+    @Query("select s.id from MenuSection s where s.merchantId = :merchantId and s.id in :ids")
+    List<UUID> idsForMerchant(@Param("merchantId") UUID merchantId,
+                              @Param("ids") Collection<UUID> ids);
+
     @Query("select coalesce(max(s.sortOrder), -1) from MenuSection s where s.merchantId = :merchantId")
     int maxSortOrder(@Param("merchantId") UUID merchantId);
 }
@@ -82,6 +88,12 @@ interface AddressRepository extends JpaRepository<Address, UUID> {
 interface PromotionRepository extends JpaRepository<Promotion, UUID> {
 
     List<Promotion> findByMerchantIdOrderByCreatedAtDesc(UUID merchantId);
+
+    /** Which of these promotions are this restaurant's — see
+     *  {@link MenuSectionRepository#idsForMerchant}. */
+    @Query("select p.id from Promotion p where p.merchantId = :merchantId and p.id in :ids")
+    List<UUID> idsForMerchant(@Param("merchantId") UUID merchantId,
+                              @Param("ids") Collection<UUID> ids);
 
     List<Promotion> findByMerchantIdAndActiveTrue(UUID merchantId);
 

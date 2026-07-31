@@ -463,15 +463,22 @@ private struct DeliveryRestaurantView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    hero
-                    info
-                    menu
-                    Color.clear.frame(height: tabBarInset + (app.deliveryCart.isEmpty ? 12 : 70))
+            // The reader is here for one reason: a storefront hero can carry a
+            // button that points at a dish or a section, and a button that
+            // scrolls to what it names is the difference between a page the
+            // owner arranged and a decorative header.
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        hero
+                        info
+                        storefront(proxy)
+                        menu
+                        Color.clear.frame(height: tabBarInset + (app.deliveryCart.isEmpty ? 12 : 70))
+                    }
                 }
+                .refreshable { await app.reloadDeliveryMenu(restaurant.id) }
             }
-            .refreshable { await app.reloadDeliveryMenu(restaurant.id) }
 
             if !app.deliveryCart.isEmpty {
                 DeliveryCartBar()
@@ -558,6 +565,10 @@ private struct DeliveryRestaurantView: View {
                     VStack(spacing: 0) {
                         ForEach(Array(section.items.enumerated()), id: \.element.id) { i, item in
                             menuRow(item)
+                                // Scroll targets for a storefront button. Ids
+                                // are the server's, which is what lets a block
+                                // authored in a console point into this list.
+                                .id(item.id)
                             if i < section.items.count - 1 {
                                 Divider().background(GGColor.ink(0.07))
                                     .padding(.leading, 16)
@@ -567,6 +578,7 @@ private struct DeliveryRestaurantView: View {
                     .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
                     .padding(.horizontal, 16)
                 }
+                .id(section.id)
             }
         }
     }
@@ -633,6 +645,256 @@ private struct DeliveryRestaurantView: View {
             }
         }
         .padding(14)
+    }
+
+    // MARK: Storefront (Phase 2e · Milestone 4)
+    //
+    // The page the owner arranged, rendered read-only above the menu. There is
+    // no editor here and there won't be one: this is GoJoAdmin's Studio
+    // contract, and iOS's whole job is to draw what it wrote — skipping, in
+    // silence, any block it doesn't recognise.
+
+    @ViewBuilder
+    private func storefront(_ proxy: ScrollViewProxy) -> some View {
+        if !restaurant.storefront.isEmpty {
+            VStack(alignment: .leading, spacing: 18) {
+                ForEach(restaurant.storefront) { block in
+                    switch block {
+                    case .hero(let hero):   storefrontHero(hero, proxy)
+                    case .rail(let rail):   storefrontRail(rail)
+                    case .promo(let promo): storefrontPromo(promo)
+                    case .text(let text):   storefrontText(text)
+                    case .info:             storefrontInfo()
+                    }
+                }
+            }
+        }
+    }
+
+    private func storefrontHero(_ hero: StorefrontHero, _ proxy: ScrollViewProxy) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            if let url = hero.mediaURL {
+                MediaImage(url: url, cornerRadius: 18)
+                    .frame(height: 180)
+                    .overlay(
+                        LinearGradient(colors: [.clear, Color.black.opacity(0.65)],
+                                       startPoint: .center, endPoint: .bottom)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(GGColor.ink(0.08))
+                    .frame(height: 140)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(hero.headline)
+                    .font(.system(size: 21, weight: .bold))
+                    .foregroundStyle(GGColor.textPrimary)
+                if let subheadline = hero.subheadline {
+                    Text(subheadline)
+                        .font(.system(size: 13))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .lineLimit(2)
+                }
+                // Both or neither — the server refuses a labelled button with
+                // nowhere to go, so one check covers the pair.
+                if let label = hero.ctaLabel, let target = hero.ctaTarget {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        withAnimation(.ggNav) { proxy.scrollTo(target.id, anchor: .top) }
+                    } label: {
+                        Text(label)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(GGColor.onAccent)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(GGColor.white))
+                    }
+                    .buttonStyle(PressableStyle())
+                    .padding(.top, 2)
+                }
+            }
+            .padding(16)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    /// A rail of dishes. Ids are resolved against the menu this screen already
+    /// has, so a featured dish that sold out is simply absent — the card can
+    /// never offer something checkout would refuse.
+    @ViewBuilder
+    private func storefrontRail(_ rail: StorefrontRail) -> some View {
+        let items = rail.itemIds.compactMap(menuItem)
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                if let title = rail.title {
+                    Text(title)
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(GGColor.textPrimary)
+                        .padding(.horizontal, 20)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(items) { item in
+                            railCard(item, emphasised: rail.featured)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+        }
+    }
+
+    private func railCard(_ item: DeliveryMenuItem, emphasised: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomTrailing) {
+                MediaImage(url: item.imageURL, cornerRadius: 0)
+                    .frame(width: 152, height: 104)
+                    .clipped()
+
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    app.addDeliveryItem(item, from: restaurant)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(GGColor.white))
+                        .shadow(color: .black.opacity(0.35), radius: 5, y: 2)
+                }
+                .buttonStyle(PressableStyle())
+                .padding(8)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .lineLimit(1)
+                Text(String(format: "$%.2f", item.price))
+                    .font(.ggMono(12, .semibold))
+                    .foregroundStyle(GGColor.textSecondary)
+            }
+            .frame(width: 152, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+        }
+        .frame(width: 152)
+        // Clip before the glass background, or the photo's square top corners
+        // sit proud of the card's rounded ones.
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glass(cornerRadius: 16, fillOpacity: emphasised ? 0.09 : 0.05, borderOpacity: 0.08)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            app.addDeliveryItem(item, from: restaurant)
+        }
+    }
+
+    /// The block names a promotion by id and nothing else, so what is drawn is
+    /// always the live offer — a banner cannot say 20% while the discount says
+    /// 10%. A promotion that has ended renders nothing at all.
+    @ViewBuilder
+    private func storefrontPromo(_ promo: StorefrontPromo) -> some View {
+        if let deal = app.deliveryPromotion(promo.promotionId, at: restaurant.id) {
+            HStack(spacing: 12) {
+                Image(systemName: "tag.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(GGColor.ink(0.08)))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(deal.label)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    if !deal.code.isEmpty {
+                        Text(deal.code)
+                            .font(.ggMono(11, .semibold))
+                            .foregroundStyle(GGColor.textSecondary)
+                    }
+                }
+                Spacer(minLength: 8)
+
+                if !deal.code.isEmpty {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        app.applyDeliveryPromotionCode(deal.code)
+                        app.showDeliveryNotice("\(deal.code) applied to your order.")
+                    } label: {
+                        Text(app.deliveryPromotionCode == deal.code ? "Applied" : "Use")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(GGColor.onAccent)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(GGColor.white))
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(app.deliveryPromotionCode == deal.code)
+                }
+            }
+            .padding(14)
+            .glass(cornerRadius: 16, fillOpacity: 0.06, borderOpacity: 0.08)
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func storefrontText(_ text: StorefrontText) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let title = text.title {
+                Text(title)
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(GGColor.textPrimary)
+            }
+            Text(text.body)
+                .font(.system(size: 13))
+                .foregroundStyle(GGColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.08)
+        .padding(.horizontal, 16)
+    }
+
+    /// Everything here is read live off the restaurant. An info block that
+    /// carried its own copy of the delivery fee would be wrong the day the owner
+    /// changed it, which is why the server refuses one that tries.
+    private func storefrontInfo() -> some View {
+        HStack(spacing: 0) {
+            infoTile("clock", "\(restaurant.etaMinutes) min", "Delivery")
+            Divider().frame(height: 30).background(GGColor.ink(0.07))
+            infoTile("bag", restaurant.feeLabel == "Free" ? "Free" : restaurant.feeLabel, "Fee")
+            Divider().frame(height: 30).background(GGColor.ink(0.07))
+            infoTile("star.fill", String(format: "%.1f", restaurant.rating), "\(restaurant.reviews) reviews")
+        }
+        .padding(.vertical, 12)
+        .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.08)
+        .padding(.horizontal, 16)
+    }
+
+    private func infoTile(_ icon: String, _ value: String, _ caption: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(GGColor.textSecondary)
+            Text(value)
+                .font(.ggMono(13, .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+            Text(caption)
+                .font(.system(size: 10))
+                .foregroundStyle(GGColor.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func menuItem(_ id: UUID) -> DeliveryMenuItem? {
+        for section in restaurant.menu {
+            if let item = section.items.first(where: { $0.id == id }) { return item }
+        }
+        return nil
     }
 
     private func stepperButton(_ icon: String, action: @escaping () -> Void) -> some View {

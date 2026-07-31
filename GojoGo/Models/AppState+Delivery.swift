@@ -177,9 +177,11 @@ extension AppState {
                 let full = try await DeliveryStore.shared.merchant(merchantID)
                 if let index = deliveryRestaurants.firstIndex(where: { $0.id == merchantID }) {
                     deliveryRestaurants[index].menu = full.menu
+                    deliveryRestaurants[index].storefront = full.storefront
                 } else {
                     deliveryRestaurants.append(full)
                 }
+                await loadDeliveryPromotionsIfNeeded(merchantID, page: full.storefront)
             } catch {
                 #if DEBUG
                 print("Delivery menu load failed: \(error.localizedDescription)")
@@ -196,17 +198,42 @@ extension AppState {
         do {
             let full = try await DeliveryStore.shared.merchant(merchantID)
             if let index = deliveryRestaurants.firstIndex(where: { $0.id == merchantID }) {
-                // Menu only: the browse record carries fields the detail fetch
-                // doesn't, and replacing it wholesale would drop them.
+                // Menu and storefront only: the browse record carries fields the
+                // detail fetch doesn't, and replacing it wholesale would drop them.
                 deliveryRestaurants[index].menu = full.menu
+                deliveryRestaurants[index].storefront = full.storefront
             } else {
                 deliveryRestaurants.append(full)
             }
+            await loadDeliveryPromotionsIfNeeded(merchantID, page: full.storefront)
         } catch {
             #if DEBUG
             print("Delivery menu reload failed: \(error.localizedDescription)")
             #endif
         }
+    }
+
+    /// Loads this restaurant's live promotions, but only when its page shows
+    /// one. A `promo_banner` names a promotion by id and nothing else — the
+    /// discount itself is the server's, and copying its wording into the block
+    /// would have let the banner and the actual deal drift apart.
+    func loadDeliveryPromotionsIfNeeded(_ merchantID: UUID, page: [StorefrontBlock]) async {
+        let wanted = page.contains { if case .promo = $0 { return true } else { return false } }
+        guard wanted, backendConnected else { return }
+        do {
+            deliveryPromotions[merchantID] = try await DeliveryStore.shared.promotions(merchantID)
+        } catch {
+            // A banner with nothing behind it simply doesn't render — the rest
+            // of the page is unaffected, so this is not worth a notice.
+            #if DEBUG
+            print("Delivery promotions load failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// The promotion a `promo_banner` names, if it is still live.
+    func deliveryPromotion(_ promotionID: UUID, at merchantID: UUID) -> DeliveryPromotionDTO? {
+        deliveryPromotions[merchantID]?.first { $0.id == promotionID && $0.active }
     }
 
     // MARK: Order history
