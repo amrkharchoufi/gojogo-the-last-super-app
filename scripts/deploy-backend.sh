@@ -5,6 +5,7 @@
 #   ./scripts/deploy-backend.sh              # deploy HEAD
 #   ./scripts/deploy-backend.sh --list       # what's deployed, and what you can go back to
 #   ./scripts/deploy-backend.sh --rollback   # back to the previous revision
+#   ./scripts/deploy-backend.sh --infra      # deploy the CDK stack, not the code
 #
 # Preflight → tests → build + push → new task definition → roll out → health check.
 #
@@ -26,9 +27,10 @@
 #     stalled rollout, which is why this waits for stability *and* health rather
 #     than exiting when the API call returns.
 #
-# CAUTION: `cdk deploy GojoGoFargateStack` resets the service to the task
-# definition CDK owns. After an infra deploy, pass the running tag through:
-#   cdk deploy GojoGoFargateStack -c imageTag=$(./scripts/deploy-backend.sh --current)
+# CAUTION: a bare `cdk deploy GojoGoFargateStack` resets the service to the task
+# definition CDK owns — dropping to image `latest`, and dropping every secret
+# whose `-c ...SecretArn` flag you didn't retype. Use `--infra`, which keeps that
+# list in one reviewable place and refuses to ship a revision that lost one.
 #
 set -euo pipefail
 
@@ -40,6 +42,30 @@ ECR_REPO="${ECR_REPO:-${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gojogo-
 ECS_CLUSTER="${ECS_CLUSTER:-gojogo}"
 ECS_SERVICE="${ECS_SERVICE:-gojogo-backend}"
 HEALTH_URL="${HEALTH_URL:-https://api.gojogo.app/actuator/health}"
+
+# --- CDK context for --infra --------------------------------------------------
+# Every flag `cdk deploy GojoGoFargateStack` reads, in one place. None of these
+# are secrets — they are ARNs and hostnames, identifiers for things whose values
+# live in Secrets Manager.
+#
+# They are here because CDK context is not sticky. A flag you forget is not
+# "leave it as it was", it is "absent", and the stack renders absent as *module
+# not configured*: the task definition comes back without that module's secrets
+# and the module falls back or switches off. Forgetting sumsubSecretArn once
+# shipped a revision with Sumsub KYC silently disabled (2026-07-30). A list in a
+# file can be reviewed; a list in your shell history cannot.
+#
+# Adding a module that needs a secret? Add its ARN here *and* to CDK_SECRET_ARGS
+# below, and --infra will carry it forever after.
+CDK_STACK="${CDK_STACK:-GojoGoFargateStack}"
+CDK_DOMAIN_NAME="${CDK_DOMAIN_NAME:-api.gojogo.app}"
+CDK_CERTIFICATE_ARN="${CDK_CERTIFICATE_ARN:-arn:aws:acm:us-east-1:578109959809:certificate/97477813-a50e-4c57-9634-781ae06cd5a9}"
+# `-` not `:-` for the two secret ARNs, unlike everything else here: an
+# explicitly empty value has to survive, because "deploy this module
+# unconfigured" is a real thing to want in a fresh environment. `:-` would
+# helpfully substitute the default back in and make that impossible to express.
+SUMSUB_SECRET_ARN="${SUMSUB_SECRET_ARN-arn:aws:secretsmanager:us-east-1:578109959809:secret:gojogo/sumsub-gHmmld}"
+STRIPE_SECRET_ARN="${STRIPE_SECRET_ARN-arn:aws:secretsmanager:us-east-1:578109959809:secret:gojogo/stripe-4I84ec}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="$REPO_ROOT/backend"
@@ -69,7 +95,7 @@ die()  { printf '\n%s  ✗ %s%s\n\n' "$RED" "$*" "$RESET" >&2; exit 1; }
 aws_() { aws --region "$AWS_REGION" "$@"; }
 
 usage() {
-  sed -n '3,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   cat <<'EOF'
 
 Modes:
@@ -80,6 +106,11 @@ Modes:
                     REV is omitted. No rebuild: it redeploys an image that
                     already exists, so it's fast and cannot fail to compile.
   --current         Print the image tag currently deployed, and exit.
+  --infra           Deploy the CDK stack, not the code. Carries every context
+                    flag the stack reads (see the config block at the top of
+                    this file), re-pins the running image instead of letting it
+                    default to `latest`, and fails loudly if the new task
+                    definition lost a secret the old one had.
 
 Options:
   --skip-tests   Push without running `mvn test`. For redeploying code that
@@ -104,6 +135,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)     DRY_RUN=1 ;;
     --list)        MODE=list ;;
     --current)     MODE=current ;;
+    --infra)       MODE=infra ;;
     --rollback)
       MODE=rollback
       if [[ "${2:-}" =~ ^[0-9]+$ ]]; then ROLLBACK_TARGET="$2"; shift; fi
@@ -120,6 +152,22 @@ done
 taskdef_image() {
   aws_ ecs describe-task-definition --task-definition "$1" \
     --query 'taskDefinition.containerDefinitions[0].image' --output text
+}
+
+# Sorted, one per line — so two revisions can be diffed with comm(1). Used by
+# --infra to prove a stack deploy didn't drop a module's credentials.
+taskdef_secret_names() {
+  aws_ ecs describe-task-definition --task-definition "$1" \
+    --query 'taskDefinition.containerDefinitions[0].secrets[].name' --output text \
+    | tr '\t' '\n' | sort
+}
+
+# True if this exact tag exists in ECR. `batch-get-image` prints "None" for a
+# miss rather than failing, hence the grep.
+ecr_has_tag() {
+  aws_ ecr batch-get-image --repository-name "${ECR_REPO##*/}" \
+        --image-ids "imageTag=$1" --query 'images[0]' --output text 2>/dev/null \
+    | grep -qv '^None$'
 }
 
 live_taskdef_arn() {
@@ -266,6 +314,105 @@ if [[ "$MODE" == "list" ]]; then
       "$(basename "$arn" | sed 's/.*://')" "$(taskdef_image "$arn")" "$marker"
   done
   printf '\n'
+  exit 0
+fi
+
+# ------------------------------------------------------------------------- infra
+# Deploy the CDK stack — infrastructure, not code. No build, no tests, no push:
+# this changes the shape of the task definition (secrets, env, roles, sizing),
+# and then re-pins the image that was already running.
+if [[ "$MODE" == "infra" ]]; then
+  step "Infra — cdk deploy $CDK_STACK"
+
+  command -v npx >/dev/null 2>&1 || die "\`npx\` not found on PATH (needed for cdk)."
+  [[ -f "$REPO_ROOT/infra/cdk.json" ]] || die "No infra/cdk.json under $REPO_ROOT."
+
+  # CloudFormation rejects a second update with a message that reads like a
+  # permissions error. Name the real cause before cdk gets that far.
+  stack_status="$(aws_ cloudformation describe-stacks --stack-name "$CDK_STACK" \
+                    --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo ABSENT)"
+  case "$stack_status" in
+    ABSENT) die "Stack $CDK_STACK doesn't exist in $AWS_REGION." ;;
+    *_IN_PROGRESS)
+      die "$CDK_STACK is $stack_status — an update is already running.
+
+    A stack deploy that can't pull its image retries for up to 3 hours before
+    CloudFormation gives up (there's no deployment circuit breaker). You almost
+    certainly want to cancel rather than wait:
+
+      aws cloudformation describe-stacks --stack-name $CDK_STACK \\
+        --region $AWS_REGION --query 'Stacks[0].StackStatus' --output text
+      aws cloudformation cancel-update-stack --stack-name $CDK_STACK --region $AWS_REGION" ;;
+  esac
+  ok "Stack — $stack_status"
+
+  # CDK owns the entire task definition, so a deploy that doesn't say which image
+  # to run falls back to the stack's default, `latest` — a tag this script
+  # deliberately never pushes and which may not exist at all. Carry the running
+  # image across instead: an infra change should not also be a code change.
+  live_arn="$(live_taskdef_arn)"
+  live_image="$(taskdef_image "$live_arn")"
+  infra_tag="${INFRA_IMAGE_TAG:-${live_image##*:}}"
+  before_secrets="$(taskdef_secret_names "$live_arn")"
+
+  [[ "$infra_tag" != "latest" ]] || die "The live task definition runs \`:latest\`.
+    That means an earlier stack deploy already reset it, and there is no commit
+    tag to carry across. Pin one explicitly — see --list for what exists:
+      INFRA_IMAGE_TAG=<sha> $0 --infra"
+
+  ecr_has_tag "$infra_tag" || die "Image tag \`$infra_tag\` is not in ECR.
+    Deploying it would leave the service unable to pull, retrying for hours
+    while the old task keeps serving. See --list, then:
+      INFRA_IMAGE_TAG=<sha> $0 --infra"
+  ok "Image — pinning $infra_tag (currently live)"
+
+  cdk_args=(
+    deploy "$CDK_STACK"
+    -c "domainName=$CDK_DOMAIN_NAME"
+    -c "certificateArn=$CDK_CERTIFICATE_ARN"
+    -c "imageTag=$infra_tag"
+  )
+
+  # Empty is legal — an environment genuinely without Sumsub credentials should
+  # still deploy — but it is never what you meant on a laptop, so it's loud.
+  for pair in "sumsubSecretArn=$SUMSUB_SECRET_ARN" "stripeSecretArn=$STRIPE_SECRET_ARN"; do
+    if [[ -n "${pair#*=}" ]]; then
+      cdk_args+=( -c "$pair" )
+      info "context  ${pair%%=*}"
+    else
+      warn "${pair%%=*} is empty — that module will deploy UNCONFIGURED."
+    fi
+  done
+
+  if (( DRY_RUN )); then
+    note "[dry-run] (cd infra && npx cdk ${cdk_args[*]})"
+    printf '\n%s  dry run — nothing was changed.%s\n\n' "$DIM" "$RESET"
+    exit 0
+  fi
+
+  step "cdk deploy"
+  ( cd "$REPO_ROOT/infra" && npx cdk "${cdk_args[@]}" ) \
+    || die "cdk deploy failed. The previous task definition is still serving."
+
+  # The whole point of the mode: prove the new revision didn't lose anything.
+  # A dropped secret doesn't fail the deploy — the module just comes up
+  # unconfigured, which is invisible until someone tries to use it.
+  step "Secrets carried over"
+  after_arn="$(live_taskdef_arn)"
+  after_secrets="$(taskdef_secret_names "$after_arn")"
+  lost="$(comm -23 <(printf '%s\n' "$before_secrets") <(printf '%s\n' "$after_secrets"))"
+  if [[ -n "$lost" ]]; then
+    printf '%s\n' "$lost" | sed 's/^/      /' >&2
+    die "The new revision DROPPED the secrets above.
+    Whichever module owns them is now unconfigured in prod. Add the missing ARN
+    to the config block at the top of this script and re-run --infra, or go back:
+      $0 --rollback"
+  fi
+  ok "all $(printf '%s\n' "$after_secrets" | grep -c .) secrets present"
+
+  wait_and_verify
+  printf '\n%s  Infra deployed. Image %s, task definition %s.%s\n\n' \
+    "$GREEN" "$infra_tag" "$(basename "$after_arn")" "$RESET"
   exit 0
 fi
 

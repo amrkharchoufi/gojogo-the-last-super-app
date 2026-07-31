@@ -8,9 +8,12 @@ import java.util.UUID;
  * {@code CONFIRMED}, {@code PREPARING}, {@code COURIER_TO_RESTAURANT},
  * {@code DELIVERING}, {@code DELIVERED}, {@code CANCELLED}.
  *
- * <p>No consumer yet; this is the hook an APNs "your food is on the way" push
- * hangs off (the {@code notifications} module already consumes
- * {@code messaging.MessageSent} the same way).
+ * <p>Consumed since 2e M3 by {@code notifications}, which turns the three
+ * transitions a customer actually wants — the kitchen started, the food is
+ * moving, it arrived — plus a cancellation into an APNs push. Settlement is
+ * <em>not</em> driven off this event: money is moved inside the same
+ * transaction that writes the status, because a push that goes missing is an
+ * annoyance and a payment that goes missing is not.
  */
 public record OrderStatusChanged(UUID orderId, UUID userId, String merchantName,
                                  String status, int etaMinutes) {

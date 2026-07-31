@@ -98,6 +98,30 @@ gojogo:
       webhook-secret: ${SUMSUB_WEBHOOK_SECRET:}
       level-name: ${SUMSUB_LEVEL_NAME:id-and-liveness}
       token-ttl-seconds: ${SUMSUB_TOKEN_TTL_SECONDS:600}
+  # Payments (Stripe). All empty → the GoJo Wallet still works for every
+  # internal movement (hold, capture, release, transfer between buckets) and
+  # only the outside world is unreachable: no card top-up, no payout. That is a
+  # mode, not a failure — the ledger is the product, Stripe is the door.
+  #
+  # secret-key decides the environment on its own: `sk_test_` is test mode and
+  # nothing else about the integration looks different, so check the startup log
+  # before believing a charge. webhook-secret is a DIFFERENT secret, minted when
+  # the endpoint is created in the Stripe dashboard, which is why it is
+  # legitimately empty on a first deploy — and while it is empty, top-ups are
+  # refused rather than started, because a payment this backend can take but
+  # cannot learn about is a customer charged for nothing.
+  #
+  # return-base-url must be this API's own public origin: Stripe Checkout
+  # refuses a custom URL scheme, so the trip back into the app goes through
+  # /v1/payments/return, which redirects to gojogo://.
+  payments:
+    stripe:
+      base-url: ${STRIPE_BASE_URL:https://api.stripe.com}
+      secret-key: ${STRIPE_SECRET_KEY:}
+      webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+      publishable-key: ${STRIPE_PUBLISHABLE_KEY:}
+      return-base-url: ${STRIPE_RETURN_BASE_URL:https://api.gojogo.app}
+      app-scheme: ${STRIPE_APP_SCHEME:gojogo}
   # Browser origins allowed to call this API (comma-separated). Empty — the
   # default — emits no CORS headers at all, which is correct while the only
   # client is the iOS app. GoJoAdmin's origin goes here when it exists.

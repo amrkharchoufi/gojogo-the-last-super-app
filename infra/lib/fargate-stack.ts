@@ -86,6 +86,30 @@ export class GojoGoFargateStack extends cdk.Stack {
       ? secretsmanager.Secret.fromSecretCompleteArn(this, 'Sumsub', sumsubSecretArn)
       : undefined;
 
+    // Stripe credentials — a JSON secret with three keys: `secretKey` (signs our
+    // calls out), `webhookSecret` (verifies their calls in) and `publishableKey`
+    // (handed to the iOS client, public by design but kept together with its
+    // siblings so one rotation touches one place). Referenced by ARN through
+    // context, like Sumsub above:
+    //   cdk deploy GojoGoFargateStack -c stripeSecretArn=arn:aws:secretsmanager:...
+    //
+    // Absent — the default — the backend gets no Stripe env at all and the
+    // `payments` module reports itself unconfigured: the wallet ledger still
+    // works for internal movements, but nothing can charge a card or pay out.
+    // That split is the point. External money is the only part that needs a
+    // vendor, so an environment without keys must still be able to run every
+    // internal flow rather than failing at startup.
+    //
+    // `webhookSecret` may legitimately be empty on the first deploy: Stripe only
+    // mints it once the endpoint exists and answers, so the order is deploy →
+    // create endpoint → put the whsec_ into the secret → deploy again. Signature
+    // verification is what refuses to run without it, not the whole module.
+    const stripeSecretArn =
+      (this.node.tryGetContext('stripeSecretArn') as string | undefined) ?? '';
+    const stripeSecret = stripeSecretArn
+      ? secretsmanager.Secret.fromSecretCompleteArn(this, 'Stripe', stripeSecretArn)
+      : undefined;
+
     // --- Roles -------------------------------------------------------------
     // Execution role: pulls the image + reads the container secrets at launch.
     const executionRole = new iam.Role(this, 'ExecutionRole', {
@@ -98,6 +122,7 @@ export class GojoGoFargateStack extends cdk.Stack {
     apnsSecret.grantRead(executionRole);
     partnerAdminSecret.grantRead(executionRole);
     sumsubSecret?.grantRead(executionRole);
+    stripeSecret?.grantRead(executionRole);
 
     // Task role: the app's own runtime permissions (was the App Runner instance role).
     const taskRole = new iam.Role(this, 'TaskRole', {
@@ -201,6 +226,18 @@ export class GojoGoFargateStack extends cdk.Stack {
               SUMSUB_SECRET_KEY: ecs.Secret.fromSecretsManager(sumsubSecret, 'secretKey'),
               SUMSUB_WEBHOOK_SECRET:
                 ecs.Secret.fromSecretsManager(sumsubSecret, 'webhookSecret'),
+            }
+          : {}),
+        // Same spread-not-listed shape as Sumsub: no secret configured means the
+        // keys are absent rather than present-and-empty, which is what the
+        // payments module reads to decide it is unconfigured.
+        ...(stripeSecret
+          ? {
+              STRIPE_SECRET_KEY: ecs.Secret.fromSecretsManager(stripeSecret, 'secretKey'),
+              STRIPE_WEBHOOK_SECRET:
+                ecs.Secret.fromSecretsManager(stripeSecret, 'webhookSecret'),
+              STRIPE_PUBLISHABLE_KEY:
+                ecs.Secret.fromSecretsManager(stripeSecret, 'publishableKey'),
             }
           : {}),
       },

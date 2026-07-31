@@ -75,6 +75,17 @@ class SecurityConfig {
                 // the body is parsed, and refused outright when no webhook
                 // secret is configured.
                 .requestMatchers(HttpMethod.POST, "/v1/kyc/webhook").permitAll()
+                // Stripe's payment callback, on the same terms as Sumsub's: the
+                // caller is a machine, its HMAC signature over the raw body is
+                // the authentication, and with no signing secret configured the
+                // endpoint refuses everything rather than trusting a payload it
+                // cannot check.
+                .requestMatchers(HttpMethod.POST, "/v1/payments/webhook").permitAll()
+                // Where Stripe's hosted pages send the customer's browser back
+                // to. Public because a browser returning from Checkout carries
+                // no token — and inert for the same reason: it reads nothing,
+                // credits nothing, and only redirects into the app.
+                .requestMatchers(HttpMethod.GET, "/v1/payments/return").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
         return http.build();

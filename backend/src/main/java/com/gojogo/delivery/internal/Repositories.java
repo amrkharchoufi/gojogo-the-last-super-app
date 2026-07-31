@@ -79,6 +79,23 @@ interface AddressRepository extends JpaRepository<Address, UUID> {
     void clearDefault(@Param("userId") UUID userId);
 }
 
+interface PromotionRepository extends JpaRepository<Promotion, UUID> {
+
+    List<Promotion> findByMerchantIdOrderByCreatedAtDesc(UUID merchantId);
+
+    List<Promotion> findByMerchantIdAndActiveTrue(UUID merchantId);
+
+    /** Case-insensitive: a customer typing `welcome10` means WELCOME10. */
+    Optional<Promotion> findByMerchantIdAndCodeIgnoreCase(UUID merchantId, String code);
+}
+
+interface PromotionRedemptionRepository extends JpaRepository<PromotionRedemption, UUID> {
+
+    long countByPromotionIdAndUserId(UUID promotionId, UUID userId);
+
+    boolean existsByOrderId(UUID orderId);
+}
+
 interface OrderRepository extends JpaRepository<CustomerOrder, UUID> {
 
     /** The one order still in flight for this user, if any. */

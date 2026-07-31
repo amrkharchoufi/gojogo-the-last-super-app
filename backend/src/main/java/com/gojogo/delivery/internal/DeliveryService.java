@@ -40,11 +40,14 @@ class DeliveryService {
     private final AddressRepository addresses;
     private final DeliveryTimeline timeline;
     private final ApplicationEventPublisher events;
+    private final OrderPayments payments;
+    private final PromotionService promotions;
     private final int serviceFeeCents;
 
     DeliveryService(MerchantRepository merchants, MenuItemRepository menuItems,
                     OrderRepository orders, AddressRepository addresses,
                     DeliveryTimeline timeline, ApplicationEventPublisher events,
+                    OrderPayments payments, PromotionService promotions,
                     @Value("${gojogo.delivery.service-fee-cents:99}") int serviceFeeCents) {
         this.merchants = merchants;
         this.menuItems = menuItems;
@@ -52,6 +55,8 @@ class DeliveryService {
         this.addresses = addresses;
         this.timeline = timeline;
         this.events = events;
+        this.payments = payments;
+        this.promotions = promotions;
         this.serviceFeeCents = serviceFeeCents;
     }
 
@@ -144,6 +149,12 @@ class DeliveryService {
             .toList();
     }
 
+    /** The promotions a customer could use at this restaurant. */
+    @Transactional(readOnly = true)
+    List<PromotionDto> livePromotions(UUID merchantId) {
+        return promotions.liveFor(merchantId);
+    }
+
     @Transactional(readOnly = true)
     MerchantDto merchant(UUID merchantId) {
         Merchant merchant = merchants.findById(merchantId)
@@ -154,9 +165,47 @@ class DeliveryService {
     // MARK: Orders
 
     /**
-     * Places an order. Prices come from the database, never from the request:
-     * the client sends item ids and quantities only, and an item that isn't on
-     * this restaurant's menu is rejected outright.
+     * What this basket would cost, without placing anything.
+     *
+     * <p>The point is the last three fields: the app can tell someone their
+     * wallet is short <em>before</em> they commit to an order, and offer a
+     * top-up for the right amount, rather than letting checkout fail with a 402.
+     */
+    @Transactional(readOnly = true)
+    QuoteDto quote(UUID me, QuoteRequest request) {
+        Merchant merchant = merchants.findById(request.merchantId())
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such restaurant"));
+        Map<UUID, MenuItem> found = priceableItems(merchant, mergeLines(request.lines()));
+        int subtotal = subtotalOf(mergeLines(request.lines()), found);
+
+        PromotionService.Applied applied = promotions.resolve(merchant.getId(), me,
+            request.promotionCode(), subtotal, merchant.getDeliveryFeeCents());
+        Basket basket = Basket.of(subtotal, merchant.getDeliveryFeeCents(), serviceFeeCents,
+            applied.discountCents(), request.tipCents(), payments.currency());
+
+        long available = payments.required() ? payments.availableFor(me) : Long.MAX_VALUE;
+        boolean covers = !payments.required() || available >= basket.totalCents();
+        return new QuoteDto(basket.subtotalCents(), basket.deliveryFeeCents(),
+            basket.serviceFeeCents(), basket.discountCents(), basket.tipCents(),
+            basket.totalCents(), basket.currency(), applied.code(), applied.label(),
+            payments.required() ? available : 0,
+            covers, covers ? 0 : basket.totalCents() - available);
+    }
+
+    /**
+     * Places an order and holds the money for it.
+     *
+     * <p>Prices come from the database, never from the request: the client sends
+     * item ids and quantities only, and an item that isn't on this restaurant's
+     * menu is rejected outright. The same is true of the discount — the request
+     * may name a code, never an amount.
+     *
+     * <p>The funds move into the customer's own ESCROW bucket, not out of their
+     * hands: cancelling in time releases them, and the merchant is paid when the
+     * food arrives. A wallet that can't cover it raises
+     * {@link com.gojogo.payments.InsufficientFundsException}, which the global
+     * handler turns into a 402 — and nothing is saved, because the hold and the
+     * order are one transaction.
      */
     @Transactional
     OrderDto place(UUID me, PlaceOrderRequest request) {
@@ -167,11 +216,45 @@ class DeliveryService {
         Merchant merchant = merchants.findById(request.merchantId())
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such restaurant"));
 
-        // Merge duplicate lines so two "+1" taps on the same dish are one line.
+        Map<UUID, Integer> qtyByItem = mergeLines(request.lines());
+        Map<UUID, MenuItem> found = priceableItems(merchant, qtyByItem);
+
+        OffsetDateTime now = OffsetDateTime.now();
+        CustomerOrder order = new CustomerOrder(me, merchant.getId(), payments.currency(),
+            request.note(), now.plus(timeline.total()));
+        applyAddress(me, request, order);
+        qtyByItem.forEach((itemId, qty) -> {
+            MenuItem item = found.get(itemId);
+            order.addLine(item.getId(), item.getName(), item.getPriceCents(), qty);
+        });
+
+        int subtotal = subtotalOf(qtyByItem, found);
+        PromotionService.Applied applied = promotions.resolve(merchant.getId(), me,
+            request.promotionCode(), subtotal, merchant.getDeliveryFeeCents());
+        order.priceIt(Basket.of(subtotal, merchant.getDeliveryFeeCents(), serviceFeeCents,
+            applied.discountCents(), request.tipCents(), payments.currency()),
+            applied.promotionId(), applied.code());
+
+        CustomerOrder saved = orders.save(order);
+        payments.hold(saved, merchant.getName());
+        promotions.redeem(applied, me, saved.getId());
+
+        events.publishEvent(new OrderPlaced(saved.getId(), me, merchant.getId(), merchant.getName(),
+            saved.getTotalCents(), saved.getCurrency(), saved.getPlacedAt()));
+        return toOrderDto(saved, merchant);
+    }
+
+    /** Merges duplicate lines, so two "+1" taps on the same dish are one line. */
+    private static Map<UUID, Integer> mergeLines(List<OrderLineRequest> lines) {
         Map<UUID, Integer> qtyByItem = new LinkedHashMap<>();
-        for (OrderLineRequest line : request.lines()) {
+        for (OrderLineRequest line : lines) {
             qtyByItem.merge(line.menuItemId(), line.qty(), Integer::sum);
         }
+        return qtyByItem;
+    }
+
+    /** The requested items, proven to be on this restaurant's menu and for sale. */
+    private Map<UUID, MenuItem> priceableItems(Merchant merchant, Map<UUID, Integer> qtyByItem) {
         Map<UUID, MenuItem> found = menuItems
             .findForMerchant(merchant.getId(), qtyByItem.keySet()).stream()
             .collect(Collectors.toMap(MenuItem::getId, Function.identity()));
@@ -183,21 +266,13 @@ class DeliveryService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Some items are sold out");
         }
+        return found;
+    }
 
-        OffsetDateTime now = OffsetDateTime.now();
-        CustomerOrder order = new CustomerOrder(me, merchant.getId(), "USD",
-            request.note(), now.plus(timeline.total()));
-        applyAddress(me, request, order);
-        qtyByItem.forEach((itemId, qty) -> {
-            MenuItem item = found.get(itemId);
-            order.addLine(item.getId(), item.getName(), item.getPriceCents(), qty);
-        });
-        order.priceIt(merchant.getDeliveryFeeCents(), serviceFeeCents);
-        CustomerOrder saved = orders.save(order);
-
-        events.publishEvent(new OrderPlaced(saved.getId(), me, merchant.getId(), merchant.getName(),
-            saved.getTotalCents(), saved.getCurrency(), saved.getPlacedAt()));
-        return toOrderDto(saved, merchant);
+    private static int subtotalOf(Map<UUID, Integer> qtyByItem, Map<UUID, MenuItem> found) {
+        return qtyByItem.entrySet().stream()
+            .mapToInt(entry -> found.get(entry.getKey()).getPriceCents() * entry.getValue())
+            .sum();
     }
 
     /**
@@ -252,6 +327,9 @@ class DeliveryService {
                     : "Too late to cancel — your courier is on the way");
         }
         order.moveTo(OrderStatus.CANCELLED, OffsetDateTime.now());
+        // Nothing was captured, so this is a release and not a refund: the money
+        // never left the customer's own escrow.
+        payments.release(order);
         events.publishEvent(new OrderStatusChanged(order.getId(), me,
             merchantName(order.getMerchantId()), OrderStatus.CANCELLED.name(), 0));
         return toOrderDto(order);
@@ -265,6 +343,22 @@ class DeliveryService {
                 "You can rate an order once it's delivered");
         }
         order.rate(stars);
+        return toOrderDto(order);
+    }
+
+    /**
+     * A tip after the food arrived — 100% the courier's (SPECS §1), paid
+     * straight through rather than through escrow, since there is nothing left
+     * to hold it against and the work is already done.
+     */
+    @Transactional
+    OrderDto tip(UUID me, UUID orderId, int tipCents) {
+        CustomerOrder order = require(me, orderId);
+        if (order.getStatus() != OrderStatus.DELIVERED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "You can tip once your order has arrived");
+        }
+        payments.tipAfterDelivery(order, tipCents);
         return toOrderDto(order);
     }
 
@@ -303,6 +397,12 @@ class DeliveryService {
             order.moveTo(next, now);
             if (next == OrderStatus.COURIER_TO_RESTAURANT) {
                 assignCourier(order);
+            }
+            if (next == OrderStatus.DELIVERED) {
+                // The food arrived: the hold becomes the merchant's, the
+                // courier's and the platform's. Idempotent on the order, so a
+                // second pass through DELIVERED cannot pay anyone twice.
+                payments.settle(order, merchantName);
             }
             events.publishEvent(new OrderStatusChanged(order.getId(), order.getUserId(),
                 merchantName, next.name(), etaMinutes(order, now)));
@@ -371,6 +471,10 @@ class DeliveryService {
             order.getDeliveryFeeCents(),
             order.getServiceFeeCents(),
             order.getTotalCents(),
+            order.getDiscountCents(),
+            order.getTipCents(),
+            order.getPromotionCode(),
+            order.getPaymentStatus().name(),
             order.getCurrency(),
             order.getAddressLabel(),
             new OrderAddressDto(order.getAddressId(), order.getAddressLabel(),

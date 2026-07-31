@@ -71,10 +71,28 @@ class DeliveryController {
         delivery.deleteAddress(current.require(jwt).id(), addressId);
     }
 
+    /**
+     * What a basket would cost, without placing it — including whether the
+     * caller's wallet covers it, so the app can offer a top-up instead of
+     * walking someone into a 402 at checkout.
+     */
+    @PostMapping("/v1/delivery/orders/quote")
+    QuoteDto quote(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody QuoteRequest request) {
+        return delivery.quote(current.require(jwt).id(), request);
+    }
+
+    /** Places the order and holds its total in the customer's own escrow.
+     *  <b>402</b> when the wallet is short. */
     @PostMapping("/v1/delivery/orders")
     @ResponseStatus(HttpStatus.CREATED)
     OrderDto place(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody PlaceOrderRequest request) {
         return delivery.place(current.require(jwt).id(), request);
+    }
+
+    /** The promotions a customer could use here. */
+    @GetMapping("/v1/delivery/merchants/{merchantId}/promotions")
+    List<PromotionDto> promotions(@PathVariable UUID merchantId) {
+        return delivery.livePromotions(merchantId);
     }
 
     /** The order being tracked right now, or {@code {"order": null}}. */
@@ -103,5 +121,12 @@ class DeliveryController {
     OrderDto rate(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
                   @Valid @RequestBody RateOrderRequest request) {
         return delivery.rate(current.require(jwt).id(), orderId, request.rating());
+    }
+
+    /** Tips after the food arrived. 100% goes to whoever delivered it. */
+    @PostMapping("/v1/delivery/orders/{orderId}/tip")
+    OrderDto tip(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
+                 @Valid @RequestBody TipRequest request) {
+        return delivery.tip(current.require(jwt).id(), orderId, request.tipCents());
     }
 }

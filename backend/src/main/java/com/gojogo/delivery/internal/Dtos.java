@@ -112,9 +112,79 @@ record SaveAddressRequest(@Size(max = 40) String label,
 record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinutes,
                 double courierProgress, CourierDto courier, List<OrderLineDto> lines,
                 int subtotalCents, int deliveryFeeCents, int serviceFeeCents, int totalCents,
+                int discountCents, int tipCents, String promotionCode,
+                String paymentStatus,
                 String currency, String addressLabel, OrderAddressDto address, String note,
                 Integer rating,
                 OffsetDateTime placedAt, OffsetDateTime statusChangedAt, OffsetDateTime etaAt) {
+}
+
+/**
+ * What a basket would cost, before anything is placed or charged.
+ *
+ * <p>Exists so the app can show a total the customer agrees to <em>before</em>
+ * their wallet is touched — including whether they can actually afford it, which
+ * is the difference between offering a top-up and showing them a 402.
+ */
+record QuoteDto(int subtotalCents, int deliveryFeeCents, int serviceFeeCents,
+                int discountCents, int tipCents, int totalCents, String currency,
+                String promotionCode, String promotionLabel,
+                long walletAvailableMinor, boolean walletCovers, long shortfallMinor) {
+}
+
+record QuoteRequest(@NotNull UUID merchantId,
+                    @NotEmpty @Size(max = 40) List<@Valid OrderLineRequest> lines,
+                    @Size(max = 32) String promotionCode,
+                    @Min(0) @Max(100_000) int tipCents) {
+}
+
+record TipRequest(@Min(1) @Max(100_000) int tipCents) {
+}
+
+/** A merchant's discount, on both the owner's editor and the customer's
+ *  restaurant page. */
+record PromotionDto(UUID id, String code, String label, String kind, int valueBps,
+                    int amountCents, int minBasketCents, int maxDiscountCents,
+                    int perUserLimit, OffsetDateTime startsAt, OffsetDateTime endsAt,
+                    boolean active) {
+}
+
+record SavePromotionRequest(@Size(max = 32) String code,
+                            @NotBlank @Size(max = 80) String label,
+                            @NotBlank String kind,
+                            @Min(0) @Max(10_000) int valueBps,
+                            @Min(0) int amountCents,
+                            @Min(0) int minBasketCents,
+                            @Min(0) int maxDiscountCents,
+                            @Min(0) @Max(100) int perUserLimit,
+                            OffsetDateTime startsAt, OffsetDateTime endsAt) {
+}
+
+/**
+ * A restaurant's money, on its owner's dashboard.
+ *
+ * <p>Lives on delivery's {@code /mine} surface rather than on the payments
+ * module's, because only the module that owns a merchant can prove the caller
+ * owns it — payments asking would be a dependency in the wrong direction
+ * (ARCHITECTURE §10b: no admin-only mirror of the {@code /mine} endpoints).
+ */
+record MerchantWalletDto(long availableMinor, String currency, int commissionBps,
+                         boolean payoutsConfigured, boolean payoutsReady,
+                         String payoutsRequirement, long payoutMinMinor,
+                         List<TransactionLineDto> recent) {
+}
+
+record TransactionLineDto(UUID id, long amountMinor, String kind, String memo,
+                          OffsetDateTime createdAt) {
+}
+
+record PayoutRequestBody(@Min(1) long amountMinor) {
+}
+
+/** {@code status} is REQUESTED / SENT / FAILED — a payout that failed at the
+ *  provider is reported, not hidden, and its debit has already been reversed. */
+record PayoutDto(UUID id, long amountMinor, String currency, String status,
+                 String failureReason) {
 }
 
 /** Wrapper so "no order in flight" is a 200 with {@code order: null}, not a 404. */
@@ -131,7 +201,11 @@ record PlaceOrderRequest(@NotNull UUID merchantId,
                          @NotEmpty @Size(max = 40) List<@Valid OrderLineRequest> lines,
                          UUID addressId,
                          @Size(max = 120) String addressLabel,
-                         @Size(max = 280) String note) {
+                         @Size(max = 280) String note,
+                         /* A code, never an amount: what a discount is worth is
+                          * read server-side from the promotion it names. */
+                         @Size(max = 32) String promotionCode,
+                         @Min(0) @Max(100_000) int tipCents) {
 }
 
 record RateOrderRequest(@Min(1) @Max(5) int rating) {

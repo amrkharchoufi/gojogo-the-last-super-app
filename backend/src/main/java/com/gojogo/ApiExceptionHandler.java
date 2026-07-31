@@ -35,4 +35,21 @@ class ApiExceptionHandler {
     ResponseEntity<Map<String, String>> conflict(DataIntegrityViolationException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", "Conflicting data"));
     }
+
+    /**
+     * An empty wallet, from wherever it was noticed — a checkout, a payout, a
+     * stake. Handled once here rather than in each vertical because the answer
+     * is the same everywhere and the client keys off the status: <b>402</b> is
+     * what tells the app to offer a top-up rather than an apology.
+     */
+    @ExceptionHandler(com.gojogo.payments.InsufficientFundsException.class)
+    ResponseEntity<Map<String, String>> insufficientFunds(
+            com.gojogo.payments.InsufficientFundsException e) {
+        long shortfall = e.shortfallMinor();
+        return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED).body(Map.of(
+            "message", "Your wallet is short by %d.%02d — top up to continue"
+                .formatted(shortfall / 100, shortfall % 100),
+            "shortfallMinor", String.valueOf(shortfall),
+            "availableMinor", String.valueOf(e.availableMinor())));
+    }
 }
