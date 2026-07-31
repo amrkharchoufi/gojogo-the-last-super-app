@@ -105,6 +105,14 @@ struct OrderDTO: Decodable {
     let deliveryFeeCents: Int
     let serviceFeeCents: Int
     let totalCents: Int
+    /// Optional-decoded, like every field added after a release: a backend that
+    /// predates the wallet still answers this endpoint, and the app has to keep
+    /// working against it.
+    let discountCents: Int?
+    let tipCents: Int?
+    let promotionCode: String?
+    /// UNPAID / HELD / CAPTURED / RELEASED / REFUNDED.
+    let paymentStatus: String?
     let currency: String
     let addressLabel: String
     let address: OrderAddressDTO?
@@ -131,8 +139,101 @@ struct PlaceOrderBody: Encodable {
     /// A saved address of the caller's. Nil falls back to their default one.
     let addressId: UUID?
     let note: String
+    /// A code, never an amount — what a discount is worth is decided server-side.
+    let promotionCode: String?
+    let tipCents: Int
 }
 
 struct RateOrderBody: Encodable {
     let rating: Int
+}
+
+struct TipBody: Encodable {
+    let tipCents: Int
+}
+
+// MARK: Checkout
+
+struct QuoteBody: Encodable {
+    let merchantId: UUID
+    let lines: [PlaceOrderLineBody]
+    let promotionCode: String?
+    let tipCents: Int
+}
+
+/// What a basket costs, priced by the server before anything is charged — and
+/// crucially whether the wallet covers it, so the app can offer a top-up rather
+/// than walk someone into a refused checkout.
+struct QuoteDTO: Decodable {
+    let subtotalCents: Int
+    let deliveryFeeCents: Int
+    let serviceFeeCents: Int
+    let discountCents: Int
+    let tipCents: Int
+    let totalCents: Int
+    let currency: String
+    let promotionCode: String
+    let promotionLabel: String
+    let walletAvailableMinor: Int
+    let walletCovers: Bool
+    let shortfallMinor: Int
+}
+
+struct DeliveryPromotionDTO: Decodable, Identifiable {
+    let id: UUID
+    let code: String
+    let label: String
+    /// PERCENT / FIXED / FREE_DELIVERY.
+    let kind: String
+    let valueBps: Int
+    let amountCents: Int
+    let minBasketCents: Int
+    let maxDiscountCents: Int
+    let perUserLimit: Int
+    let active: Bool
+}
+
+// MARK: The merchant's side
+
+struct MerchantWalletDTO: Decodable {
+    let availableMinor: Int
+    let currency: String
+    let commissionBps: Int
+    let payoutsConfigured: Bool
+    let payoutsReady: Bool
+    let payoutsRequirement: String
+    let payoutMinMinor: Int
+    let recent: [MerchantTransactionDTO]
+}
+
+struct MerchantTransactionDTO: Decodable, Identifiable {
+    let id: UUID
+    let amountMinor: Int
+    let kind: String
+    let memo: String
+    let createdAt: String
+}
+
+struct PayoutBody: Encodable {
+    let amountMinor: Int
+}
+
+struct PayoutDTO: Decodable {
+    let id: UUID
+    let amountMinor: Int
+    let currency: String
+    /// REQUESTED / SENT / FAILED — a failure is reported, not hidden.
+    let status: String
+    let failureReason: String
+}
+
+struct SavePromotionBody: Encodable {
+    let code: String?
+    let label: String
+    let kind: String
+    let valueBps: Int
+    let amountCents: Int
+    let minBasketCents: Int
+    let maxDiscountCents: Int
+    let perUserLimit: Int
 }

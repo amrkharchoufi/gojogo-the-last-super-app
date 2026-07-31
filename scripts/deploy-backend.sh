@@ -270,6 +270,44 @@ EOF
     die "Deploy unconfirmed."
   fi
 
+  # `services-stable` is necessary but not sufficient, and on 2026-07-31 it
+  # returned success while the new revision was crash-looping on a bean-name
+  # collision: the OLD task was still serving, so the health check below passed
+  # too and the deploy reported success having changed nothing. Both of those
+  # checks are answered by whatever is currently behind the load balancer, which
+  # is exactly what a failed rollout leaves in place.
+  #
+  # So: ask what is *actually running*, and insist it is the revision this
+  # deploy created.
+  step "Rollout"
+  local rollout
+  rollout="$(aws_ ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+    --query "services[0].deployments[?status=='PRIMARY']|[0].{state:rolloutState,failed:failedTasks,td:taskDefinition}" \
+    --output json)"
+  local want_td state failed
+  want_td="$(printf '%s' "$rollout" | python3 -c 'import json,sys; print(json.load(sys.stdin)["td"])')"
+  state="$(printf '%s' "$rollout" | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')"
+  failed="$(printf '%s' "$rollout" | python3 -c 'import json,sys; print(json.load(sys.stdin)["failed"])')"
+
+  local running_tds
+  running_tds="$(aws_ ecs describe-tasks --cluster "$ECS_CLUSTER" \
+    --tasks $(aws_ ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" \
+      --query 'taskArns' --output text) \
+    --query 'tasks[?lastStatus==`RUNNING`].taskDefinitionArn' --output text 2>/dev/null || echo "")"
+
+  if [[ "$state" != "COMPLETED" || "$running_tds" != *"${want_td##*/}"* ]]; then
+    printf '      wanted   %s\n      running  %s\n      state    %s (%s failed task(s))\n' \
+      "${want_td##*/}" "${running_tds:-none}" "$state" "$failed" >&2
+    die "The new revision is NOT what's serving traffic.
+    The previous task is still up — which is why /actuator/health would have
+    answered 200 and told you nothing. A crash-looping task usually means a
+    failed Flyway migration or a context that won't start:
+
+      aws logs tail /ecs/gojogo-backend --since 15m --region $AWS_REGION
+      $0 --rollback"
+  fi
+  ok "Running ${want_td##*/}${failed:+ (after $failed failed attempt(s))}"
+
   step "Health"
   local code
   for attempt in 1 2 3 4 5; do

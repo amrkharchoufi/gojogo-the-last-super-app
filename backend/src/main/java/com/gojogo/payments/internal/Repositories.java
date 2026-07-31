@@ -97,7 +97,7 @@ interface StripePaymentRepository extends JpaRepository<StripePayment, UUID> {
                                                        OffsetDateTime before);
 }
 
-interface ProviderEventRepository extends JpaRepository<ProviderEvent, String> {
+interface StripeEventRepository extends JpaRepository<StripeEvent, String> {
 }
 
 interface FeePolicyRepository extends JpaRepository<FeePolicy, UUID> {

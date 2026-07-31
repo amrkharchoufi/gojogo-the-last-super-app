@@ -49,11 +49,11 @@ class PaymentsService {
     private final StripeClient stripe;
     private final ConfigApi config;
     private final StripePaymentRepository payments;
-    private final ProviderEventRepository providerEvents;
+    private final StripeEventRepository providerEvents;
     private final ConnectAccountRepository connectAccounts;
 
     PaymentsService(LedgerService ledger, StripeClient stripe, ConfigApi config,
-                    StripePaymentRepository payments, ProviderEventRepository providerEvents,
+                    StripePaymentRepository payments, StripeEventRepository providerEvents,
                     ConnectAccountRepository connectAccounts) {
         this.ledger = ledger;
         this.stripe = stripe;
@@ -172,7 +172,7 @@ class PaymentsService {
         if (eventId == null || eventId.isBlank() || providerEvents.existsById(eventId)) {
             return false;
         }
-        providerEvents.save(new ProviderEvent(eventId, type));
+        providerEvents.save(new StripeEvent(eventId, type));
         handle(type, object);
         return true;
     }
