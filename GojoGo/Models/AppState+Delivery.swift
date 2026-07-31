@@ -243,9 +243,62 @@ extension AppState {
     /// Places the cart against the live backend. The tracking screen opens
     /// optimistically; if the call fails the cart is handed back so the order
     /// can be retried rather than silently lost.
+    // MARK: Checkout (Phase 2e M3)
+
+    /// True while the cart belongs to a live restaurant — the only case where
+    /// money is involved at all. A SampleData restaurant still runs the
+    /// on-device demo, free of charge.
+    var deliveryCartIsLive: Bool {
+        guard backendConnected, let id = deliveryCartRestaurantID else { return false }
+        return DeliveryStore.shared.isRemote(id)
+    }
+
+    /// What checkout will actually cost. The app deliberately does not compute
+    /// this: fees, the discount a code is worth, and whether the wallet covers
+    /// it are all the server's answer, and a total the client invented is a
+    /// total the client can be wrong about.
+    func refreshDeliveryQuote() async {
+        guard deliveryCartIsLive, let merchantID = deliveryCartRestaurantID,
+              !deliveryCart.isEmpty else {
+            deliveryQuote = nil
+            return
+        }
+        deliveryQuoting = true
+        defer { deliveryQuoting = false }
+        do {
+            deliveryQuote = try await DeliveryStore.shared.quote(
+                merchantId: merchantID, lines: deliveryCart,
+                promotionCode: deliveryPromotionCode, tipCents: deliveryTipCents)
+        } catch {
+            // A refused code is the common case and worth saying out loud; the
+            // quote falls back to no code rather than blocking checkout.
+            deliveryQuote = nil
+            if !deliveryPromotionCode.isEmpty {
+                showDeliveryNotice(Self.message(from: error, fallback: "That code isn't valid here."))
+                deliveryPromotionCode = ""
+                deliveryQuote = try? await DeliveryStore.shared.quote(
+                    merchantId: merchantID, lines: deliveryCart,
+                    promotionCode: nil, tipCents: deliveryTipCents)
+            }
+        }
+    }
+
+    /// Tip choices at checkout, in minor units — none, and three round numbers.
+    static let deliveryTipOptions = [0, 200, 500, 1_000]
+
+    func setDeliveryTip(_ cents: Int) {
+        deliveryTipCents = cents
+        Task { await refreshDeliveryQuote() }
+    }
+
+    func applyDeliveryPromotionCode(_ code: String) {
+        deliveryPromotionCode = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        Task { await refreshDeliveryQuote() }
+    }
+
     func placeLiveDeliveryOrder(merchantID: UUID) {
         let lines = deliveryCart
-        let optimisticTotal = deliveryCartTotal
+        let optimisticTotal = Double(deliveryQuote?.totalCents ?? 0) / 100
         showDeliveryCheckout = false
         selectedDeliveryRestaurantID = nil
         deliveryOrderRestaurantID = merchantID
@@ -259,15 +312,25 @@ extension AppState {
         deliveryCartRestaurantID = nil
         withAnimation(.easeInOut(duration: 0.3)) { deliveryStatus = .confirmed }
 
+        let code = deliveryPromotionCode
+        let tip = deliveryTipCents
+
         Task {
             do {
                 let order = try await DeliveryStore.shared.placeOrder(
                     merchantId: merchantID,
                     lines: lines,
                     addressId: selectedDeliveryAddress?.id,
-                    note: "")
+                    note: "",
+                    promotionCode: code,
+                    tipCents: tip)
                 applyLiveOrder(order)
                 startDeliveryPolling()
+                deliveryPromotionCode = ""
+                deliveryTipCents = 0
+                deliveryQuote = nil
+                // The total just moved out of the spendable balance into escrow.
+                await refreshWallet()
             } catch {
                 #if DEBUG
                 print("Place delivery order failed: \(error.localizedDescription)")
@@ -278,8 +341,35 @@ extension AppState {
                 deliveryCartRestaurantID = merchantID
                 deliveryOrderRestaurantID = nil
                 withAnimation(.easeInOut(duration: 0.3)) { deliveryStatus = nil }
-                showDeliveryNotice(Self.message(from: error,
-                                                fallback: "Couldn't place your order — your cart is back."))
+                showDeliveryCheckout = true
+
+                // 402 is the wallet being short, and it is the one checkout
+                // failure with an obvious next step — so offer that step rather
+                // than an apology.
+                if case APIClient.APIError.http(let status, _) = error, status == 402 {
+                    await refreshWallet()
+                    showDeliveryNotice(Self.message(from: error,
+                                                    fallback: "Your wallet is short. Top up to order."))
+                    showWallet = true
+                } else {
+                    showDeliveryNotice(Self.message(from: error,
+                                                    fallback: "Couldn't place your order — your cart is back."))
+                }
+            }
+        }
+    }
+
+    /// A tip after the food arrived. Settled straight through — there is
+    /// nothing left in escrow to hold it against, and the courier has already
+    /// done the work.
+    func tipCourier(_ orderID: UUID, cents: Int) {
+        Task {
+            do {
+                _ = try await DeliveryStore.shared.tip(orderID, cents: cents)
+                await refreshWallet()
+                showDeliveryNotice("Thanks — \(WalletStore.money(cents)) sent to your courier.")
+            } catch {
+                showDeliveryNotice(Self.message(from: error, fallback: "Couldn't send that tip."))
             }
         }
     }

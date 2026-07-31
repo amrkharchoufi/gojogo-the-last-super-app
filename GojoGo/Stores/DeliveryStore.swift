@@ -52,14 +52,60 @@ final class DeliveryStore {
 
     // MARK: Orders
 
+    /// Prices a basket without placing it. The app never adds an order up
+    /// itself — fees, discounts and what the wallet can cover are all the
+    /// server's answer, and this is how the checkout screen learns them.
+    func quote(merchantId: UUID, lines: [DeliveryCartLine],
+               promotionCode: String?, tipCents: Int) async throws -> QuoteDTO {
+        let body = QuoteBody(
+            merchantId: merchantId,
+            lines: lines.map { PlaceOrderLineBody(menuItemId: $0.item.id, qty: $0.qty) },
+            promotionCode: promotionCode?.isEmpty == false ? promotionCode : nil,
+            tipCents: tipCents)
+        return try await APIClient.shared.post("/v1/delivery/orders/quote", body: body)
+    }
+
     func placeOrder(merchantId: UUID, lines: [DeliveryCartLine],
-                    addressId: UUID?, note: String) async throws -> OrderDTO {
+                    addressId: UUID?, note: String,
+                    promotionCode: String? = nil, tipCents: Int = 0) async throws -> OrderDTO {
         let body = PlaceOrderBody(
             merchantId: merchantId,
             lines: lines.map { PlaceOrderLineBody(menuItemId: $0.item.id, qty: $0.qty) },
             addressId: addressId,
-            note: note)
+            note: note,
+            promotionCode: promotionCode?.isEmpty == false ? promotionCode : nil,
+            tipCents: tipCents)
         return try await APIClient.shared.post("/v1/delivery/orders", body: body)
+    }
+
+    /// A tip after the food arrived. 100% of it goes to whoever delivered it.
+    func tip(_ orderId: UUID, cents: Int) async throws -> OrderDTO {
+        try await APIClient.shared.post("/v1/delivery/orders/\(orderId)/tip",
+                                        body: TipBody(tipCents: cents))
+    }
+
+    func promotions(_ merchantId: UUID) async throws -> [DeliveryPromotionDTO] {
+        try await APIClient.shared.get("/v1/delivery/merchants/\(merchantId)/promotions")
+    }
+
+    // MARK: The owner's money
+
+    func merchantWallet() async throws -> MerchantWalletDTO {
+        try await APIClient.shared.get("/v1/delivery/merchants/mine/wallet")
+    }
+
+    func payOut(amountMinor: Int) async throws -> PayoutDTO {
+        try await APIClient.shared.post("/v1/delivery/merchants/mine/payouts",
+                                        body: PayoutBody(amountMinor: amountMinor))
+    }
+
+    /// A fresh Stripe onboarding link — single-use, so this is a POST that is
+    /// meant to be called again rather than a URL to cache.
+    func payoutOnboardingLink() async throws -> String {
+        struct LinkResponse: Decodable { let url: String }
+        let response: LinkResponse = try await APIClient.shared
+            .post("/v1/delivery/merchants/mine/payouts/onboarding-link")
+        return response.url
     }
 
     // MARK: Saved addresses

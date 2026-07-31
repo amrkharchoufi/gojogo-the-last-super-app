@@ -362,6 +362,10 @@ final class AppState: ObservableObject {
     /// GojoDelivery, so `deliveryNotice` would render behind it.
     @Published var merchantNotice: String? = nil
     var merchantNoticeTask: Task<Void, Never>?
+    /// What the restaurant has earned and whether it can be paid out
+    /// (Phase 2e M3). Read from delivery's own `/mine` surface — the vertical
+    /// that owns the merchant is the only one that can prove who owns it.
+    @Published var merchantWallet: MerchantWalletDTO? = nil
 
     // Business profiles — a business IS a profile (Phase 2e M1).
     // See AppState+Business.swift.

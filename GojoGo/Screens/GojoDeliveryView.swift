@@ -691,6 +691,9 @@ private struct DeliveryCheckoutSheet: View {
     /// The address sheet is presented from here rather than through AppState so
     /// it stacks over checkout instead of fighting the root view's sheet slot.
     @State private var showAddresses = false
+    /// What's typed in the code field. The applied one lives in AppState —
+    /// this is only what the keyboard has produced so far.
+    @State private var promoCode = ""
 
     private var restaurant: DeliveryRestaurant? {
         guard let id = app.deliveryCartRestaurantID else { return nil }
@@ -707,7 +710,16 @@ private struct DeliveryCheckoutSheet: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     cartLines
-                    feeBreakdown
+                    // A live restaurant is a real payment: the totals, the tip
+                    // and the discount all come from the server's quote. A
+                    // SampleData one keeps the offline demo's arithmetic.
+                    if app.deliveryCartIsLive {
+                        tipPicker
+                        promotionField
+                        quotedBreakdown
+                    } else {
+                        feeBreakdown
+                    }
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         showAddresses = true
@@ -716,7 +728,17 @@ private struct DeliveryCheckoutSheet: View {
                                   value: app.deliveryAddressLabel)
                     }
                     .buttonStyle(PressableStyle())
-                    detailRow(icon: "creditcard.fill", title: "Paying with", value: "Apple Pay")
+                    if app.deliveryCartIsLive {
+                        Button {
+                            app.showWallet = true
+                        } label: {
+                            detailRow(icon: "wallet.bifold.fill", title: "Paying with",
+                                      value: "GoJo Wallet · \(app.walletBalanceLabel)")
+                        }
+                        .buttonStyle(PressableStyle())
+                    } else {
+                        detailRow(icon: "creditcard.fill", title: "Paying with", value: "Apple Pay")
+                    }
                 }
                 .padding(.horizontal, 18)
                 .padding(.bottom, 16)
@@ -724,6 +746,17 @@ private struct DeliveryCheckoutSheet: View {
             placeOrderButton
         }
         .background(GGColor.sheetBG.ignoresSafeArea())
+        .task {
+            await app.refreshWallet()
+            await app.refreshDeliveryQuote()
+        }
+        // Re-quotes whenever the basket changes. Keyed on the line count and
+        // total quantity rather than the array itself: a cart line carries a
+        // menu item, and making that whole graph Equatable to watch it would be
+        // a lot of conformance for one integer's worth of signal.
+        .onChange(of: app.deliveryCart.reduce(0) { $0 + $1.qty * 31 + 1 }) { _, _ in
+            Task { await app.refreshDeliveryQuote() }
+        }
         .sheet(isPresented: $showAddresses) {
             DeliveryAddressSheet()
                 .environmentObject(app)
@@ -806,6 +839,119 @@ private struct DeliveryCheckoutSheet: View {
         .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
     }
 
+    // MARK: Paid checkout (Phase 2e M3)
+
+    /// The server's numbers, not ours. Every line here is read off the quote —
+    /// including the discount, which is why the code field sends a code and
+    /// never an amount.
+    private var quotedBreakdown: some View {
+        VStack(spacing: 8) {
+            if let quote = app.deliveryQuote {
+                quoteRow("Subtotal", quote.subtotalCents)
+                if quote.discountCents > 0 {
+                    quoteRow(quote.promotionLabel.isEmpty ? "Discount" : quote.promotionLabel,
+                             -quote.discountCents)
+                }
+                quoteRow("Delivery fee", quote.deliveryFeeCents, freeWhenZero: true)
+                quoteRow("Service fee", quote.serviceFeeCents)
+                if quote.tipCents > 0 { quoteRow("Courier tip", quote.tipCents) }
+                Divider().background(GGColor.ink(0.1))
+                HStack {
+                    Text("Total")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Spacer()
+                    Text(WalletStore.money(quote.totalCents, currency: quote.currency))
+                        .font(.ggMono(15, .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                }
+                if !quote.walletCovers {
+                    // Said before they commit, with the exact number, rather
+                    // than after a refused checkout.
+                    Text("Your wallet is short by \(WalletStore.money(quote.shortfallMinor, currency: quote.currency)) — top up to order.")
+                        .explanatory(12)
+                        .foregroundStyle(GGColor.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                HStack {
+                    Text(app.deliveryQuoting ? "Pricing your order…" : "Total")
+                        .font(.system(size: 13))
+                        .foregroundStyle(GGColor.textSecondary)
+                    Spacer()
+                    if app.deliveryQuoting { ProgressView().scaleEffect(0.7) }
+                }
+            }
+        }
+        .padding(14)
+        .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
+    }
+
+    private var tipPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tip your courier")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+            HStack(spacing: 8) {
+                ForEach(AppState.deliveryTipOptions, id: \.self) { cents in
+                    let selected = app.deliveryTipCents == cents
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        app.setDeliveryTip(cents)
+                    } label: {
+                        Text(cents == 0 ? "None" : WalletStore.money(cents))
+                            .font(.ggMono(12, .semibold))
+                            .foregroundStyle(selected ? GGColor.onAccent : GGColor.textSecondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(Capsule().fill(selected ? GGColor.white : GGColor.ink(0.08)))
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+            }
+            Text("Couriers keep 100% of every tip.")
+                .explanatory(11)
+                .foregroundStyle(GGColor.textTertiary)
+        }
+        .padding(14)
+        .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
+    }
+
+    private var promotionField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "tag.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(GGColor.textSecondary)
+            TextField("Promo code", text: $promoCode)
+                .font(.ggMono(13, .medium))
+                .foregroundStyle(GGColor.textPrimary)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .onSubmit { app.applyDeliveryPromotionCode(promoCode) }
+            if !promoCode.isEmpty {
+                Button("Apply") { app.applyDeliveryPromotionCode(promoCode) }
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(GGColor.textPrimary)
+            }
+        }
+        .padding(14)
+        .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
+    }
+
+    private func quoteRow(_ label: String, _ cents: Int, freeWhenZero: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(GGColor.textSecondary)
+                .lineLimit(1)
+            Spacer()
+            Text(cents == 0 && freeWhenZero ? "Free" : WalletStore.money(cents))
+                .font(.ggMono(13, .medium))
+                .foregroundStyle(GGColor.textSecondary)
+        }
+    }
+
     private func feeRow(_ label: String, _ amount: Double, freeWhenZero: Bool = false) -> some View {
         HStack {
             Text(label)
@@ -871,7 +1017,10 @@ private struct DeliveryCheckoutSheet: View {
                 Text(needsAddress ? "Add a delivery address" : "Place order")
                     .font(.system(size: 16, weight: .bold))
                 Spacer()
-                Text(String(format: "$%.2f", app.deliveryCartTotal))
+                // The server's total once it has quoted one; a live cart never
+                // shows a number this app worked out for itself.
+                Text(app.deliveryQuote.map { WalletStore.money($0.totalCents, currency: $0.currency) }
+                     ?? String(format: "$%.2f", app.deliveryCartTotal))
                     .font(.ggMono(15, .semibold))
             }
             .foregroundStyle(GGColor.onAccent)

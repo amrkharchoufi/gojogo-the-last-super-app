@@ -227,3 +227,68 @@ extension AppState {
         withAnimation(.ggSnappy) { merchantNotice = nil }
     }
 }
+
+// MARK: - The restaurant's money (Phase 2e M3)
+//
+// A merchant is a payee: an order settles into its balance, less the platform's
+// commission, and Stripe Connect is the way out to a bank. All of it hangs off
+// delivery's own `/mine` surface rather than the payments module's, because only
+// the module that owns the merchant can prove the caller owns it.
+
+extension AppState {
+
+    func refreshMerchantWallet() async {
+        guard backendConnected, merchantStorefront != nil else { return }
+        do {
+            merchantWallet = try await DeliveryStore.shared.merchantWallet()
+        } catch {
+            #if DEBUG
+            print("Merchant wallet refresh failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Opens Stripe's hosted onboarding. The link is single-use, so it is minted
+    /// each time rather than stored — and the bank details it asks for go to
+    /// Stripe, never through this app.
+    func startPayoutOnboarding() {
+        guard !merchantBusy else { return }
+        merchantBusy = true
+        Task {
+            defer { merchantBusy = false }
+            do {
+                let link = try await DeliveryStore.shared.payoutOnboardingLink()
+                guard let url = URL(string: link) else {
+                    showMerchantNotice("Couldn't open the payout setup page.")
+                    return
+                }
+                _ = await CheckoutSession().present(url)
+                // Whatever they did over there, the answer is on the server.
+                await refreshMerchantWallet()
+            } catch {
+                showMerchantNotice(Self.message(from: error,
+                                                fallback: "Couldn't start payout setup."))
+            }
+        }
+    }
+
+    func requestPayout(_ amountMinor: Int) {
+        guard !merchantBusy else { return }
+        merchantBusy = true
+        Task {
+            defer { merchantBusy = false }
+            do {
+                let payout = try await DeliveryStore.shared.payOut(amountMinor: amountMinor)
+                await refreshMerchantWallet()
+                // A failed payout is reported rather than hidden: the money has
+                // already been put back, and the owner needs to know why.
+                showMerchantNotice(payout.status == "SENT"
+                    ? "\(WalletStore.money(payout.amountMinor, currency: payout.currency)) is on its way to your bank."
+                    : (payout.failureReason.isEmpty ? "That payout didn't go through."
+                                                    : payout.failureReason))
+            } catch {
+                showMerchantNotice(Self.message(from: error, fallback: "Couldn't pay that out."))
+            }
+        }
+    }
+}

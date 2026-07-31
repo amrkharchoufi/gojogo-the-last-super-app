@@ -215,7 +215,10 @@ enum JWT {
     }
 }
 
-private enum PresentationAnchor {
+/// Shared by every `ASWebAuthenticationSession` in the app — sign-in here, and
+/// Stripe's hosted checkout in `CheckoutSession`. Internal rather than private
+/// so there is one answer to "which window is this presenting from".
+enum PresentationAnchor {
     @MainActor
     static func keyWindow() -> ASPresentationAnchor {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }

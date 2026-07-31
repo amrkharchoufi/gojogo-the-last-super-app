@@ -1,0 +1,99 @@
+name: Schema check
+
+# Runs the migrations against a real Postgres and boots the app against the
+# result. It exists because of what happened on 2026-07-31: two defects that
+# nothing local could catch — a Postgres syntax error in an ALTER TABLE, and a
+# CHAR(3) column a `String` field won't validate against — were each first
+# executed in production, by a task that either started or didn't.
+#
+# There is no Postgres and no Docker on the machine this project is built from,
+# and RDS lives in private subnets, so `mvn test` proves the code compiles and
+# the modules don't reach into each other, and says nothing whatsoever about
+# whether the application can start. This job is the missing half.
+#
+# It deliberately runs on pull requests and on every push to main, *before* the
+# deploy workflow gets there — a migration that fails here is a migration that
+# would have failed in production.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/src/main/resources/db/migration/**'
+      - 'backend/src/main/java/**'
+      - '.github/workflows/schema-check.yml'
+  pull_request:
+    paths:
+      - 'backend/src/main/resources/db/migration/**'
+      - 'backend/src/main/java/**'
+  workflow_dispatch:
+
+jobs:
+  migrate-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gojogo
+          POSTGRES_PASSWORD: gojogo
+          POSTGRES_DB: gojogo
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: '21'
+          cache: maven
+
+      - name: Build
+        working-directory: backend
+        run: mvn -B -q package -DskipTests
+
+      # The whole point: Flyway runs every migration from V1 on an empty
+      # database, and Hibernate's `ddl-auto: validate` then checks that every
+      # mapped column exists with a compatible type. Either failing stops the
+      # context from starting, which fails this step.
+      #
+      # Everything external is left unconfigured on purpose — no Cognito, no
+      # Stripe, no Sumsub, no APNs. Every one of those modules is built to treat
+      # "unconfigured" as a mode rather than a failure, so a clean start here is
+      # also a standing test of that claim.
+      - name: Migrate a fresh database and validate the mappings
+        working-directory: backend
+        env:
+          DB_HOST: localhost
+          DB_PORT: '5432'
+          DB_NAME: gojogo
+          DB_USER: gojogo
+          DB_PASSWORD: gojogo
+          # A syntactically valid issuer that is never reached: the resource
+          # server only fetches JWKS when a request arrives, and none does.
+          COGNITO_ISSUER_URI: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ImKOJoJaA
+          SERVER_PORT: '8080'
+        run: |
+          set -o pipefail
+          timeout 180 java -jar target/*.jar 2>&1 | tee boot.log &
+          pid=$!
+          for i in $(seq 1 60); do
+            if curl -sf localhost:8080/actuator/health > /dev/null; then
+              echo "::notice::Application started against a freshly migrated database"
+              kill $pid 2>/dev/null || true
+              exit 0
+            fi
+            if ! kill -0 $pid 2>/dev/null; then break; fi
+            sleep 3
+          done
+          echo "::error::The application did not start — see the log below"
+          tail -80 boot.log
+          exit 1

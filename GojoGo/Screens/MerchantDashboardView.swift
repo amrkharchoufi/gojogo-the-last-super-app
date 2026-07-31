@@ -105,6 +105,7 @@ struct MerchantDashboardBody: View {
                 storeCard(store)
                 if store.isSuspended { suspendedNote }
                 statsStrip(store)
+                earningsCard
                 menuHeader
                 if store.menu.isEmpty {
                     emptyMenu
@@ -214,6 +215,103 @@ struct MerchantDashboardBody: View {
         }
         .padding(14)
         .glass(cornerRadius: 18, tint: GGColor.ink(0.10))
+    }
+
+    // MARK: Earnings (Phase 2e M3)
+
+    /// What the restaurant has actually been paid, and the way out to a bank.
+    ///
+    /// It states the commission it was charged rather than only the net, because
+    /// a merchant who has to work out what was deducted is a merchant who
+    /// eventually queries their statement.
+    private var earningsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("EARNINGS")
+                        .font(.ggMono(10, .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(GGColor.textTertiary)
+                    Text(WalletStore.money(app.merchantWallet?.availableMinor ?? 0,
+                                           currency: app.merchantWallet?.currency ?? "USD"))
+                        .font(.ggMono(26, .bold))
+                        .foregroundStyle(GGColor.textPrimary)
+                }
+                Spacer()
+                if let bps = app.merchantWallet?.commissionBps, bps > 0 {
+                    Text("\(bps / 100)% commission")
+                        .font(.ggMono(11, .semibold))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+            }
+
+            if let wallet = app.merchantWallet {
+                if !wallet.payoutsConfigured {
+                    Button {
+                        app.startPayoutOnboarding()
+                    } label: {
+                        payoutCapsule("Set up payouts")
+                    }
+                    .buttonStyle(PressableStyle())
+                    Text("Payouts go through Stripe, which asks for your bank details directly.")
+                        .explanatory(11)
+                        .foregroundStyle(GGColor.textTertiary)
+                } else if !wallet.payoutsReady {
+                    // Stripe's own words about what is still missing — only the
+                    // owner can act on them, so only they are shown them.
+                    Text(wallet.payoutsRequirement.isEmpty
+                         ? "Stripe is still reviewing your details."
+                         : "Stripe still needs: \(wallet.payoutsRequirement)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textSecondary)
+                    Button { app.startPayoutOnboarding() } label: {
+                        payoutCapsule("Finish setting up payouts")
+                    }
+                    .buttonStyle(PressableStyle())
+                } else if wallet.availableMinor >= wallet.payoutMinMinor {
+                    Button {
+                        app.requestPayout(wallet.availableMinor)
+                    } label: {
+                        payoutCapsule("Pay out \(WalletStore.money(wallet.availableMinor, currency: wallet.currency))")
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(app.merchantBusy)
+                } else {
+                    Text("Payouts start at \(WalletStore.money(wallet.payoutMinMinor, currency: wallet.currency)).")
+                        .explanatory(11)
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+
+                if !wallet.recent.isEmpty {
+                    Divider().background(GGColor.ink(0.1))
+                    ForEach(wallet.recent.prefix(4)) { line in
+                        HStack {
+                            Text(line.memo.isEmpty ? line.kind.capitalized : line.memo)
+                                .font(.system(size: 12))
+                                .foregroundStyle(GGColor.textSecondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(WalletStore.money(line.amountMinor, currency: wallet.currency))
+                                .font(.ggMono(12, .medium))
+                                .foregroundStyle(GGColor.textPrimary)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .glass(cornerRadius: 18, tint: GGColor.ink(0.05))
+        .task { await app.refreshMerchantWallet() }
+    }
+
+    private func payoutCapsule(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(GGColor.onAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(Capsule().fill(GGColor.white))
     }
 
     private func statsStrip(_ store: MerchantStorefront) -> some View {
