@@ -85,6 +85,9 @@ struct ProfileViewDTO: Decodable {
     /// The viewer owns this business — what turns a business page into "yours".
     var isOwner: Bool?
     var business: BusinessBlockDTO?
+    /// *You* blocked them (Phase 2e M5). Never the other way round: a profile
+    /// that blocked you 404s instead, so there is nothing here to read it from.
+    var blocked: Bool?
 }
 
 /// The business-only half of a profile view; nil for a person.
@@ -227,6 +230,9 @@ struct PostDTO: Decodable {
     /// Optional so a build either side of the tagging deploy still decodes the
     /// feed rather than dropping it.
     var mentions: [MentionDTO]?
+    /// A moderator hid this after a report (Phase 2e M5). Only ever true on your
+    /// own post — everyone else's reads simply don't contain it.
+    var hidden: Bool?
 }
 
 struct FeedDTO: Decodable {

@@ -6,6 +6,7 @@ import com.gojogo.messaging.ConversationContext;
 import com.gojogo.messaging.MessagingApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.social.SocialGraphApi;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -28,17 +29,29 @@ class ListingService {
     private final ProfileApi profiles;
     private final MediaApi media;
     private final MessagingApi messaging;
+    private final SocialGraphApi graph;
     private final ApplicationEventPublisher events;
 
     ListingService(ListingRepository listings, SavedListingRepository saves,
                    ProfileApi profiles, MediaApi media, MessagingApi messaging,
-                   ApplicationEventPublisher events) {
+                   SocialGraphApi graph, ApplicationEventPublisher events) {
         this.listings = listings;
         this.saves = saves;
         this.profiles = profiles;
         this.media = media;
         this.messaging = messaging;
+        this.graph = graph;
         this.events = events;
+    }
+
+    /** The id nobody has: JPQL cannot render {@code not in ()}, so the exclusion
+     *  list is padded rather than duplicating every browse query. */
+    private static final UUID NOBODY = new UUID(0L, 0L);
+
+    private Set<UUID> hiddenFrom(UUID me) {
+        Set<UUID> hidden = new java.util.HashSet<>(graph.blockedIds(me));
+        hidden.add(NOBODY);
+        return hidden;
     }
 
     @Transactional
@@ -66,9 +79,13 @@ class ListingService {
     ListingPageResponse browse(UUID me, String category, OffsetDateTime before, int limit) {
         OffsetDateTime cursor = before == null ? OffsetDateTime.now().plusMinutes(1) : before;
         int size = Math.clamp(limit, 1, 50);
+        // Blocking hides a seller's inventory too. It is not what a marketplace
+        // is for, but "I blocked them and their sofa is still in my grid" is the
+        // more surprising of the two outcomes.
+        Set<UUID> hidden = hiddenFrom(me);
         List<Listing> page = category == null || category.isBlank() || category.equalsIgnoreCase("All")
-            ? listings.browse(cursor, PageRequest.of(0, size))
-            : listings.browseByCategory(category, cursor, PageRequest.of(0, size));
+            ? listings.browse(cursor, hidden, PageRequest.of(0, size))
+            : listings.browseByCategory(category, cursor, hidden, PageRequest.of(0, size));
         List<ListingResponse> items = decorate(page, me);
         OffsetDateTime nextBefore = page.size() < size ? null : page.getLast().getCreatedAt();
         return new ListingPageResponse(items, nextBefore);
@@ -116,6 +133,12 @@ class ListingService {
     ListingResponse get(UUID me, UUID listingId) {
         Listing listing = listings.findById(listingId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such listing"));
+        // Same 404 and same wording as a listing that never existed: "you may
+        // not see this" still confirms there is a this.
+        if (graph.blockedBetween(me, listing.getSellerId())
+            || (listing.isHidden() && !listing.getSellerId().equals(me))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such listing");
+        }
         ListingResponse response = decorate(List.of(listing), me).getFirst();
         if (!listing.getSellerId().equals(me)) {
             // A seller browsing their own listing isn't interest. The response
@@ -182,6 +205,27 @@ class ListingService {
         }
         UUID conversationId = messaging.openDirectConversation(me, seller, listingContext(listing));
         return new ListingChatResponse(conversationId, seller, opener(listing));
+    }
+
+    /** Moderation's takedown (2e M5) — see {@code ModeratableContent}. Never
+     *  reached from this module's own REST surface, where a seller has edit,
+     *  pause and delete and nothing that could hide someone else's listing. */
+    @Transactional
+    void setHidden(UUID listingId, boolean hidden) {
+        listings.findById(listingId).ifPresent(l -> {
+            l.setHidden(hidden);
+            listings.save(l);
+        });
+    }
+
+    @Transactional
+    void removeAsModerator(UUID listingId) {
+        listings.findById(listingId).ifPresent(listings::delete);
+    }
+
+    @Transactional(readOnly = true)
+    java.util.Optional<Listing> find(UUID listingId) {
+        return listings.findById(listingId);
     }
 
     /** The card the messaging module carries on the thread — a pre-rendered

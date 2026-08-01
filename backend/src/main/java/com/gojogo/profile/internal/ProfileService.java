@@ -176,6 +176,14 @@ class ProfileService implements ProfileApi {
         });
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> signInSubject(UUID profileId) {
+        return repository.findById(profileId)
+            .map(UserProfile::getCognitoSub)
+            .filter(sub -> sub != null && !sub.isBlank());
+    }
+
     @Transactional
     ProfileDto updateOwn(String cognitoSub, String email, UpdateProfileRequest request) {
         UserProfile profile = repository.findByCognitoSub(cognitoSub)

@@ -41,6 +41,14 @@ class Post {
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
+    /**
+     * When a moderator hid this after a report (V28). Null for ~every row.
+     * A hidden post leaves every other reader's feed but stays visible, flagged,
+     * to its own author — the reversible half of a takedown.
+     */
+    @Column(name = "hidden_at")
+    private OffsetDateTime hiddenAt;
+
     @OneToMany(mappedBy = "post", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("sortOrder")
     private List<PostMedia> media = new ArrayList<>();
@@ -89,5 +97,13 @@ class Post {
 
     List<PostMedia> getMedia() {
         return media;
+    }
+
+    boolean isHidden() {
+        return hiddenAt != null;
+    }
+
+    void setHidden(boolean hidden) {
+        this.hiddenAt = hidden ? OffsetDateTime.now() : null;
     }
 }

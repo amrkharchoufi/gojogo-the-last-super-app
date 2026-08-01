@@ -146,6 +146,16 @@ export class GojoGoFargateStack extends cdk.Stack {
         'cognito-idp:AdminSetUserPassword',
         'cognito-idp:AdminInitiateAuth',
         'cognito-idp:AdminRespondToAuthChallenge',
+        // Trust & safety (2e M5): a moderator suspending an account, and a
+        // person deleting their own. Disabling is not deleting — the Cognito
+        // user survives, so both are reversible, which is what makes the
+        // 30-day deletion grace period and a lifted suspension possible.
+        // GlobalSignOut is the other half of a disable: without it the refresh
+        // token already on the device keeps minting access tokens for the
+        // pool's whole refresh window, and a "closed" account keeps working.
+        'cognito-idp:AdminDisableUser',
+        'cognito-idp:AdminEnableUser',
+        'cognito-idp:AdminUserGlobalSignOut',
       ],
       resources: [props.userPool.userPoolArn],
     }));

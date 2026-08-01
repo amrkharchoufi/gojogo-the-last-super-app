@@ -592,12 +592,32 @@ struct ProductDetailView: View {
                     MediaImage(url: product.imageURL, cornerRadius: 0)
                         .frame(height: 360)
                         .clipped()
-                    Button { app.closeProduct() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 34, height: 34)
-                            .background(Circle().fill(Color.black.opacity(0.45)))
+                    HStack(spacing: 10) {
+                        // Reporting a listing (2e M5). Not offered on your own —
+                        // a seller reporting themselves is a queue item with
+                        // nothing in it to decide, and the server refuses it.
+                        if !EconomyStore.shared.isOwn(product.id) {
+                            Menu {
+                                Button(role: .destructive) {
+                                    app.openReport(.listing, id: product.id, label: product.name)
+                                } label: {
+                                    Label("Report listing", systemImage: "flag")
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 34, height: 34)
+                                    .background(Circle().fill(Color.black.opacity(0.45)))
+                            }
+                        }
+                        Button { app.closeProduct() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(Color.black.opacity(0.45)))
+                        }
                     }
                     .padding(16)
                 }
@@ -733,6 +753,9 @@ struct ProductDetailView: View {
             .padding(.vertical, 12)
             .background(.ultraThinMaterial)
         }
+        // This screen is a fullScreenCover, so the root's copy cannot present
+        // over it and stands down while a listing is open.
+        .safetyPresentations(active: true)
     }
 }
 

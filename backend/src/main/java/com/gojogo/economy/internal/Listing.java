@@ -66,6 +66,12 @@ class Listing {
     @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
 
+    /** When a moderator hid this after a report (V28). It leaves the public grid
+     *  but stays, flagged, on the seller's own shelf — the reversible half of a
+     *  takedown. */
+    @Column(name = "hidden_at")
+    private OffsetDateTime hiddenAt;
+
     @OneToMany(mappedBy = "listing", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("sortOrder")
     private List<ListingMedia> media = new ArrayList<>();
@@ -176,5 +182,13 @@ class Listing {
 
     List<ListingMedia> getMedia() {
         return media;
+    }
+
+    boolean isHidden() {
+        return hiddenAt != null;
+    }
+
+    void setHidden(boolean hidden) {
+        this.hiddenAt = hidden ? OffsetDateTime.now() : null;
     }
 }

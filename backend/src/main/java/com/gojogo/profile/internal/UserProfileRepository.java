@@ -36,4 +36,20 @@ interface UserProfileRepository extends JpaRepository<UserProfile, UUID> {
                  length(p.handle), p.handle
         """)
     List<UserProfile> search(@Param("q") String query, Limit limit);
+
+    /**
+     * Accounts whose grace period has run out — the deletion sweep's only query.
+     *
+     * <p>Oldest request first, so a backlog after an outage is worked in the
+     * order people asked, and batched with a {@link Limit} so one very bad day
+     * cannot turn a nightly job into an hour-long transaction.
+     */
+    @Query("""
+        select p from UserProfile p
+        where p.deletionRequestedAt is not null
+          and p.anonymizedAt is null
+          and p.deletionRequestedAt < :cutoff
+        order by p.deletionRequestedAt asc
+        """)
+    List<UserProfile> deletionsDue(@Param("cutoff") java.time.OffsetDateTime cutoff, Limit limit);
 }

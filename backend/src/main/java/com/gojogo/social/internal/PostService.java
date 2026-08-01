@@ -29,18 +29,20 @@ class PostService {
     private final PostLikeRepository likes;
     private final PostBookmarkRepository bookmarks;
     private final FollowRepository follows;
+    private final BlockService blocks;
     private final ProfileApi profiles;
     private final MediaApi media;
     private final MentionService mentions;
     private final ApplicationEventPublisher events;
 
     PostService(PostRepository posts, PostLikeRepository likes, PostBookmarkRepository bookmarks,
-                FollowRepository follows, ProfileApi profiles, MediaApi media,
+                FollowRepository follows, BlockService blocks, ProfileApi profiles, MediaApi media,
                 MentionService mentions, ApplicationEventPublisher events) {
         this.posts = posts;
         this.likes = likes;
         this.bookmarks = bookmarks;
         this.follows = follows;
+        this.blocks = blocks;
         this.profiles = profiles;
         this.media = media;
         this.mentions = mentions;
@@ -89,14 +91,20 @@ class PostService {
         // followed excludes me — reused for both affinity scoring and decoration
         // (decoration must not mark my own posts as "following").
         Set<UUID> followed = follows.followeeIds(me);
+        // Blocking unfollows both ways, so a blocked author is already out of
+        // `followed` — but only the discovery feed below reaches strangers, and
+        // that is the path that needs telling.
+        Set<UUID> hidden = blocks.hiddenFrom(me);
         List<Post> page;
         if (followed.isEmpty()) {
             // Following no one yet: recency-based discovery feed.
-            page = posts.feedGlobal(cursor, PageRequest.of(0, size));
+            page = posts.feedGlobal(cursor, BlockService.orNobody(hidden), me,
+                PageRequest.of(0, size));
         } else {
             Set<UUID> authors = new java.util.HashSet<>(followed);
             authors.add(me);
-            page = posts.feedByAuthors(authors, cursor, PageRequest.of(0, size));
+            authors.removeAll(hidden);
+            page = posts.feedByAuthors(authors, cursor, me, PageRequest.of(0, size));
         }
         // The keyset cursor stays on createdAt (stable pagination — no skips or
         // dupes across pages); ranking re-orders *within* each fetched window so
@@ -129,7 +137,13 @@ class PostService {
 
     @Transactional(readOnly = true)
     List<PostResponse> byAuthor(UUID me, UUID authorId, int limit) {
-        return decorate(posts.findByAuthorIdOrderByCreatedAtDesc(authorId,
+        // A blocked person's grid is empty rather than forbidden: the profile
+        // screen above it already says what the relationship is, and a 403 here
+        // would just be a second way to say it.
+        if (blocks.between(me, authorId)) {
+            return List.of();
+        }
+        return decorate(posts.byAuthor(authorId, me,
             PageRequest.of(0, Math.clamp(limit, 1, 100))), me);
     }
 
@@ -137,6 +151,13 @@ class PostService {
     PostResponse get(UUID me, UUID postId) {
         Post post = posts.findById(postId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such post"));
+        // 404 rather than 403 for both blocking and a moderator's hide, and the
+        // same wording as a post that never existed: "you are not allowed to see
+        // this" still confirms that there is a this.
+        if (blocks.between(me, post.getAuthorId())
+            || (post.isHidden() && !post.getAuthorId().equals(me))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such post");
+        }
         return decorate(List.of(post), me).getFirst();
     }
 
@@ -156,6 +177,9 @@ class PostService {
     void like(UUID me, UUID postId) {
         Post post = posts.findById(postId).orElseThrow(() ->
             new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found"));
+        // Reads already refuse it; engaging with something you were served by a
+        // stale client must refuse too, or a block leaks a notification.
+        requireVisible(me, post);
         try {
             likes.saveAndFlush(new PostLike(postId, me));
             posts.bumpLikeCount(postId, 1);
@@ -175,7 +199,8 @@ class PostService {
 
     @Transactional
     void bookmark(UUID me, UUID postId) {
-        requireExists(postId);
+        requireVisible(me, posts.findById(postId).orElseThrow(() ->
+            new ResponseStatusException(HttpStatus.NOT_FOUND, "No such post")));
         try {
             bookmarks.saveAndFlush(new PostBookmark(postId, me));
         } catch (DataIntegrityViolationException alreadyBookmarked) {
@@ -219,7 +244,8 @@ class PostService {
                 bookmarked.contains(post.getId()),
                 post.getLikeCount(),
                 post.getCommentCount(),
-                tagged.getOrDefault(post.getId(), List.of()));
+                tagged.getOrDefault(post.getId(), List.of()),
+                post.isHidden());
         }).toList();
     }
 
@@ -233,9 +259,32 @@ class PostService {
             author.kind() == ProfileKind.BUSINESS, author.verified());
     }
 
-    private void requireExists(UUID postId) {
-        if (!posts.existsById(postId)) {
+    /** Same 404 and same wording as {@link #get} — see there for why. */
+    private void requireVisible(UUID me, Post post) {
+        if (blocks.between(me, post.getAuthorId())
+            || (post.isHidden() && !post.getAuthorId().equals(me))) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such post");
         }
+    }
+
+    /** Moderation's takedown (2e M5), reached through {@code ModeratableContent}
+     *  — never through this module's own REST surface, where an author has
+     *  delete and nothing else. */
+    @Transactional
+    void setHidden(UUID postId, boolean hidden) {
+        posts.findById(postId).ifPresent(post -> {
+            post.setHidden(hidden);
+            posts.save(post);
+        });
+    }
+
+    @Transactional
+    void removeAsModerator(UUID postId) {
+        posts.findById(postId).ifPresent(posts::delete);
+    }
+
+    @Transactional(readOnly = true)
+    java.util.Optional<Post> find(UUID postId) {
+        return posts.findById(postId);
     }
 }

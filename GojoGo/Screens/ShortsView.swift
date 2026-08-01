@@ -518,10 +518,16 @@ struct ShortCard: View {
             }
         } else {
             Divider()
+            // Local and silent — see WatchView's copy of the same pair.
             Button(role: .destructive) {
                 withAnimation(.easeOut(duration: 0.2)) { app.deleteShort(shortID) }
             } label: {
                 Label("Not interested", systemImage: "eye.slash")
+            }
+            Button(role: .destructive) {
+                app.openReport(.video, id: shortID, label: "@\(short.channel)'s short")
+            } label: {
+                Label("Report", systemImage: "flag")
             }
         }
     }

@@ -1,10 +1,11 @@
 package com.gojogo.partner.internal;
 
+import com.gojogo.auth.AdminActor;
+import com.gojogo.auth.PlatformAdminApi;
 import com.gojogo.profile.ProfileApi;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -31,7 +32,7 @@ import java.util.UUID;
  * the data behind it.
  *
  * <p>Two ways to authenticate, and they are not equal (see
- * {@link PlatformAdmins}): a real operator signs in with their own Cognito
+ * {@link PlatformAdminApi}): a real operator signs in with their own Cognito
  * account and carries the {@code platform-admin} group, which makes every
  * decision attributable to a person; the shared {@code PARTNER_ADMIN_TOKEN}
  * stays as break-glass for the operator with no console. Neither is on by
@@ -61,7 +62,6 @@ import java.util.UUID;
  * </pre>
  */
 @RestController
-@EnableConfigurationProperties(PartnerAdminProperties.class)
 class PartnerAdminController {
 
     static final String TOKEN_HEADER = "X-Partner-Admin-Token";
@@ -69,26 +69,15 @@ class PartnerAdminController {
     private static final Logger log = LoggerFactory.getLogger(PartnerAdminController.class);
 
     private final PartnerService partners;
-    private final PartnerAdminProperties props;
-    private final PlatformAdmins admins;
+    private final PlatformAdminApi admins;
     private final ProfileApi profiles;
 
-    PartnerAdminController(PartnerService partners, PartnerAdminProperties props,
-                           PlatformAdmins admins, ProfileApi profiles) {
+    PartnerAdminController(PartnerService partners, PlatformAdminApi admins, ProfileApi profiles) {
         this.partners = partners;
-        this.props = props;
         this.admins = admins;
         this.profiles = profiles;
         log.info("Partner review: members of the '{}' Cognito group can work the queue",
-            props.group());
-        if (props.tokenEnabled()) {
-            log.info("Partner review break-glass token is enabled");
-        } else if (props.tooShort()) {
-            log.warn("PARTNER_ADMIN_TOKEN is shorter than {} characters, so the break-glass "
-                + "path stays disabled", PartnerAdminProperties.MIN_TOKEN_LENGTH);
-        } else {
-            log.info("PARTNER_ADMIN_TOKEN is unset — the review queue is group-only");
-        }
+            admins.groupName());
     }
 
     /** The queue. Defaults to what's actually waiting on a human (SUBMITTED). */
@@ -231,7 +220,7 @@ class PartnerAdminController {
     }
 
     /** The operator's own account, or the break-glass token — see
-     *  {@link PlatformAdmins}, which 404s anyone who is neither. */
+     *  {@link PlatformAdminApi}, which 404s anyone who is neither. */
     private AdminActor authorize(String presented, Jwt jwt) {
         return admins.require(presented, jwt);
     }

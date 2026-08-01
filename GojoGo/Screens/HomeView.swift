@@ -697,6 +697,8 @@ struct InstagramPostCard: View {
                 Label("Delete post", systemImage: "trash")
             }
         } else {
+            // Local only, and deliberately so: "not for me" is a preference,
+            // not a complaint, and it should never queue work for a human.
             Button(role: .destructive) {
                 withAnimation(.ggTab) {
                     app.hidePost(live.id)
@@ -705,12 +707,22 @@ struct InstagramPostCard: View {
                 Label("Hide", systemImage: "eye.slash")
             }
 
+            // Report is a real report now (2e M5): it opens a sheet, asks what
+            // is wrong, and files it. It does *not* also hide the post —
+            // reporting is not a takedown, and quietly removing the thing would
+            // teach people that it is.
             Button(role: .destructive) {
-                withAnimation(.ggTab) {
-                    app.hidePost(live.id)
-                }
+                app.openReport(.post, id: live.id, label: "@\(live.author)'s post")
             } label: {
                 Label("Report", systemImage: "flag")
+            }
+
+            if let authorId = SocialStore.shared.authorIdByPost[live.id] {
+                Button(role: .destructive) {
+                    app.confirmBlock(profileId: authorId, handle: live.author)
+                } label: {
+                    Label("Block \(live.author)", systemImage: "hand.raised")
+                }
             }
         }
     }

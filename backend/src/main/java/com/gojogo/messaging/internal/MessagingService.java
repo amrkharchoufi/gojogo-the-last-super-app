@@ -6,6 +6,7 @@ import com.gojogo.messaging.internal.MessagingRepository.StoredMessage;
 import com.gojogo.messaging.internal.MessagingRepository.WorldProfile;
 import com.gojogo.media.MediaApi;
 import com.gojogo.messaging.ConversationContext;
+import com.gojogo.messaging.ConversationGuard;
 import com.gojogo.messaging.MessageSent;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
@@ -38,14 +39,18 @@ class MessagingService {
     private final Fanout fanout;
     private final MediaApi media;
     private final ApplicationEventPublisher events;
+    /** Whoever gets a say in whether two people may be put in a thread — today
+     *  just blocking, from {@code social}. Empty is a valid state. */
+    private final List<ConversationGuard> guards;
 
     MessagingService(MessagingRepository repo, ProfileApi profiles, Fanout fanout, MediaApi media,
-                     ApplicationEventPublisher events) {
+                     ApplicationEventPublisher events, List<ConversationGuard> guards) {
         this.repo = repo;
         this.profiles = profiles;
         this.fanout = fanout;
         this.media = media;
         this.events = events;
+        this.guards = guards;
     }
 
     // ---- conversations ----------------------------------------------------
@@ -74,6 +79,16 @@ class MessagingService {
         }
         List<UUID> ordered = new ArrayList<>(participants);
         boolean isDirect = ordered.size() == 2 && req.circleId() == null;
+
+        // Asked before the reuse path below, so a thread that already exists
+        // cannot be walked back into after a block. Reaching an existing
+        // conversation is opening one.
+        for (ConversationGuard guard : guards) {
+            String refusal = guard.refuseConversation(userId, ordered);
+            if (refusal != null) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, refusal);
+            }
+        }
 
         if (isDirect) {
             // The DIRECT#a#b pointer outlives the conversation it names: leaving a

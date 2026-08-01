@@ -2,6 +2,7 @@ package com.gojogo.watch.internal;
 
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.social.SocialGraphApi;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -30,25 +31,35 @@ class VideoCommentService {
     private final VideoRepository videos;
     private final VideoService videoService;
     private final ProfileApi profiles;
+    private final SocialGraphApi graph;
 
     VideoCommentService(VideoCommentRepository comments, VideoCommentLikeRepository commentLikes,
-                        VideoRepository videos, VideoService videoService, ProfileApi profiles) {
+                        VideoRepository videos, VideoService videoService, ProfileApi profiles,
+                        SocialGraphApi graph) {
         this.comments = comments;
         this.commentLikes = commentLikes;
         this.videos = videos;
         this.videoService = videoService;
         this.profiles = profiles;
+        this.graph = graph;
     }
 
     @Transactional(readOnly = true)
     List<VideoCommentResponse> forVideo(UUID me, UUID videoId) {
-        requireVideo(videoId);
-        return decorate(comments.findByVideoIdOrderByCreatedAtAsc(videoId), me);
+        videoService.requireVisible(me, videoId);
+        // Blocked commenters drop out of the thread, same as they do in social's
+        // (2e M5). No hidden flag here: a video comment isn't a moderation
+        // target — a report against a video is a report against the video.
+        Set<UUID> hidden = graph.blockedIds(me);
+        List<VideoComment> visible = comments.findByVideoIdOrderByCreatedAtAsc(videoId).stream()
+            .filter(c -> !hidden.contains(c.getAuthorId()))
+            .toList();
+        return decorate(visible, me);
     }
 
     @Transactional
     VideoCommentResponse create(UUID me, UUID videoId, String text) {
-        requireVideo(videoId);
+        videoService.requireVisible(me, videoId);
         VideoComment comment = comments.save(new VideoComment(videoId, me, text));
         videos.bumpCommentCount(videoId, 1);
         return decorate(List.of(comment), me).getFirst();
@@ -71,7 +82,11 @@ class VideoCommentService {
 
     @Transactional
     void like(UUID me, UUID commentId) {
-        requireComment(commentId);
+        VideoComment comment = comments.findById(commentId).orElseThrow(
+            () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such comment"));
+        if (graph.blockedBetween(me, comment.getAuthorId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such comment");
+        }
         try {
             commentLikes.saveAndFlush(new VideoCommentLike(commentId, me));
             comments.bumpLikeCount(commentId, 1);
@@ -106,15 +121,4 @@ class VideoCommentService {
             c.getCreatedAt())).toList();
     }
 
-    private void requireVideo(UUID videoId) {
-        if (!videos.existsById(videoId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such video");
-        }
-    }
-
-    private void requireComment(UUID commentId) {
-        if (!comments.existsById(commentId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such comment");
-        }
-    }
 }

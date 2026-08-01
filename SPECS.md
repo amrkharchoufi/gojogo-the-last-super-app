@@ -155,7 +155,21 @@ One document per merchant (later per business), versioned: `{version, blocks: [.
 
 ---
 
-## 10. Trust & safety baseline (new — was missing from vision *and* plan)
+## 10. Trust & safety baseline — **BUILT 2026-07-31** (blocking, reporting, account deletion)
+
+Built as specified for the three App Store blockers; the two ride-dependent items (SOS, live share links) are **not** built and moved to Phase 3 M5, where the trip they describe exists. Deviations worth recording:
+
+- **Blocking lives in `social`, and `messaging` does not read it.** The table sits next to `follow` because a block has to tear down the follow graph in the *same transaction* — a safety feature that is briefly wrong is a safety feature that failed. But `messaging` is a platform module, and a platform module asking a vertical for permission inverts the layering (ARCHITECTURE §2). So the rule is handed *down*: `messaging` defines a public `ConversationGuard` SPI, `social` implements it, and a messaging module with no guards on the classpath behaves exactly as before. `SocialGraphApi.blockedIds` covers the read side for `watch` and `economy`, which are verticals and may depend on one.
+- **Only one half of a block is disclosed.** "I blocked them" is a field on the profile view (it is the only place to undo it); "they blocked me" is a **404 on the profile**, with no field anywhere that could be read to infer it. Telling someone they were blocked hands them a reason to open a second account.
+- **Reportable kinds are the ones with a handler.** `POST | COMMENT | STORY | VIDEO | PROFILE | LISTING`. `MESSAGE`, `ORDER` and `RIDE` are deliberately absent: a report a moderator cannot see the content of is a queue item nobody can close, and a private DM in DynamoDB is not something this queue can render. Adding one later is an enum constant plus a handler bean — the column is a varchar for that reason.
+- **The vertical owns its content, so the vertical implements the takedown.** `moderation` stores a pointer and calls `ModeratableContent`, implemented in `social`/`watch`/`economy` — the same plugin shape as `ConversationGuard`, and the same direction (`vertical → platform`). An action a vertical can't perform (hiding a profile is a shadowban; deleting one is its owner's right) throws and becomes a 409 naming the combination, rather than a success that did nothing.
+- **`SUSPEND` on a business profile is refused by name.** A business has no sign-in of its own, so suspending one would silently lock out the person who owns it; the refusal names the owner so a moderator makes that call deliberately.
+- **One decision closes every open report on the same target; a dismissal closes only its own.** Forty rows for one viral post is a queue nobody can work — but somebody else's complaint about the same post may be a *different* complaint, and closing it unread would be a guess.
+- **Account deletion cannot be cancelled in-app.** Sign-in is disabled the instant it is requested (that is what makes the account gone from the user's side), which leaves no session to cancel from. An operator restores it from the moderation admin surface — which is what a support request would do anyway. The screen says so.
+- **A business owned by a deleted person survives and becomes unmanageable** (`actsFor` never matches a tombstoned owner again). Winding down a merchant has orders and money in it and is not a side effect of a personal deletion.
+- **Two modules were moved to break a cycle.** `auth` grew `PlatformAdminApi` (the single definition of "is this an operator", previously a private copy in `partner`) and `AccountAdminApi` (Cognito disable/enable). `profile` and `moderation` now depend on `auth`, so `auth`'s old dependency on `profile` had to go: **`POST /v1/auth/session` moved into `profile`, same URL**. No client change.
+
+### Original spec
 
 Required before social scale (and App Store UGC guideline 1.2: report + block + takedown).
 
@@ -170,7 +184,7 @@ Required before social scale (and App Store UGC guideline 1.2: report + block + 
 
 - **Phone signup** (vision lists it; currently email/Google/Apple only): Cognito `phone_number` alias + SMS OTP — **blocked on the existing SNS SMS production item** (PROGRESS "Needs YOU" #3); build only after that clears. Note: app-account phone is distinct from the My World phone identity by design — linking them is a product decision, default *not linked*.
 - **MFA** ("secure their account"): Cognito optional TOTP MFA, settings toggle. Low-effort, post-2e polish.
-- **Account deletion** (App Store requirement, missing): `DELETE /v1/me` → Cognito disable + 30-day grace → hard anonymize (profile scrub, content tombstone, ledger rows kept — legal). Needs a runbook slice alongside trust & safety.
+- ~~**Account deletion**~~ — **BUILT 2026-07-31** with 2e M5, exactly as written: `DELETE /v1/me` → Cognito disable (plus a global sign-out, or the refresh token on the device keeps minting access tokens) + a 30-day grace on a nightly sweep → anonymize. The tombstone *is* the content plan: every author summary in this codebase already renders a missing profile as "Deleted user", so scrubbing the row's identifying fields turns every old post into that for free, with no per-vertical cascade and no holes in other people's threads. Ledger rows untouched. See §10 for the two gaps (no in-app cancel, orphaned business profiles).
 
 ---
 

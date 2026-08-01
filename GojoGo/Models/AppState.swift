@@ -391,6 +391,29 @@ final class AppState: ObservableObject {
     @Published var actingBusinessID: UUID? = nil
     @Published var showBusinessProfiles: Bool = false
     @Published var businessBusy: Bool = false
+
+    // Trust & safety (Phase 2e M5). See AppState+Safety.swift.
+    /// What the report sheet is pointed at; nil when it is closed.
+    @Published var reportTarget: ReportTarget? = nil
+    /// The reason list, fetched from the server so the app never hardcodes one
+    /// that can grow. Starts as the shipped copy, so the sheet is never empty.
+    @Published var reportReasons: [ReportReason] = ReportReason.fallback
+    @Published var reportBusy: Bool = false
+    /// Set once a report is filed — the sheet becomes a thank-you rather than
+    /// a form somebody can submit twice.
+    @Published var reportSubmitted: Bool = false
+    @Published var reportNotice: String? = nil
+    /// Accounts *you* blocked, newest first. Who blocked you is deliberately
+    /// unknowable — there is no field for it here or on the wire.
+    @Published var blockedAccounts: [BlockedAccount] = []
+    @Published var showBlockedAccounts: Bool = false
+    /// A block waiting on its confirmation dialog.
+    @Published var pendingBlock: BlockCandidate? = nil
+    @Published var showDeleteAccount: Bool = false
+    @Published var deleteAccountBusy: Bool = false
+    @Published var deletionStatus: DeletionStatusDTO? = nil
+    /// Transient message for any of the above.
+    @Published var safetyNotice: String? = nil
     /// Transient message over the business sheet (a taken handle, a failed save).
     @Published var businessNotice: String? = nil
     var businessNoticeTask: Task<Void, Never>?
@@ -1975,6 +1998,17 @@ final class AppState: ObservableObject {
         businessNotice = nil
         ownedBusinesses = []
         showBusinessProfiles = false
+        // Trust & safety: the block list is per-account, so it must not survive
+        // into the next person who signs in on this device.
+        blockedAccounts = []
+        showBlockedAccounts = false
+        showDeleteAccount = false
+        pendingBlock = nil
+        reportTarget = nil
+        reportSubmitted = false
+        reportNotice = nil
+        safetyNotice = nil
+        deletionStatus = nil
         stopActingAsBusiness()
         WorldSocket.shared.disconnect()
         MessagingStore.shared.reset()

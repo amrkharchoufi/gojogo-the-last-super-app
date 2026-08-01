@@ -68,6 +68,17 @@ public interface ProfileApi {
     boolean actsFor(UUID callerProfileId, UUID profileId);
 
     /**
+     * The Cognito subject that signs in as this profile, for the callers that
+     * need to reach the <em>account</em> rather than the person — suspending
+     * somebody, and starting a deletion.
+     *
+     * <p>Empty for a business profile, which has no sign-in of its own: its
+     * owner does. That emptiness is load-bearing rather than a gap — it is what
+     * stops "suspend this shop" from quietly locking a person out.
+     */
+    Optional<String> signInSubject(UUID profileId);
+
+    /**
      * Grants or revokes the verified badge on a business. Reserved for a
      * partner approval/suspension — this is the only way a business becomes
      * verified, and the owner-scoped edit surface deliberately has no path to it.

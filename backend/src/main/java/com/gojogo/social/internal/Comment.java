@@ -43,6 +43,10 @@ class Comment {
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
+    /** When a moderator hid this after a report (V28) — see {@link Post}. */
+    @Column(name = "hidden_at")
+    private OffsetDateTime hiddenAt;
+
     protected Comment() {
     }
 
@@ -84,5 +88,13 @@ class Comment {
 
     OffsetDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    boolean isHidden() {
+        return hiddenAt != null;
+    }
+
+    void setHidden(boolean hidden) {
+        this.hiddenAt = hidden ? OffsetDateTime.now() : null;
     }
 }

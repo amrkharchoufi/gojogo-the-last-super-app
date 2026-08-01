@@ -69,6 +69,12 @@ class SecurityConfig {
                 // bearer token that *is* presented is still validated here, so
                 // a forged one never reaches the group check.
                 .requestMatchers("/v1/partner/admin/**").permitAll()
+                // The moderation queue, on exactly the same terms and for
+                // exactly the same reason: the break-glass token path has no
+                // JWT to present, so the endpoints authorize themselves through
+                // PlatformAdminApi and 404 anyone who is neither an operator nor
+                // holding the token.
+                .requestMatchers("/v1/moderation/admin/**").permitAll()
                 // Sumsub's verdict callback. The caller is a machine with no
                 // Cognito account, so its HMAC signature over the raw body is
                 // the authentication — checked in KycWebhookController before

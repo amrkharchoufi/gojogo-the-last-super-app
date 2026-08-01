@@ -14,15 +14,25 @@ import java.util.UUID;
 
 interface ListingRepository extends JpaRepository<Listing, UUID> {
 
+    /**
+     * The public grid. {@code hidden} is everyone a block stands between (2e M5)
+     * — padded by the caller so JPQL's {@code not in} always has something to
+     * compare against — and {@code hiddenAt} is a moderator's takedown, which
+     * the seller keeps seeing on their own shelf below.
+     */
     @Query("select l from Listing l where l.status = com.gojogo.economy.internal.ListingStatus.ACTIVE "
-        + "and l.createdAt < :before order by l.createdAt desc, l.id desc")
-    List<Listing> browse(@Param("before") OffsetDateTime before, Pageable page);
+        + "and l.createdAt < :before and l.sellerId not in :hidden and l.hiddenAt is null "
+        + "order by l.createdAt desc, l.id desc")
+    List<Listing> browse(@Param("before") OffsetDateTime before,
+                         @Param("hidden") Collection<UUID> hidden, Pageable page);
 
     @Query("select l from Listing l where l.status = com.gojogo.economy.internal.ListingStatus.ACTIVE "
         + "and l.category = :category and l.createdAt < :before "
+        + "and l.sellerId not in :hidden and l.hiddenAt is null "
         + "order by l.createdAt desc, l.id desc")
     List<Listing> browseByCategory(@Param("category") String category,
-                                   @Param("before") OffsetDateTime before, Pageable page);
+                                   @Param("before") OffsetDateTime before,
+                                   @Param("hidden") Collection<UUID> hidden, Pageable page);
 
     List<Listing> findBySellerIdOrderByCreatedAtDesc(UUID sellerId, Pageable page);
 

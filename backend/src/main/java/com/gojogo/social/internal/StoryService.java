@@ -149,7 +149,7 @@ class StoryService {
         authorIds.add(me);
         // Whose close-friends lists am I on? Everything else restricted drops out.
         Set<UUID> trustedBy = closeFriends.ownersWhoTrust(me);
-        List<StoryFrame> active = frames.liveByAuthors(authorIds, OffsetDateTime.now()).stream()
+        List<StoryFrame> active = frames.liveByAuthors(authorIds, OffsetDateTime.now(), me).stream()
             .filter(f -> StoryHighlightService.visibleTo(f, me, trustedBy.contains(f.getAuthorId())))
             .toList();
         if (active.isEmpty()) {
@@ -206,6 +206,33 @@ class StoryService {
             .map(StoryFrameDto::createdAt)
             .max(Comparator.naturalOrder())
             .orElse(OffsetDateTime.MIN);
+    }
+
+    /** Moderation's takedown (2e M5) — see {@code ModeratableContent}. A story
+     *  expires on its own in 24 hours, so a hide here mostly matters for the
+     *  archive and any highlight it was pinned into. */
+    @Transactional
+    void setHidden(UUID frameId, boolean hidden) {
+        frames.findById(frameId).ifPresent(frame -> {
+            frame.setHidden(hidden);
+            frames.save(frame);
+        });
+    }
+
+    /** Soft, like the author's own delete: a story's viewers and replies are
+     *  somebody's record of a conversation, and the frame is unreachable either
+     *  way. */
+    @Transactional
+    void removeAsModerator(UUID frameId) {
+        frames.findById(frameId).ifPresent(frame -> {
+            frame.softDelete();
+            frames.save(frame);
+        });
+    }
+
+    @Transactional(readOnly = true)
+    java.util.Optional<StoryFrame> findFrame(UUID frameId) {
+        return frames.findById(frameId).filter(f -> f.getDeletedAt() == null);
     }
 
     private Map<UUID, Integer> viewerCounts(Set<UUID> frameIds) {

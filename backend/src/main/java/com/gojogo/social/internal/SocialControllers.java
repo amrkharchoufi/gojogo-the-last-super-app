@@ -171,6 +171,43 @@ class FollowController {
     }
 }
 
+/**
+ * Blocking (SPECS §10). Separate from {@link FollowController} because it is the
+ * opposite kind of relationship and reads as one in the routing table, not
+ * because the two don't touch — a block unfollows, in the same transaction.
+ *
+ * <p>There is deliberately no way to ask "who blocked me": the list is your own
+ * blocks, which are the only ones you can undo.
+ */
+@RestController
+class BlockController {
+
+    private final BlockService blocks;
+    private final CurrentProfiles current;
+
+    BlockController(BlockService blocks, CurrentProfiles current) {
+        this.blocks = blocks;
+        this.current = current;
+    }
+
+    @GetMapping("/v1/me/blocks")
+    List<BlockedProfileDto> mine(@AuthenticationPrincipal Jwt jwt) {
+        return blocks.mine(current.require(jwt).id());
+    }
+
+    @PostMapping("/v1/profiles/{profileId}/block")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void block(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId) {
+        blocks.block(current.require(jwt).id(), profileId);
+    }
+
+    @DeleteMapping("/v1/profiles/{profileId}/block")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void unblock(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID profileId) {
+        blocks.unblock(current.require(jwt).id(), profileId);
+    }
+}
+
 @RestController
 class StoryController {
 

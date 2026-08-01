@@ -69,6 +69,15 @@ class StoryFrame {
     @Column(name = "deleted_at")
     private OffsetDateTime deletedAt;
 
+    /**
+     * When a moderator hid this after a report (V28), as distinct from
+     * {@code deletedAt}, which is the author's own removal. Both make the frame
+     * invisible; only one of them is reversible, and only one of them is
+     * something the author did.
+     */
+    @Column(name = "hidden_at")
+    private OffsetDateTime hiddenAt;
+
     /** The sound on this frame, if any — a snapshot, not a join. See V16. */
     @Embedded
     private StoryMusic music;
@@ -155,6 +164,14 @@ class StoryFrame {
 
     void softDelete() {
         this.deletedAt = OffsetDateTime.now();
+    }
+
+    boolean isHidden() {
+        return hiddenAt != null;
+    }
+
+    void setHidden(boolean hidden) {
+        this.hiddenAt = hidden ? OffsetDateTime.now() : null;
     }
 
     /** Every URL this frame references, for {@code MediaApi.markReferenced}. */

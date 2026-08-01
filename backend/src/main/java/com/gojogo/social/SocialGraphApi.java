@@ -29,4 +29,23 @@ public interface SocialGraphApi {
      * caller can tell "nobody yet" apart from "unknown".
      */
     Map<UUID, Long> followerCounts(Collection<UUID> profileIds);
+
+    /**
+     * Everyone this user must not see, <em>and</em> must not be seen by.
+     *
+     * <p>A block is recorded one-directionally and enforced symmetrically, and
+     * this set is already both halves — a caller filters a page of content
+     * against it and is done. There is no API that returns only "who I blocked",
+     * because a consumer that used it would leave the blocked person reading
+     * everything, which is the whole thing blocking exists to stop.
+     *
+     * <p>Read it once per request and filter in memory; it is small (a person
+     * blocks tens of accounts, not thousands) and one query beats a check per
+     * row.
+     */
+    Set<UUID> blockedIds(UUID userId);
+
+    /** The same question about one specific pair, for a caller that has two ids
+     *  rather than a page of content. Order does not matter. */
+    boolean blockedBetween(UUID a, UUID b);
 }

@@ -365,6 +365,19 @@ struct StoryViewer: View {
                     app.toggleStoryMute(authorID: story.id)
                     dismissViewer()
                 }
+                // A story expires in 24 hours, which is exactly why reporting
+                // one has to be reachable while it is on screen (2e M5). The
+                // viewer is dismissed first: the report sheet cannot present
+                // over a full-screen overlay that is still advancing.
+                if let frame, StoriesStore.shared.isLive(frame.id) {
+                    Button("Report", role: .destructive) {
+                        let name = story.name
+                        dismissViewer()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            app.openReport(.story, id: frame.id, label: "\(name)'s story")
+                        }
+                    }
+                }
             }
             Button("Cancel", role: .cancel) { setPaused(false) }
         }

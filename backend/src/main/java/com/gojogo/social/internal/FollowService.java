@@ -21,14 +21,17 @@ class FollowService {
 
     private final FollowRepository follows;
     private final PostRepository posts;
+    private final BlockService blocks;
     private final ProfileApi profiles;
     private final StorefrontApi storefronts;
     private final ApplicationEventPublisher events;
 
-    FollowService(FollowRepository follows, PostRepository posts, ProfileApi profiles,
-                  StorefrontApi storefronts, ApplicationEventPublisher events) {
+    FollowService(FollowRepository follows, PostRepository posts, BlockService blocks,
+                  ProfileApi profiles, StorefrontApi storefronts,
+                  ApplicationEventPublisher events) {
         this.follows = follows;
         this.posts = posts;
+        this.blocks = blocks;
         this.profiles = profiles;
         this.storefronts = storefronts;
         this.events = events;
@@ -40,6 +43,11 @@ class FollowService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot follow yourself");
         }
         requireProfile(followeeId);
+        // Following back across a block would undo it silently — and the person
+        // being followed would get a notification naming someone they blocked.
+        if (blocks.between(me, followeeId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such profile");
+        }
         try {
             follows.saveAndFlush(new Follow(me, followeeId));
             events.publishEvent(new UserFollowed(me, followeeId));
@@ -63,6 +71,15 @@ class FollowService {
     @Transactional(readOnly = true)
     ProfileViewResponse view(UUID me, UUID profileId) {
         ProfileDto profile = requireProfile(profileId);
+        // **Only one half of a block is disclosed.** If I blocked them, the
+        // screen has to say so — it is the only place I can undo it. If *they*
+        // blocked me, the profile is simply not there: telling someone they were
+        // blocked hands them a reason to open a second account, and "this
+        // account is unavailable" is what every product settled on.
+        boolean iBlocked = blocks.iBlocked(me, profileId);
+        if (!iBlocked && blocks.between(me, profileId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such profile");
+        }
         String name = profile.displayName() != null ? profile.displayName() : profile.handle();
         // A business is a profile, so this is the public read for one too — the
         // extra block is the only difference, and it's null for a person.
@@ -95,7 +112,8 @@ class FollowService {
             profile.verified(),
             business != null && me.equals(business.ownerProfileId()),
             business,
-            home);
+            home,
+            iBlocked);
     }
 
     private ProfileDto requireProfile(UUID profileId) {

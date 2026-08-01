@@ -75,6 +75,15 @@ class UserProfile {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    /** When this person asked to be deleted. Sign-in was disabled the same
+     *  instant; this column is the clock the grace period runs on (V28). */
+    @Column(name = "deletion_requested_at")
+    private OffsetDateTime deletionRequestedAt;
+
+    /** When the grace ran out and the row was actually scrubbed. */
+    @Column(name = "anonymized_at")
+    private OffsetDateTime anonymizedAt;
+
     protected UserProfile() {
     }
 
@@ -186,5 +195,52 @@ class UserProfile {
 
     void setInterests(Set<String> interests) {
         this.interests = new HashSet<>(interests);
+    }
+
+    OffsetDateTime getDeletionRequestedAt() {
+        return deletionRequestedAt;
+    }
+
+    OffsetDateTime getAnonymizedAt() {
+        return anonymizedAt;
+    }
+
+    void requestDeletion() {
+        this.deletionRequestedAt = OffsetDateTime.now();
+    }
+
+    void cancelDeletion() {
+        this.deletionRequestedAt = null;
+    }
+
+    /**
+     * The scrub itself.
+     *
+     * <p><b>The row survives and the person does not.</b> Deleting it would take
+     * every foreign key that points at it — and, more to the point, would leave
+     * holes in other people's threads, because every author summary in this
+     * codebase reads a profile. What is removed is everything that identifies
+     * somebody: name, handle, email, avatar, bio, birth year, interests, and the
+     * Cognito subject that tied the row to a login. What is left is an id, which
+     * is what turns their old posts into "Deleted user" everywhere, for free.
+     *
+     * <p>Clearing {@code cognitoSub} is also what lets the same person sign up
+     * again later with the same email: they get a new, empty profile rather than
+     * walking back into the one they asked us to destroy.
+     *
+     * @param tombstoneHandle a unique, obviously-dead handle — the column is
+     *                        NOT NULL and UNIQUE, so it cannot simply be emptied
+     */
+    void anonymize(String tombstoneHandle) {
+        this.cognitoSub = null;
+        this.email = null;
+        this.displayName = null;
+        this.handle = tombstoneHandle;
+        this.bio = "";
+        this.category = "";
+        this.birthYear = null;
+        this.avatarUrl = null;
+        this.interests = new HashSet<>();
+        this.anonymizedAt = OffsetDateTime.now();
     }
 }

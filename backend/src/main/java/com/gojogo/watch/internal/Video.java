@@ -58,6 +58,11 @@ class Video {
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
+    /** When a moderator hid this after a report (V28). Its author still sees it,
+     *  flagged; nobody else does. Distinct from delete, which is not undoable. */
+    @Column(name = "hidden_at")
+    private OffsetDateTime hiddenAt;
+
     protected Video() {
     }
 
@@ -132,5 +137,13 @@ class Video {
 
     OffsetDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    boolean isHidden() {
+        return hiddenAt != null;
+    }
+
+    void setHidden(boolean hidden) {
+        this.hiddenAt = hidden ? OffsetDateTime.now() : null;
     }
 }

@@ -14,19 +14,36 @@ import java.util.UUID;
 
 interface VideoRepository extends JpaRepository<Video, UUID> {
 
-    /** One kind's feed, newest first, keyset-paged on createdAt. */
+    /**
+     * One kind's feed, newest first, keyset-paged on createdAt.
+     *
+     * <p>{@code hidden} is everyone a block stands between (2e M5) — Watch has
+     * no follow filter of its own, so a stranger's short reaches everybody and
+     * this query is the only thing standing between the two of you. It is padded
+     * to never be empty by the caller, since JPQL cannot render {@code not in ()}.
+     * {@code hiddenAt} is the moderator's takedown, which its own author keeps
+     * seeing.
+     */
     @Query("select v from Video v where v.kind = :kind and v.createdAt < :before "
+        + "and v.authorId not in :hidden "
+        + "and (v.hiddenAt is null or v.authorId = :viewer) "
         + "order by v.createdAt desc, v.id desc")
-    List<Video> feed(@Param("kind") VideoKind kind,
-                     @Param("before") OffsetDateTime before, Pageable page);
+    List<Video> feed(@Param("kind") VideoKind kind, @Param("before") OffsetDateTime before,
+                     @Param("hidden") Collection<UUID> hidden, @Param("viewer") UUID viewer,
+                     Pageable page);
 
     /** A channel's own videos — the profile grid and "your videos". */
     @Query("select v from Video v where v.authorId = :authorId and v.kind = :kind "
+        + "and (v.hiddenAt is null or v.authorId = :viewer) "
         + "order by v.createdAt desc, v.id desc")
-    List<Video> byAuthor(@Param("authorId") UUID authorId, @Param("kind") VideoKind kind, Pageable page);
+    List<Video> byAuthor(@Param("authorId") UUID authorId, @Param("kind") VideoKind kind,
+                         @Param("viewer") UUID viewer, Pageable page);
 
-    @Query("select v from Video v where v.authorId = :authorId order by v.createdAt desc, v.id desc")
-    List<Video> byAuthor(@Param("authorId") UUID authorId, Pageable page);
+    @Query("select v from Video v where v.authorId = :authorId "
+        + "and (v.hiddenAt is null or v.authorId = :viewer) "
+        + "order by v.createdAt desc, v.id desc")
+    List<Video> byAuthor(@Param("authorId") UUID authorId, @Param("viewer") UUID viewer,
+                         Pageable page);
 
     /** Everything the user saved, newest-saved first. */
     @Query("select v from Video v where v.id in "

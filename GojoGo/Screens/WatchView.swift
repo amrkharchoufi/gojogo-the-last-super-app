@@ -290,12 +290,21 @@ struct VideoCard: View {
                 Label("Delete video", systemImage: "trash")
             }
         } else {
+            // "Not interested" is local and silent — a preference, not a
+            // complaint, and it should never queue work for a human.
             Button(role: .destructive) {
                 withAnimation(.ggTab) {
                     app.reportVideo(live.id)
                 }
             } label: {
                 Label("Not interested", systemImage: "eye.slash")
+            }
+            // Report is the real one (2e M5). It does not also remove the video
+            // from the feed: reporting is not a takedown.
+            Button(role: .destructive) {
+                app.openReport(.video, id: live.id, label: live.title)
+            } label: {
+                Label("Report", systemImage: "flag")
             }
         }
     }

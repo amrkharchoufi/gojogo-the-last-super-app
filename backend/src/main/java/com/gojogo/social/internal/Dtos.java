@@ -27,10 +27,16 @@ record MediaItemDto(UUID id, String imageUrl, String videoUrl) {
 record MentionDto(UUID profileId, String handle) {
 }
 
+/**
+ * @param hidden a moderator hid this after a report. Only ever true on your own
+ *               post — everyone else's reads simply don't contain it — and the
+ *               app shows the author a banner rather than leaving them to
+ *               wonder why the likes stopped.
+ */
 record PostResponse(UUID id, AuthorSummary author, OffsetDateTime createdAt, String text,
                     float imageAspect, List<MediaItemDto> mediaItems,
                     boolean liked, boolean bookmarked, int likeCount, int commentCount,
-                    List<MentionDto> mentions) {
+                    List<MentionDto> mentions, boolean hidden) {
 }
 
 record FeedResponse(List<PostResponse> posts, OffsetDateTime nextBefore) {
@@ -164,12 +170,21 @@ record CloseFriendDto(UUID id, String name, String handle, String avatarUrl) {
  * @param home     the blocks a business arranged on its own page (SPECS §9);
  *                 always present, and empty (version 0) for a person and for a
  *                 business that has never arranged one
+ * @param blocked  <em>I</em> blocked them. Never the other way round: a profile
+ *                 that blocked me 404s instead, so there is no field a client
+ *                 could read to learn it was blocked
  */
 record ProfileViewResponse(UUID id, String name, String handle, String avatarUrl, String bio,
                            String category, long postCount, long followerCount,
                            long followingCount, boolean isOwn, boolean following,
                            String kind, boolean verified, boolean isOwner,
-                           BusinessBlock business, StorefrontDocument home) {
+                           BusinessBlock business, StorefrontDocument home,
+                           boolean blocked) {
+}
+
+/** An account on your own block list, and when you put it there. */
+record BlockedProfileDto(UUID id, String name, String handle, String avatarUrl,
+                         OffsetDateTime blockedAt) {
 }
 
 record BusinessBlock(UUID ownerProfileId, String contactPhone, String contactEmail,

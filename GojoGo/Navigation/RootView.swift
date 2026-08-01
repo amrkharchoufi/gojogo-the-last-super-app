@@ -164,6 +164,12 @@ struct MainAppView: View {
         )) {
             WalletView().environmentObject(app)
         }
+        // Reporting and blocking, from anywhere: a post in the feed, a comment,
+        // a profile. The profile and the comments sheet declare their own copies
+        // (a sheet can't present over a sheet) and this one stands down while
+        // either is up — the same shape as the wallet above.
+        .safetyPresentations(active: !app.showProfile && app.commentingPostID == nil
+                             && app.browsingProduct == nil)
         // The long-form player is a fullScreenCover and owns its own comments
         // drawer — presenting from here while it's up dismisses the player.
         .sheet(isPresented: Binding(

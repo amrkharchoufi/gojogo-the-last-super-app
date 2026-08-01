@@ -40,6 +40,11 @@ struct CommentsSheet: View {
             autocomplete.localSource = { [weak app] in app?.mentionCandidates ?? [] }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { focused = true }
         }
+        // Reporting opens from a comment's context menu here. This sheet is
+        // itself a sheet, so the root's copy can't present over it and stands
+        // down whenever a thread is open — including the embedded case inside
+        // the long-form player, which is why this is unconditional.
+        .safetyPresentations(active: true)
     }
 
     private var panel: some View {
@@ -242,5 +247,21 @@ struct CommentsSheet: View {
             }
             Spacer(minLength: 0)
         }
+        // Long-press rather than a visible control: a report button next to
+        // every comment is a report button people press to see what it does.
+        // Only on other people's — your own has delete, one level up.
+        .contextMenu {
+            if !isMine(c), canReply {
+                Button(role: .destructive) {
+                    app.openReport(.comment, id: c.id, label: "@\(c.author)'s comment")
+                } label: {
+                    Label("Report comment", systemImage: "flag")
+                }
+            }
+        }
+    }
+
+    private func isMine(_ c: Comment) -> Bool {
+        c.author.caseInsensitiveCompare(app.user.handle) == .orderedSame
     }
 }

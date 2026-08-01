@@ -303,6 +303,19 @@ struct ProfileView: View {
         .sheet(isPresented: $app.showSettings) {
             SettingsView().environmentObject(app)
         }
+        // Both open from Settings, which opens from here — so they present from
+        // here too. One owner per AppState-driven sheet, or it silently refuses.
+        .sheet(isPresented: $app.showBlockedAccounts) {
+            BlockedAccountsView().environmentObject(app)
+        }
+        .sheet(isPresented: $app.showDeleteAccount) {
+            DeleteAccountView().environmentObject(app)
+        }
+        // Report and block open from this screen's menu, so they present from
+        // here; the root's copy stands down while this page is up. A comments
+        // thread opened *over* this profile owns them instead — it is a real
+        // sheet, and this page cannot present over one.
+        .safetyPresentations(active: app.commentingPostID == nil)
         // The wallet is presented by the root instead: delivery checkout opens
         // it too (a 402 offers a top-up), and the root is the one presenter
         // that is alive on every screen. It stands down while this profile
@@ -451,10 +464,30 @@ struct ProfileView: View {
                         Label("Copy link", systemImage: "link")
                     }
                     Divider()
+                    // Both act on the account, and they are different things:
+                    // reporting asks us to look, blocking is the person doing
+                    // something about it themselves without waiting for us.
                     Button(role: .destructive) {
-                        app.closeProfile()
+                        guard let id = SocialStore.shared.profileId(forHandle: profile.handle)
+                        else { return }
+                        app.openReport(.profile, id: id, label: "@\(profile.handle)")
                     } label: {
-                        Label("Report", systemImage: "flag")
+                        Label("Report account", systemImage: "flag")
+                    }
+                    if let id = SocialStore.shared.profileId(forHandle: profile.handle) {
+                        if app.blockedAccounts.contains(where: { $0.id == id }) {
+                            Button {
+                                Task { await app.unblock(profileId: id) }
+                            } label: {
+                                Label("Unblock", systemImage: "hand.raised.slash")
+                            }
+                        } else {
+                            Button(role: .destructive) {
+                                app.confirmBlock(profileId: id, handle: profile.handle)
+                            } label: {
+                                Label("Block", systemImage: "hand.raised")
+                            }
+                        }
                     }
                 }
             } label: {

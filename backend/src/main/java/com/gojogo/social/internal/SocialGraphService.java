@@ -16,9 +16,11 @@ import java.util.UUID;
 class SocialGraphService implements SocialGraphApi {
 
     private final FollowRepository follows;
+    private final BlockService blocks;
 
-    SocialGraphService(FollowRepository follows) {
+    SocialGraphService(FollowRepository follows, BlockService blocks) {
         this.follows = follows;
+        this.blocks = blocks;
     }
 
     @Override
@@ -44,5 +46,17 @@ class SocialGraphService implements SocialGraphApi {
             counts.put((UUID) row[0], (Long) row[1]);
         }
         return counts;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Set<UUID> blockedIds(UUID userId) {
+        return blocks.hiddenFrom(userId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean blockedBetween(UUID a, UUID b) {
+        return blocks.between(a, b);
     }
 }

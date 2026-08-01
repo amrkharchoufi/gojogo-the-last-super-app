@@ -30,6 +30,7 @@ struct SettingsView: View {
                     account
                     money
                     audience
+                    safety
                     appearance
                     about
                     signOut
@@ -40,7 +41,11 @@ struct SettingsView: View {
             }
         }
         .background(GGColor.sheetBG.ignoresSafeArea())
-        .task { await app.refreshWallet() }
+        .task {
+            await app.refreshWallet()
+            // So the Blocked row can show a count without being opened.
+            await app.refreshBlockedAccounts()
+        }
     }
 
     // MARK: Chrome
@@ -109,6 +114,23 @@ struct SettingsView: View {
             divider
             row("Story archive", "clock.arrow.circlepath") {
                 open { app.showStoryArchive = true }
+            }
+        }
+    }
+
+    /// Phase 2e M5. "Delete account" sits here rather than under Account
+    /// because it is not a setting you adjust — grouping it with the block list
+    /// puts both of the "I need this to stop" controls in one place, and App
+    /// Store review looks for exactly this to be findable without support.
+    private var safety: some View {
+        group("Safety") {
+            row("Blocked accounts", "hand.raised",
+                detail: app.blockedAccounts.isEmpty ? "" : "\(app.blockedAccounts.count)") {
+                open { app.showBlockedAccounts = true }
+            }
+            divider
+            row("Delete account", "trash") {
+                open { app.showDeleteAccount = true }
             }
         }
     }

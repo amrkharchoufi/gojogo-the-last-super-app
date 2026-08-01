@@ -14,15 +14,35 @@ import java.util.UUID;
 
 interface PostRepository extends JpaRepository<Post, UUID> {
 
+    /**
+     * {@code hiddenAt is null or authorId = :viewer} is the moderation hide,
+     * expressed in the one place it can be paged correctly. Filtering it in Java
+     * after the fetch would quietly shrink every page by however many posts a
+     * moderator had touched.
+     */
     @Query("select p from Post p where p.authorId in :authors and p.createdAt < :before "
+        + "and (p.hiddenAt is null or p.authorId = :viewer) "
         + "order by p.createdAt desc, p.id desc")
     List<Post> feedByAuthors(@Param("authors") Collection<UUID> authors,
-                             @Param("before") OffsetDateTime before, Pageable page);
+                             @Param("before") OffsetDateTime before,
+                             @Param("viewer") UUID viewer, Pageable page);
 
-    @Query("select p from Post p where p.createdAt < :before order by p.createdAt desc, p.id desc")
-    List<Post> feedGlobal(@Param("before") OffsetDateTime before, Pageable page);
+    /** The discovery feed, which is the one place a blocked stranger's post
+     *  could otherwise reach you — you never followed them, so unfollowing on
+     *  block does nothing here. */
+    @Query("select p from Post p where p.createdAt < :before "
+        + "and p.authorId not in :hidden "
+        + "and (p.hiddenAt is null or p.authorId = :viewer) "
+        + "order by p.createdAt desc, p.id desc")
+    List<Post> feedGlobal(@Param("before") OffsetDateTime before,
+                          @Param("hidden") Collection<UUID> hidden,
+                          @Param("viewer") UUID viewer, Pageable page);
 
-    List<Post> findByAuthorIdOrderByCreatedAtDesc(UUID authorId, Pageable page);
+    @Query("select p from Post p where p.authorId = :authorId "
+        + "and (p.hiddenAt is null or p.authorId = :viewer) "
+        + "order by p.createdAt desc")
+    List<Post> byAuthor(@Param("authorId") UUID authorId, @Param("viewer") UUID viewer,
+                        Pageable page);
 
     long countByAuthorId(UUID authorId);
 
@@ -111,13 +131,60 @@ interface FollowRepository extends JpaRepository<Follow, Follow.Key> {
     int deleteByFollowerIdAndFolloweeId(@Param("followerId") UUID followerId, @Param("followeeId") UUID followeeId);
 }
 
+interface BlockRepository extends JpaRepository<Block, Block.Key> {
+
+    /**
+     * The two halves of "who can't see me and who can't I see". They are
+     * deliberately <em>not</em> exposed past {@link BlockService}, which is the
+     * only thing that unions them: a caller free to use one direction on its own
+     * would write the bug that makes blocking useless — the person you blocked
+     * still reading everything.
+     *
+     * <p>Two plain queries rather than one clever {@code case when} projection
+     * because nothing on the machine this project is built from can execute
+     * JPQL: the boring form is the one that cannot first fail in production
+     * (see PROGRESS.md, "No local database"). Both are index-only lookups.
+     */
+    @Query("select b.blockedId from Block b where b.blockerId = :me")
+    Set<UUID> blockedBy(@Param("me") UUID me);
+
+    @Query("select b.blockerId from Block b where b.blockedId = :me")
+    Set<UUID> blockersOf(@Param("me") UUID me);
+
+    /** The same question about one specific pair — a count rather than a
+     *  boolean projection, for the same reason. */
+    @Query("select count(b) from Block b where "
+        + "(b.blockerId = :a and b.blockedId = :b) or (b.blockerId = :b and b.blockedId = :a)")
+    long countBetween(@Param("a") UUID a, @Param("b") UUID b);
+
+    /** Only what I did — the list the settings screen offers to undo. */
+    List<Block> findByBlockerIdOrderByCreatedAtDesc(UUID blockerId);
+
+    long countByBlockerId(UUID blockerId);
+
+    @Modifying
+    @Query("delete from Block b where b.blockerId = :blockerId and b.blockedId = :blockedId")
+    int deleteByBlockerIdAndBlockedId(@Param("blockerId") UUID blockerId,
+                                      @Param("blockedId") UUID blockedId);
+}
+
 interface StoryFrameRepository extends JpaRepository<StoryFrame, UUID> {
 
-    /** The rings read: unexpired, undeleted frames, oldest first within an author. */
+    /**
+     * The rings read: unexpired, undeleted frames, oldest first within an author.
+     *
+     * <p>A moderator's hide drops out here but not from
+     * {@link #archiveOf(UUID, Pageable)} — the author keeps seeing their own,
+     * which is the whole difference between hiding and deleting. Blocked authors
+     * need no clause: a block unfollows both ways in the same transaction, and
+     * a ring is only ever built from people you follow.
+     */
     @Query("select f from StoryFrame f where f.authorId in :authorIds "
-        + "and f.expiresAt > :now and f.deletedAt is null order by f.createdAt asc")
+        + "and f.expiresAt > :now and f.deletedAt is null "
+        + "and (f.hiddenAt is null or f.authorId = :viewer) order by f.createdAt asc")
     List<StoryFrame> liveByAuthors(@Param("authorIds") Collection<UUID> authorIds,
-                                   @Param("now") OffsetDateTime now);
+                                   @Param("now") OffsetDateTime now,
+                                   @Param("viewer") UUID viewer);
 
     /** Your archive — every frame you ever posted and haven't deleted, expiry ignored. */
     @Query("select f from StoryFrame f where f.authorId = :authorId and f.deletedAt is null "
@@ -185,6 +252,13 @@ interface CloseFriendRepository extends JpaRepository<CloseFriend, CloseFriend.K
     @Modifying
     @Query("delete from CloseFriend c where c.ownerId = :ownerId")
     void clearFor(@Param("ownerId") UUID ownerId);
+
+    /** Both directions at once — a block has to take each person off the
+     *  other's list, and doing it in one statement keeps it atomic. */
+    @Modifying
+    @Query("delete from CloseFriend c where (c.ownerId = :a and c.friendId = :b) "
+        + "or (c.ownerId = :b and c.friendId = :a)")
+    int severBetween(@Param("a") UUID a, @Param("b") UUID b);
 }
 
 interface StoryHighlightRepository extends JpaRepository<StoryHighlight, UUID> {

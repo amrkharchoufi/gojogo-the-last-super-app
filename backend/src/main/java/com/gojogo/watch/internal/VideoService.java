@@ -91,7 +91,7 @@ class VideoService {
         VideoKind kind = VideoKind.parse(kindRaw);
         int size = Math.clamp(limit, 1, MAX_PAGE);
         OffsetDateTime cursor = before == null ? OffsetDateTime.now().plusMinutes(1) : before;
-        List<Video> page = videos.feed(kind, cursor, PageRequest.of(0, size));
+        List<Video> page = videos.feed(kind, cursor, notVisibleTo(me), me, PageRequest.of(0, size));
         // Keyset cursor stays on createdAt so pages never skip or repeat.
         OffsetDateTime nextBefore = page.size() < size ? null : page.getLast().getCreatedAt();
         return new VideoFeedResponse(decorate(page, me), nextBefore);
@@ -99,10 +99,14 @@ class VideoService {
 
     @Transactional(readOnly = true)
     List<VideoResponse> byAuthor(UUID me, UUID authorId, String kindRaw, int limit) {
+        // Empty rather than forbidden, same as a blocked person's post grid.
+        if (graph.blockedBetween(me, authorId)) {
+            return List.of();
+        }
         var page = PageRequest.of(0, Math.clamp(limit, 1, 100));
         List<Video> rows = kindRaw == null || kindRaw.isBlank()
-            ? videos.byAuthor(authorId, page)
-            : videos.byAuthor(authorId, VideoKind.parse(kindRaw), page);
+            ? videos.byAuthor(authorId, me, page)
+            : videos.byAuthor(authorId, VideoKind.parse(kindRaw), me, page);
         return decorate(rows, me);
     }
 
@@ -113,14 +117,14 @@ class VideoService {
 
     @Transactional(readOnly = true)
     VideoResponse get(UUID me, UUID videoId) {
-        return decorate(List.of(require(videoId)), me).getFirst();
+        return decorate(List.of(requireVisible(me, videoId)), me).getFirst();
     }
 
     // MARK: Engagement
 
     @Transactional
     void like(UUID me, UUID videoId) {
-        requireExists(videoId);
+        requireVisible(me, videoId);
         try {
             likes.saveAndFlush(new VideoLike(videoId, me));
             videos.bumpLikeCount(videoId, 1);
@@ -138,7 +142,7 @@ class VideoService {
 
     @Transactional
     void save(UUID me, UUID videoId) {
-        requireExists(videoId);
+        requireVisible(me, videoId);
         try {
             saves.saveAndFlush(new VideoSave(videoId, me));
         } catch (DataIntegrityViolationException alreadySaved) {
@@ -158,7 +162,7 @@ class VideoService {
      */
     @Transactional
     void recordView(UUID me, UUID videoId) {
-        requireExists(videoId);
+        requireVisible(me, videoId);
         // existsById first: an @IdClass entity merges rather than inserts, so a
         // duplicate-key catch would never fire here (see the assigned-id note
         // in PROGRESS.md).
@@ -237,10 +241,48 @@ class VideoService {
         return video;
     }
 
-    private void requireExists(UUID videoId) {
-        if (!videos.existsById(videoId)) {
+    /**
+     * The video, if this viewer is allowed to know it exists. 404 with the same
+     * wording as a video that never existed for both a block and a moderator's
+     * hide: "you may not see this" still confirms there is a this.
+     */
+    Video requireVisible(UUID me, UUID videoId) {
+        Video video = require(videoId);
+        if (graph.blockedBetween(me, video.getAuthorId())
+            || (video.isHidden() && !video.getAuthorId().equals(me))) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such video");
         }
+        return video;
+    }
+
+    /** Everyone a block stands between, padded so JPQL's {@code not in} always
+     *  has something to compare against. */
+    private Collection<UUID> notVisibleTo(UUID me) {
+        Set<UUID> hidden = new java.util.HashSet<>(graph.blockedIds(me));
+        hidden.add(NOBODY);
+        return hidden;
+    }
+
+    /** The id nobody has — see {@link #notVisibleTo}. */
+    private static final UUID NOBODY = new UUID(0L, 0L);
+
+    /** Moderation's takedown (2e M5) — see {@code ModeratableContent}. */
+    @Transactional
+    void setHidden(UUID videoId, boolean hidden) {
+        videos.findById(videoId).ifPresent(v -> {
+            v.setHidden(hidden);
+            videos.save(v);
+        });
+    }
+
+    @Transactional
+    void removeAsModerator(UUID videoId) {
+        videos.findById(videoId).ifPresent(videos::delete);
+    }
+
+    @Transactional(readOnly = true)
+    java.util.Optional<Video> find(UUID videoId) {
+        return videos.findById(videoId);
     }
 
     private static String blankToNull(String value) {

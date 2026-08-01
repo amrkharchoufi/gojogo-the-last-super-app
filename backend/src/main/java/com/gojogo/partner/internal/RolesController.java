@@ -1,5 +1,6 @@
 package com.gojogo.partner.internal;
 
+import com.gojogo.auth.PlatformAdminApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -29,10 +30,10 @@ class RolesController {
     private final PartnerAccountRepository accounts;
     private final ProfileApi profiles;
     private final PartnerCurrentProfile current;
-    private final PlatformAdmins admins;
+    private final PlatformAdminApi admins;
 
     RolesController(PartnerAccountRepository accounts, ProfileApi profiles,
-                    PartnerCurrentProfile current, PlatformAdmins admins) {
+                    PartnerCurrentProfile current, PlatformAdminApi admins) {
         this.accounts = accounts;
         this.profiles = profiles;
         this.current = current;
