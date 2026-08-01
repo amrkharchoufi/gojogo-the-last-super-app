@@ -297,6 +297,11 @@ final class AppState: ObservableObject {
     @Published var travelDriver: TravelDriver? = nil
     @Published var travelRating: Int = 0
     @Published var travelRecent: [TravelPlace] = SampleData.travelRecentPlaces
+    // The real ride, when there is one (Phase 3 M3). Non-nil is what makes every
+    // action on the travel screen a server call rather than a simulation.
+    @Published var ride: RideDTO? = nil
+    @Published var rideQuote: RideQuoteDTO? = nil
+    var ridePollTask: Task<Void, Never>?
     private var travelMatchTask: Task<Void, Never>?
 
     // GojoDelivery

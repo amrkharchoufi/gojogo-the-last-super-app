@@ -42,7 +42,22 @@ One `payments` schema, double-entry: every movement is a `ledger_entry` (id, ide
 
 ---
 
-## 2. Ride lifecycle + fare negotiation (`travel`)
+## 2. Ride lifecycle + fare negotiation (`travel`) — **BUILT 2026-08-01**
+
+Refinements the build made to this spec (§11.4: update SPECS when a build refines it):
+
+- **Negotiation is `travel`'s alone.** Dispatch's offer book asks "will you do this job" and must not learn about money, so a driver who wants a different fare **declines in dispatch and counters in travel**. `DispatchApi` gained one verb — `assign` — so the vertical can name the winner when the rider accepts a counter, and the job row still settles the race.
+- **`DRAFT` is not a state.** A ride nobody has requested is a screen in the app, not a row.
+- **Three fares are kept, not one.** Suggested, the rider's opening offer, and the agreed figure — frozen at CONFIRMED and never recomputed.
+- **A rider's counter is addressed to one driver.** Three drivers countering is three private conversations; a reply broadcast to all of them would be an auction. A driver's second price also **withdraws their first**, since two live prices from one person could be accepted at whichever the rider tapped.
+- **Offers have a ceiling as well as a floor**, and the ceiling protects the *rider*: a fat-fingered 5000 where 50 was meant is a mistake to catch, not a windfall.
+- **No escrow, per §1 — replaced by a balance check** at request and again at confirmation. A fare nobody can pay should be refused while the trip can still not happen. The gap it does not cover (spending the money mid-trip) surfaces at completion as a 402 the driver can retry.
+- **The cancellation fee is paid to the driver**, not the platform, and is **waived when the wallet is empty**: trapping a rider in a ride they cannot pay to leave is worse than a driver missing two dollars. It applies only from ARRIVING — changing your mind is free until somebody actually drove.
+- **Ratings are blind until both are in.** Reading a one-star before writing your own turns a rating into a reply.
+- **Routing is straight-line × a road factor (1.3), not Mapbox Directions.** The server holds no Mapbox token, and a fare the two parties then negotiate away from does not justify a routing call per quote. One method to swap.
+- **Not built:** scheduled rides, book-for-someone-else, add-stop mid-trip, and position fan-out over the WebSocket — the driver's position is read from `dispatch` on the poll the app already makes.
+
+### Original spec
 
 **Pricing engine (suggested fare):** `travel.pricing_config` per vehicle category: base + per-km + per-min (+ optional surge multiplier later, **CONFIG**). Distance/duration from the routing provider (§3). Suggested fare is advisory; the agreed fare is whatever negotiation lands on, floored at **CONFIG** min-fare.
 

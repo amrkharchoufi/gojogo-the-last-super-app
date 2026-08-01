@@ -45,6 +45,11 @@ extension AppState {
             // than the next reinstall.
             await refreshRoles()
             await refreshDispatch()
+            // A trip survives the app being killed — the server is the one that
+            // knows whether a car is on its way, so the screen is restored from
+            // it rather than from anything cached here.
+            await refreshRide()
+            if ride != nil { startRidePolling() }
             await connectMessaging()
             await refreshNotifications()
             enablePushNotifications()

@@ -78,7 +78,7 @@ struct GojoTravelView: View {
             if app.travelPhase != .home && app.travelPhase != .completed {
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    app.cancelTravelRide()
+                    app.cancelRide()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 13, weight: .bold))
@@ -157,6 +157,7 @@ struct GojoTravelView: View {
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     app.selectTravelDestination(place)
+                    Task { await app.quoteRide(to: place) }
                 } label: {
                     placeRowCompact(place)
                 }
@@ -222,6 +223,7 @@ struct GojoTravelView: View {
                             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                             searchFocused = false
                             app.selectTravelDestination(place)
+                    Task { await app.quoteRide(to: place) }
                         } label: {
                             placeRow(place)
                         }
@@ -288,7 +290,7 @@ struct GojoTravelView: View {
 
             Button {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                app.confirmTravelRide()
+                app.requestRide()
             } label: {
                 Text(confirmLabel)
                     .font(.system(size: 16, weight: .bold))
@@ -341,16 +343,31 @@ struct GojoTravelView: View {
                 }
             }
 
-            Text("Finding your driver")
+            Text(counterOffers.isEmpty ? "Finding your driver" : "Drivers have replied")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(GGColor.textPrimary)
-            Text("Matching you with a nearby GojoTravel driver…")
+            Text(counterOffers.isEmpty
+                 ? "Matching you with a nearby GojoTravel driver…"
+                 : "They'd like a different fare. Take one, or wait for somebody at your price.")
                 .explanatory(14)
                 .foregroundStyle(GGColor.textSecondary)
                 .multilineTextAlignment(.center)
 
+            // The counteroffers — the one thing a ride has that a delivery order
+            // doesn't. Each is one driver's private answer, so they stack rather
+            // than merging into a single "best price": picking is the rider's,
+            // and an auction is not what this is.
+            if !counterOffers.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(counterOffers) { offer in
+                        counterRow(offer)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+
             Button {
-                app.cancelTravelRide()
+                app.cancelRide()
             } label: {
                 Text("Cancel")
                     .font(.system(size: 14, weight: .semibold))
@@ -432,7 +449,7 @@ struct GojoTravelView: View {
 
             if app.travelPhase == .enRoute || app.travelPhase == .inTrip {
                 Button {
-                    app.cancelTravelRide()
+                    app.cancelRide()
                 } label: {
                     Text("Cancel ride")
                         .font(.system(size: 14, weight: .semibold))
@@ -475,7 +492,7 @@ struct GojoTravelView: View {
                 ForEach(1...5, id: \.self) { star in
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        app.travelRating = star
+                        app.rateRide(star)
                     } label: {
                         Image(systemName: star <= app.travelRating ? "star.fill" : "star")
                             .font(.system(size: 26))
@@ -503,6 +520,55 @@ struct GojoTravelView: View {
         .frame(maxWidth: .infinity)
         .glass(cornerRadius: 24, tint: Color.black.opacity(0.52), floating: true)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    /// Live counteroffers, freshest first.
+    private var counterOffers: [RideOfferDTO] {
+        app.ride?.liveOffers.filter { $0.party == "DRIVER" } ?? []
+    }
+
+    @ViewBuilder
+    private func counterRow(_ offer: RideOfferDTO) -> some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(GGColor.ink(0.1))
+                .frame(width: 36, height: 36)
+                .overlay(
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textSecondary))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(offer.driverName ?? "A driver")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Text("asks \(WalletStore.money(offer.amountMinor, currency: app.ride?.currency ?? "USD"))")
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textSecondary)
+            }
+            Spacer(minLength: 0)
+            Button {
+                app.declineRideOffer(offer)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(GGColor.ink(0.08)))
+            }
+            .buttonStyle(.plain)
+            Button {
+                app.acceptRideOffer(offer)
+            } label: {
+                Text("Accept")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(GGColor.onAccent)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Capsule().fill(GGColor.white))
+            }
+            .buttonStyle(PressableStyle())
+        }
+        .padding(10)
+        .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.08)
     }
 
     // MARK: Rows
