@@ -1488,6 +1488,18 @@ enum DriverVehicle: String, CaseIterable, Identifiable {
     }
     /// Cars & motorcycles need a licence + registration; trottinettes don't.
     var requiresLicense: Bool { self != .trottinette }
+
+    /// The same vehicle in `dispatch`'s vocabulary — what the server matches a
+    /// ride on. Two enums in two places on purpose: this one is what a person
+    /// picks from, that one is what a search filters by, and they will not stay
+    /// the same list forever.
+    var dispatchCategory: String {
+        switch self {
+        case .car:         return "CAR"
+        case .motorcycle:  return "SCOOTER"
+        case .trottinette: return "BIKE"
+        }
+    }
 }
 
 /// KYC + vehicle data captured during onboarding.
@@ -1514,6 +1526,14 @@ struct PartnerApplication: Equatable {
     var vehicleColor: String = ""
     var plate: String = ""
     var registrationCaptured: Bool = false   // "carte grise" — vehicle registration
+    /// Plates are unique per region, never globally — the same string is a
+    /// different car in another country.
+    var vehicleRegion: String = ""
+    /// `yyyy-MM-dd`. Papers expire on a day, and the server flags a vehicle
+    /// whose earlier date has passed (plus a grace period).
+    var registrationExpiresOn: String = ""
+    var insuranceExpiresOn: String = ""
+    var insuranceCaptured: Bool = false
 
     // Courier — vehicle type
     var vehicleType: CourierVehicle = .motorbike
@@ -1586,7 +1606,12 @@ struct PartnerJob: Identifiable, Equatable {
         self.dropoffLat = dropoffLat; self.dropoffLon = dropoffLon
     }
 
-    var fareLabel: String { String(format: "$%.2f", fare) }
+    /// A dispatch offer carries no fare — the money belongs to the vertical
+    /// that asked, and dispatch never sees it. So an unpriced job says so
+    /// instead of rendering "$0.00", which would read as free work.
+    var fareLabel: String { fare > 0 ? String(format: "$%.2f", fare) : "—" }
+
+    var isPriced: Bool { fare > 0 }
     var distanceLabel: String { String(format: "%.1f km", distanceKm) }
 }
 

@@ -97,6 +97,30 @@ class PartnerAccount {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
+    /**
+     * The stake, as a <em>record of a ledger movement</em> rather than a balance.
+     *
+     * <p>The money itself is in {@code payments}, as a transfer from this
+     * person's AVAILABLE into their own STAKING bucket. Keeping a second copy of
+     * the amount here would be a number that eventually disagrees with the
+     * ledger; what these columns hold is what the application has to answer on
+     * its own — has it been paid, and has the KYC fee come out of it yet.
+     */
+    @Column(name = "stake_amount_minor", nullable = false)
+    private long stakeAmountMinor;
+
+    @Column(name = "stake_paid_at")
+    private OffsetDateTime stakePaidAt;
+
+    @Column(name = "stake_released_at")
+    private OffsetDateTime stakeReleasedAt;
+
+    @Column(name = "kyc_fee_minor", nullable = false)
+    private long kycFeeMinor;
+
+    @Column(name = "kyc_fee_paid_at")
+    private OffsetDateTime kycFeePaidAt;
+
     protected PartnerAccount() {
     }
 
@@ -174,6 +198,38 @@ class PartnerAccount {
         touch();
     }
 
+    // MARK: The stake
+
+    /** Called once the ledger movement has actually happened, never before. */
+    void recordStakePaid(long amountMinor, OffsetDateTime at) {
+        this.stakeAmountMinor = amountMinor;
+        this.stakePaidAt = at;
+        this.stakeReleasedAt = null;
+        touch();
+    }
+
+    void recordKycFeePaid(long amountMinor, OffsetDateTime at) {
+        this.kycFeeMinor += amountMinor;
+        this.kycFeePaidAt = at;
+        touch();
+    }
+
+    void recordStakeReleased(OffsetDateTime at) {
+        this.stakeReleasedAt = at;
+        touch();
+    }
+
+    boolean hasLiveStake() {
+        return stakePaidAt != null && stakeReleasedAt == null;
+    }
+
+    /** What is still locked: the stake less whatever the ID checks have eaten.
+     *  Never negative — a fee larger than the stake is a config mistake, not a
+     *  debt somebody owes. */
+    long remainingStakeMinor() {
+        return hasLiveStake() ? Math.max(0, stakeAmountMinor - kycFeeMinor) : 0;
+    }
+
     private void touch() {
         this.updatedAt = OffsetDateTime.now();
     }
@@ -205,4 +261,8 @@ class PartnerAccount {
     OffsetDateTime getReviewedAt() { return reviewedAt; }
     OffsetDateTime getCreatedAt() { return createdAt; }
     OffsetDateTime getUpdatedAt() { return updatedAt; }
+    long getStakeAmountMinor() { return stakeAmountMinor; }
+    OffsetDateTime getStakePaidAt() { return stakePaidAt; }
+    OffsetDateTime getStakeReleasedAt() { return stakeReleasedAt; }
+    long getKycFeeMinor() { return kycFeeMinor; }
 }

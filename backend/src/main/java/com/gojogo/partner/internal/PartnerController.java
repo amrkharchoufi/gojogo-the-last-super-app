@@ -3,6 +3,7 @@ package com.gojogo.partner.internal;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
@@ -64,6 +66,66 @@ class PartnerController {
                                      @PathVariable UUID accountId,
                                      @PathVariable UUID documentId) {
         return partners.deleteDocument(current.require(jwt).id(), accountId, documentId);
+    }
+
+    // MARK: The stake and the vehicles (Phase 3 M2)
+
+    /**
+     * Locks the $30. A 402 carrying the shortfall when the wallet won't cover
+     * it, which is what turns "you can't afford this" into a top-up for the
+     * right amount rather than a dead end.
+     */
+    @PostMapping("/v1/partner/applications/{accountId}/stake")
+    PartnerAccountDto payStake(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID accountId) {
+        return partners.payStake(current.require(jwt).id(), accountId);
+    }
+
+    /** Adds a vehicle. The first one becomes the one you're driving — making
+     *  that a separate step only produces applications blocked for a reason
+     *  nobody can see. */
+    @PostMapping("/v1/partner/applications/{accountId}/vehicles")
+    VehicleDto addVehicle(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID accountId,
+                          @Valid @RequestBody SaveVehicleRequest request) {
+        return partners.saveVehicle(current.require(jwt).id(), accountId, null, request);
+    }
+
+    @PutMapping("/v1/partner/applications/{accountId}/vehicles/{vehicleId}")
+    VehicleDto editVehicle(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID accountId,
+                           @PathVariable UUID vehicleId,
+                           @Valid @RequestBody SaveVehicleRequest request) {
+        return partners.saveVehicle(current.require(jwt).id(), accountId, vehicleId, request);
+    }
+
+    /** Which car you're driving today. Allowed after approval too — it is the
+     *  one field dispatch matches on, and it changes more often than anything
+     *  else on an application. */
+    @PostMapping("/v1/partner/applications/{accountId}/vehicles/{vehicleId}/activate")
+    VehicleDto activateVehicle(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID accountId,
+                               @PathVariable UUID vehicleId) {
+        return partners.activateVehicle(current.require(jwt).id(), accountId, vehicleId);
+    }
+
+    @DeleteMapping("/v1/partner/applications/{accountId}/vehicles/{vehicleId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void retireVehicle(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID accountId,
+                       @PathVariable UUID vehicleId) {
+        partners.retireVehicle(current.require(jwt).id(), accountId, vehicleId);
+    }
+
+    @PostMapping("/v1/partner/applications/{accountId}/vehicles/{vehicleId}/documents/presign")
+    DocumentUploadResponse presignVehicleDocument(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable UUID accountId,
+            @PathVariable UUID vehicleId, @Valid @RequestBody DocumentUploadRequest request) {
+        return partners.presignVehicleDocument(current.require(jwt).id(), accountId,
+            vehicleId, request);
+    }
+
+    @PutMapping("/v1/partner/applications/{accountId}/vehicles/{vehicleId}/documents")
+    VehicleDto attachVehicleDocument(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable UUID accountId,
+            @PathVariable UUID vehicleId, @Valid @RequestBody AttachDocumentRequest request) {
+        return partners.attachVehicleDocument(current.require(jwt).id(), accountId,
+            vehicleId, request);
     }
 
     @PostMapping("/v1/partner/applications/{accountId}/submit")

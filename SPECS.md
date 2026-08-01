@@ -88,7 +88,21 @@ Owns: driver/courier presence + assignment. Redis GEO for positions (updated ove
 
 ---
 
-## 4. Driver/courier onboarding logic (`partner` + wallet + dispatch)
+## 4. Driver/courier onboarding logic (`partner` + wallet + dispatch) — **BUILT 2026-08-01** (except community verification, Phase 3 M5)
+
+Refinements the build made to this spec (§11.4: update SPECS when a build refines it):
+
+- **The stake is a `transfer` into the owner's own STAKING bucket, not a `hold`.** `WalletApi.hold` means ESCROW — money in flight for a transaction — and a stake is neither. It stays the applicant's money in a locked pocket, which is what makes returning it a *release* and lets M5's verification reward be a transfer out of it.
+- **The KYC fee is charged out of STAKING and capped at what remains.** Billing a separate balance would let somebody stake and then have nothing to check them with; capping means a config mistake can make the fee useless but never puts a stake into debt. A **zero fee writes no ledger entry** — a line whose only content is that a policy is off is noise in a statement.
+- **Idempotency keys come from facts already on the row**, never a clock: `partner:{id}:stake`, and for the fee the *total charged so far*, so a retried submission collapses onto one movement while a genuine resubmission gets its own.
+- **Rejection and withdrawal release the stake; a suspension does not.** Keeping it on a rejection would make refusing people profitable; returning it on a suspension defeats what it funds. Release on *account closure* (the spec's "30 days, no open disputes") is **not built** — winding a driver down has trips and money in it.
+- **Vehicles live in `partner`, not `dispatch`.** A vehicle is a claim a human reviews; dispatch needs one fact out of it, delivered at approval. **Editing the plate or the category un-approves it** — an edited plate describes a different car, which is the exact fraud this check exists to catch — while a colour change does not. **One active vehicle per driver, held by a partial unique index** rather than by the service, since activation is two writes.
+- **A driver needs a vehicle and a courier does not.** A courier on a bicycle has no registration or insurance to show; one who registers a scooter still gets it reviewed. It is a config flag, so a market that disagrees changes a row.
+- **Expiry is a sweep with a grace period, and flagging the active vehicle suspends its driver.** The day a certificate ran out is not an event anything reacts to, so without the sweep a lapsed registration receives work forever; and a flag that leaves work arriving is a flag that did nothing.
+- **Vehicle photos** have a table, a cap and reference tracking, but no client picker yet — the papers were the blocking half.
+- **Ride-hailing tokens are M4**, not built here.
+
+### Original spec
 
 Extends live `partner` machinery; the application object is unchanged, `kind=DRIVER|COURIER`.
 

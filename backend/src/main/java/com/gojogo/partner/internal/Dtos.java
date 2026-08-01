@@ -49,6 +49,8 @@ record PartnerAccountDto(UUID id, String kind, String status,
                          List<PartnerDocumentDto> documents,
                          List<String> requiredDocuments, List<String> missingDocuments,
                          boolean identityRequired, String identityStatus, String identityReason,
+                         StakeStatus stake, List<VehicleDto> vehicles,
+                         boolean vehicleRequired, String submitBlocker,
                          boolean canEdit, boolean canSubmit,
                          OffsetDateTime submittedAt, OffsetDateTime reviewedAt,
                          OffsetDateTime createdAt) {
@@ -57,6 +59,54 @@ record PartnerAccountDto(UUID id, String kind, String status,
 /** Wrapper so "you haven't applied" is a 200 with {@code account: null} rather
  *  than a 404 the client has to treat as success. */
 record MyPartnerResponse(PartnerAccountDto account) {
+}
+
+// MARK: Vehicles + the stake (Phase 3 M2)
+
+/**
+ * One vehicle, as its owner and a reviewer both see it.
+ *
+ * @param papersExpired computed here rather than left to the client to work out
+ *                      from two dates — an app that got that arithmetic wrong
+ *                      would tell somebody they can drive when they cannot
+ * @param missingDocuments what still has to be uploaded, so the checklist is the
+ *                      server's rule rendered rather than a second copy of it
+ */
+record VehicleDto(UUID id, String category, String make, String model, Integer year,
+                  String color, String plate, String region,
+                  String state, boolean active,
+                  String registrationExpiresOn, String insuranceExpiresOn,
+                  boolean papersExpired, String reviewNote,
+                  List<String> photoUrls, List<PartnerDocumentDto> documents,
+                  List<String> missingDocuments, OffsetDateTime createdAt) {
+}
+
+/** Dates arrive as {@code yyyy-MM-dd} strings, because a vehicle's insurance
+ *  expires on a day in a timezone nobody recorded. */
+record SaveVehicleRequest(@NotBlank @Size(max = 16) String category,
+                          @Size(max = 60) String make,
+                          @Size(max = 60) String model,
+                          Integer year,
+                          @Size(max = 30) String color,
+                          @Size(max = 20) String plate,
+                          @Size(max = 60) String region,
+                          @Size(max = 10) String registrationExpiresOn,
+                          @Size(max = 10) String insuranceExpiresOn,
+                          List<String> photoUrls) {
+}
+
+/**
+ * The stake page, answered by the server so the app never has to know a price.
+ *
+ * @param shortfallMinor what is still needed in the wallet — which is what turns
+ *                       "you can't afford this" into a top-up button for the
+ *                       right amount, rather than a dead end
+ * @param remainingMinor what is still locked after the ID check took its fee
+ */
+record StakeStatus(boolean required, long requiredMinor, long paidMinor,
+                   long kycFeeMinor, long remainingMinor,
+                   OffsetDateTime paidAt, OffsetDateTime releasedAt,
+                   String currency, long walletAvailableMinor, long shortfallMinor) {
 }
 
 record SavePartnerApplicationRequest(@NotBlank @Size(max = 16) String kind,
@@ -102,7 +152,17 @@ record AttachDocumentRequest(@NotBlank @Size(max = 32) String kind,
 // MARK: Review (PartnerAdminController)
 
 /** One row of the review queue, with signed links to the papers. */
-record ReviewApplicationDto(PartnerAccountDto account, List<ReviewDocumentDto> documents) {
+record ReviewApplicationDto(PartnerAccountDto account, List<ReviewDocumentDto> documents,
+                            List<ReviewVehicleDto> vehicles) {
+}
+
+/** A vehicle as a reviewer sees it: the same object, plus links to its papers. */
+record ReviewVehicleDto(VehicleDto vehicle, List<ReviewDocumentDto> documents) {
+}
+
+/** @param approved false flags it, which is not a rejection — a re-upload
+ *                  puts it back in the queue */
+record VehicleReviewRequest(boolean approved, @Size(max = 400) String note) {
 }
 
 record ReviewDocumentDto(UUID id, String kind, String contentType, String url,

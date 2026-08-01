@@ -369,7 +369,9 @@ private struct PartnerOfferCard: View {
 
             HStack(spacing: 12) {
                 metric(icon: "location.north.line.fill", value: job.distanceLabel, label: "Distance")
-                metric(icon: "clock.fill", value: "\(job.minutes) min", label: "Est. time")
+                if job.minutes > 0 {
+                    metric(icon: "clock.fill", value: "\(job.minutes) min", label: "Est. time")
+                }
                 metric(icon: "person.fill", value: job.customerName, label: job.role == .driver ? "Rider" : "Customer")
             }
 

@@ -108,6 +108,28 @@ final class APIClient {
         return data
     }
 
+    /// A plain PUT to a URL the server already signed — the private half of
+    /// uploading, used for KYC papers and vehicle documents.
+    ///
+    /// Deliberately separate from `uploadMedia`: that one mints a *public* URL
+    /// under the world-readable prefix and hands it back to be stored. There is
+    /// no URL to return here, and there must not be — the caller keeps an object
+    /// key that grants nothing on its own, and a reviewer gets a short-lived
+    /// signature when they actually look at one.
+    func upload(to signedUrl: String, data: Data, contentType: String) async throws {
+        guard let url = URL(string: signedUrl) else {
+            throw APIError.http(status: -1, message: "Bad upload URL")
+        }
+        var put = URLRequest(url: url)
+        put.httpMethod = "PUT"
+        put.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        let (_, response) = try await URLSession.shared.upload(for: put, from: data)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.http(status: (response as? HTTPURLResponse)?.statusCode ?? -1,
+                                message: "Upload failed")
+        }
+    }
+
     /// Presign + direct S3 PUT. Returns the public URL to reference in posts/stories.
     /// `onProgress` is 0…1 for the PUT body (not the presign round-trip).
     func uploadMedia(_ data: Data, contentType: String,

@@ -452,6 +452,24 @@ final class AppState: ObservableObject {
     private var partnerOfferTask: Task<Void, Never>?
     private var partnerJobTask: Task<Void, Never>?
 
+    // Dispatch — Driver Mode against the real registry (Phase 3 M1/M2).
+    // Empty for anybody who has never been approved, which is what makes the
+    // local demo above still the right thing to show them.
+    @Published var dispatchWorkers: [DispatchWorkerDTO] = []
+    @Published var dispatchOffers: [DispatchOfferDTO] = []
+    @Published var dispatchAssignment: DispatchAssignmentDTO? = nil
+    @Published var dispatchOnline: Bool = false
+    /// How often to report a position while available — the server's number,
+    /// not a constant in this app.
+    var dispatchPositionInterval: Int = 5
+    var dispatchPositionTask: Task<Void, Never>?
+    var dispatchPollTask: Task<Void, Never>?
+    var dispatchDutyTracking: Bool = false
+
+    // Driver/courier onboarding against the real `partner` application.
+    @Published var driverApplication: DriverApplicationDTO? = nil
+    @Published var partnerSubmitting: Bool = false
+
     private var persistTask: Task<Void, Never>?
 
     var selectedInterestCount: Int { interests.filter(\.selected).count }
@@ -3192,9 +3210,15 @@ final class AppState: ObservableObject {
         partnerStakeProcessing = false
         partnerStep = .rules
         withAnimation(.easeInOut(duration: 0.28)) { partnerOnboardingRole = role }
-        // Fetched here rather than on connect: only this flow needs it, and by
-        // the time the rules and stake pages are done the answer is waiting.
-        Task { await refreshIdentity() }
+        // All fetched here rather than on connect: only this flow needs any of
+        // it, and by the time the rules page has been read the answers are
+        // waiting. The application has to exist before the stake page can name
+        // an amount, so it is opened (or created) first.
+        Task {
+            await loadDriverApplication(role)
+            await refreshWallet()
+            await refreshIdentity()
+        }
     }
 
     func cancelPartnerOnboarding() {
@@ -3209,32 +3233,10 @@ final class AppState: ObservableObject {
         withAnimation(.easeInOut(duration: 0.3)) { partnerStep = .stake }
     }
 
-    /// Pay the $30 good-conduct stake (mock — no real charge), then start KYC.
-    func payPartnerStake() {
-        guard !partnerStakeProcessing else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        partnerStakeProcessing = true
-        partnerJobTask?.cancel()
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_600_000_000)
-            partnerStakeProcessing = false
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            withAnimation(.easeInOut(duration: 0.32)) { partnerStep = .kyc }
-        }
-    }
-
-    /// Submit the completed KYC → become a partner.
-    ///
-    /// `partnerKYCComplete` lives in `AppState+Identity.swift`: the identity half
-    /// is the vendor's verdict, not a field on the application.
-    func submitPartnerKYC() {
-        guard let role = partnerOnboardingRole, partnerKYCComplete else { return }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        partnerRoles.insert(role)
-        // A verified partner keeps the name from their ID on file.
-        withAnimation(.easeInOut(duration: 0.35)) { partnerStep = .done }
-        schedulePersist()
-    }
+    /// The stake and the submission both live in `AppState+Driver.swift` now:
+    /// they are server calls (a real ledger movement, and a real place in a
+    /// human's queue), not the 1.6-second sleep and local `Set.insert` they used
+    /// to be. Kept out of this file so the difference is obvious.
 
     /// Dismiss the completion screen; optionally jump straight into the dashboard.
     func finishPartnerOnboarding(openDashboard: Bool) {
@@ -3250,8 +3252,18 @@ final class AppState: ObservableObject {
     // MARK: Partner — per-role stats
 
     func partnerEarnings(_ role: PartnerRole) -> Double { partnerEarningsByRole[role.rawValue] ?? 0 }
-    func partnerJobs(_ role: PartnerRole) -> Int { partnerJobsByRole[role.rawValue] ?? 0 }
-    func partnerRating(_ role: PartnerRole) -> Double { partnerRatingByRole[role.rawValue] ?? 5.0 }
+
+    /// Jobs done. From the dispatch registry once there is one — a local
+    /// counter and a server counter would disagree the first time somebody
+    /// reinstalled.
+    func partnerJobs(_ role: PartnerRole) -> Int {
+        isDispatchRegistered ? dispatchCompleted(role) : partnerJobsByRole[role.rawValue] ?? 0
+    }
+
+    func partnerRating(_ role: PartnerRole) -> Double {
+        if isDispatchRegistered { return dispatchRating(role) ?? 5.0 }
+        return partnerRatingByRole[role.rawValue] ?? 5.0
+    }
 
     // MARK: Partner — working dashboard
 
@@ -3260,6 +3272,16 @@ final class AppState: ObservableObject {
         partnerJob = nil
         partnerJobProgress = 0
         withAnimation(.easeInOut(duration: 0.3)) { partnerDashboardRole = role }
+        Task {
+            await refreshDispatch()
+            // A driver who was already available when the app was killed is
+            // still available as far as the server is concerned; pick the duty
+            // loops back up rather than leaving them invisible.
+            if dispatchOnline {
+                partnerOnline = true
+                startDispatchDuty()
+            }
+        }
     }
 
     func closePartnerDashboard() {
@@ -3267,8 +3289,25 @@ final class AppState: ObservableObject {
         withAnimation(.easeInOut(duration: 0.28)) { partnerDashboardRole = nil }
     }
 
+    /// Live for anybody in a dispatch registry, simulated for everybody else.
+    ///
+    /// The demo is not dead code: somebody who has never been approved has no
+    /// other way to see what this screen is for, and showing them an empty
+    /// dashboard would be accurate and useless. What must never happen is the
+    /// reverse — a *real* driver being shown an invented offer — so the branch
+    /// is on the registry rather than on a debug flag.
     func togglePartnerOnline() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        guard let role = partnerDashboardRole else { return }
+        if isDispatchRegistered {
+            let goingOnline = !partnerOnline
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                partnerOnline = goingOnline
+            }
+            if !goingOnline { partnerJob = nil; partnerJobPhase = .idle }
+            setDispatchAvailable(goingOnline, role: role)
+            return
+        }
         if partnerOnline { goOffline() } else { goOnline() }
     }
 
@@ -3309,6 +3348,14 @@ final class AppState: ObservableObject {
     }
 
     func declinePartnerJob() {
+        if let live = liveOffer {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                partnerJob = nil
+                partnerJobPhase = .idle
+            }
+            declineDispatchOffer(live)
+            return
+        }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         withAnimation(.easeInOut(duration: 0.25)) {
             partnerJob = nil
@@ -3319,10 +3366,31 @@ final class AppState: ObservableObject {
 
     func acceptPartnerJob() {
         guard partnerJob != nil else { return }
+        if let live = liveOffer {
+            // A real acceptance ends here on purpose. Dispatch's job is to find
+            // somebody; what happens next belongs to the vertical that asked,
+            // and no vertical publishes one yet (rides are Phase 3 M3, real
+            // couriers Phase 4 M1). Running the demo's animated route over a
+            // real assignment would be inventing a trip.
+            withAnimation(.easeInOut(duration: 0.25)) {
+                partnerJob = nil
+                partnerJobPhase = .idle
+            }
+            acceptDispatchOffer(live)
+            return
+        }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         partnerJobProgress = 0
         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { partnerJobPhase = .toPickup }
         runPartnerJob()
+    }
+
+    /// The server-sent offer the card on screen is showing, if it is one.
+    /// Matched by id, because a demo job and a real one are the same struct and
+    /// answering the wrong one would be worse than answering neither.
+    private var liveOffer: DispatchOfferDTO? {
+        guard let shown = partnerJob else { return nil }
+        return dispatchOffers.first { $0.id == shown.id }
     }
 
     /// Drives the accepted job through pickup → dropoff → completion,

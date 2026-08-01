@@ -39,6 +39,12 @@ extension AppState {
             await refreshEconomy()
             await refreshDelivery()
             await refreshMerchantPartner()
+            // Roles and the dispatch registry, so "Become a driver" opens the
+            // dashboard for somebody who already is one — and so a suspension
+            // decided while they were away takes effect on this launch rather
+            // than the next reinstall.
+            await refreshRoles()
+            await refreshDispatch()
             await connectMessaging()
             await refreshNotifications()
             enablePushNotifications()

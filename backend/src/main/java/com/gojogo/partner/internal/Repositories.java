@@ -2,7 +2,10 @@ package com.gojogo.partner.internal;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -26,4 +29,43 @@ interface PartnerDocumentRepository extends JpaRepository<PartnerDocument, UUID>
     Optional<PartnerDocument> findByAccountIdAndKind(UUID accountId, DocumentKind kind);
 
     List<PartnerDocument> findByAccountIdInOrderByKindAsc(Collection<UUID> accountIds);
+}
+
+interface VehicleRepository extends JpaRepository<Vehicle, UUID> {
+
+    List<Vehicle> findByAccountIdOrderByCreatedAtAsc(UUID accountId);
+
+    List<Vehicle> findByAccountIdInOrderByCreatedAtAsc(Collection<UUID> accountIds);
+
+    Optional<Vehicle> findByAccountIdAndActiveTrue(UUID accountId);
+
+    /**
+     * The expiry sweep: roadworthy vehicles whose papers ran out before a
+     * cutoff. Two states rather than a helper predicate, because a JPQL
+     * {@code in} over a bound collection is the one form this build can be sure
+     * of without a database to try it against.
+     */
+    @Query("select v from Vehicle v where v.state in :states "
+        + "and (v.registrationExpiresOn < :cutoff or v.insuranceExpiresOn < :cutoff) "
+        + "order by v.updatedAt asc")
+    List<Vehicle> lapsed(@Param("states") Collection<VehicleState> states,
+                         @Param("cutoff") LocalDate cutoff, Pageable page);
+}
+
+interface VehicleDocumentRepository extends JpaRepository<VehicleDocument, UUID> {
+
+    List<VehicleDocument> findByVehicleIdOrderByKindAsc(UUID vehicleId);
+
+    List<VehicleDocument> findByVehicleIdInOrderByKindAsc(Collection<UUID> vehicleIds);
+
+    Optional<VehicleDocument> findByVehicleIdAndKind(UUID vehicleId, VehicleDocumentKind kind);
+}
+
+interface VehiclePhotoRepository extends JpaRepository<VehiclePhoto, VehiclePhoto.Key> {
+
+    List<VehiclePhoto> findByVehicleIdOrderBySortOrderAsc(UUID vehicleId);
+
+    List<VehiclePhoto> findByVehicleIdInOrderBySortOrderAsc(Collection<UUID> vehicleIds);
+
+    void deleteByVehicleId(UUID vehicleId);
 }

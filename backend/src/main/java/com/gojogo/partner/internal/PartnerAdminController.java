@@ -71,11 +71,14 @@ class PartnerAdminController {
     private final PartnerService partners;
     private final PlatformAdminApi admins;
     private final ProfileApi profiles;
+    private final VehicleService vehicles;
 
-    PartnerAdminController(PartnerService partners, PlatformAdminApi admins, ProfileApi profiles) {
+    PartnerAdminController(PartnerService partners, PlatformAdminApi admins, ProfileApi profiles,
+                           VehicleService vehicles) {
         this.partners = partners;
         this.admins = admins;
         this.profiles = profiles;
+        this.vehicles = vehicles;
         log.info("Partner review: members of the '{}' Cognito group can work the queue",
             admins.groupName());
     }
@@ -169,6 +172,42 @@ class PartnerAdminController {
         AdminActor actor = authorize(token, jwt);
         log.info("{} viewed document {} of application {}", actor, documentId, accountId);
         return partners.adminDocument(accountId, documentId);
+    }
+
+    /**
+     * A vehicle's own papers, freshly signed — the same ten-minute problem as an
+     * applicant's ID, on a different object.
+     */
+    @GetMapping("/v1/partner/admin/vehicles/{vehicleId}/documents/{documentId}")
+    ReviewDocumentDto vehicleDocument(
+            @RequestHeader(name = TOKEN_HEADER, required = false) String token,
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID vehicleId,
+            @PathVariable UUID documentId) {
+        AdminActor actor = authorize(token, jwt);
+        log.info("{} viewed document {} of vehicle {}", actor, documentId, vehicleId);
+        return vehicles.document(vehicleId, documentId);
+    }
+
+    /**
+     * Approves one vehicle, or flags it.
+     *
+     * <p>Flagging is deliberately not a rejection: the driver re-uploads a
+     * certificate and it goes back in the queue. But flagging the car somebody is
+     * <em>currently driving</em> suspends the partner in the same breath — a
+     * flagged vehicle that keeps receiving work is a flag that did nothing.
+     */
+    @PostMapping("/v1/partner/admin/applications/{accountId}/vehicles/{vehicleId}/review")
+    ReviewApplicationDto reviewVehicle(
+            @RequestHeader(name = TOKEN_HEADER, required = false) String token,
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID accountId,
+            @PathVariable UUID vehicleId,
+            @Valid @RequestBody VehicleReviewRequest request) {
+        AdminActor actor = authorize(token, jwt);
+        log.info("Vehicle {} of application {} {} by {}", vehicleId, accountId,
+            request.approved() ? "approved" : "flagged", actor);
+        return partners.reviewVehicle(accountId, vehicleId, request.approved(), request.note());
     }
 
     /** One application, with a fresh 10-minute signed link per document. */

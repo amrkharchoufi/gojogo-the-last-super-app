@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 // MARK: - Header entry button (top-right, liquid glass)
 
@@ -311,6 +312,12 @@ private struct PartnerStakePage: View {
             }
             payButton
         }
+        // The wallet and the stake both come from the server; a page opened
+        // after a top-up in another tab should not show the old numbers.
+        .task {
+            await app.refreshWallet()
+            await app.refreshDriverApplication(role)
+        }
     }
 
     private var amountCard: some View {
@@ -319,10 +326,10 @@ private struct PartnerStakePage: View {
                 .font(.ggMono(11, .semibold))
                 .tracking(0.8)
                 .foregroundStyle(GGColor.textSecondary)
-            Text("$\(Int(PartnerRole.stakeAmount))")
+            Text(stakeLabel)
                 .font(.system(size: 56, weight: .bold))
                 .foregroundStyle(GGColor.textPrimary)
-            Text("Refundable · held securely")
+            Text("Refundable · held in your own wallet")
                 .font(.system(size: 13))
                 .foregroundStyle(GGColor.textSecondary)
         }
@@ -333,15 +340,17 @@ private struct PartnerStakePage: View {
 
     private var breakdown: some View {
         VStack(spacing: 10) {
-            row("Stake deposit", "$\(Int(PartnerRole.stakeAmount)).00")
+            row("Stake deposit", stakeLabel)
             row("Processing fee", "Free")
+            row("Your wallet", WalletStore.money(
+                app.driverStake?.walletAvailableMinor ?? app.wallet?.availableMinor ?? 0))
             Divider().background(GGColor.ink(0.1))
             HStack {
-                Text("Due today")
+                Text(shortfall > 0 ? "Still needed" : "Due today")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(GGColor.textPrimary)
                 Spacer()
-                Text("$\(Int(PartnerRole.stakeAmount)).00")
+                Text(shortfall > 0 ? WalletStore.money(shortfall) : stakeLabel)
                     .font(.ggMono(15, .semibold))
                     .foregroundStyle(GGColor.textPrimary)
             }
@@ -358,34 +367,55 @@ private struct PartnerStakePage: View {
         }
     }
 
+    /// Where the money comes from — the GoJo Wallet, which is the only place it
+    /// ever could. There is no card form in this app and never should be: cards
+    /// reach Stripe's hosted page and nothing else.
     private var payMethod: some View {
         HStack(spacing: 12) {
-            Image(systemName: "apple.logo")
+            Image(systemName: "wallet.bifold.fill")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(GGColor.textPrimary)
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(GGColor.ink(0.08)))
             VStack(alignment: .leading, spacing: 1) {
-                Text("Paying with")
+                Text(shortfall > 0 ? "Not enough in" : "Held from")
                     .font(.system(size: 11)).foregroundStyle(GGColor.textTertiary)
-                Text("Apple Pay")
+                Text("Your GoJo Wallet")
                     .font(.system(size: 14, weight: .semibold)).foregroundStyle(GGColor.textPrimary)
             }
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(GGColor.textTertiary)
+            if shortfall > 0 && app.walletTopUpAvailable {
+                Button {
+                    app.topUpForStake()
+                } label: {
+                    Text("Add \(WalletStore.money(shortfall))")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Capsule().fill(GGColor.white))
+                }
+                .buttonStyle(PressableStyle())
+            }
         }
         .padding(12)
         .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.08)
     }
+
+    /// The amount is the server's, not a constant in this app — a stake that
+    /// changes should be a config row, not a release.
+    private var stakeLabel: String {
+        WalletStore.money(app.driverStake?.requiredMinor ?? 3000,
+                          currency: app.driverStake?.currency ?? "USD")
+    }
+
+    private var shortfall: Int { app.driverStake?.shortfallMinor ?? 0 }
 
     private var reassurance: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "info.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(GGColor.textTertiary)
-            Text("This is a deposit, not a payment for anything. It stays yours and is returned in full when you stop \(role == .driver ? "driving" : "delivering") in good standing.")
+            Text("This is a deposit, not a payment. It moves into a locked pocket of your own wallet, funds your ID check, and the rest comes back if you're turned down or you withdraw.")
                 .font(.system(size: 12))
                 .foregroundStyle(GGColor.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -403,7 +433,8 @@ private struct PartnerStakePage: View {
                     Text("Processing…")
                 } else {
                     Image(systemName: "lock.fill").font(.system(size: 13, weight: .bold))
-                    Text("Pay $\(Int(PartnerRole.stakeAmount)) stake")
+                    Text(app.driverStake?.isPaid == true
+                         ? "Continue" : "Lock \(stakeLabel) stake")
                 }
             }
             .font(.system(size: 16, weight: .bold))
@@ -425,6 +456,8 @@ private struct PartnerStakePage: View {
 private struct PartnerKYCPage: View {
     @EnvironmentObject var app: AppState
     let role: PartnerRole
+    /// Which paper is in flight, so the tile can say so rather than looking dead.
+    @State private var uploadingDocument: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -673,10 +706,27 @@ private struct PartnerKYCPage: View {
                 }
                 fieldRow(title: "Licence plate", placeholder: "12345 - أ - 6",
                          text: $app.partnerApplication.plate, autocaps: .characters)
-                captureTile(title: "Vehicle registration",
-                            subtitle: "Carte grise — matching the plate above",
-                            icon: "doc.text.fill",
-                            captured: $app.partnerApplication.registrationCaptured)
+                // Plates are unique per *region*, never globally — the same
+                // string is a different car in another country, which is why
+                // the server refuses a duplicate only within one.
+                fieldRow(title: "Registered in", placeholder: "Casablanca",
+                         text: $app.partnerApplication.vehicleRegion)
+                HStack(spacing: 10) {
+                    fieldRow(title: "Registration expires", placeholder: "2027-04-30",
+                             text: $app.partnerApplication.registrationExpiresOn)
+                    fieldRow(title: "Insurance expires", placeholder: "2027-01-15",
+                             text: $app.partnerApplication.insuranceExpiresOn)
+                }
+                // These two are real uploads into the private prefix — the same
+                // place an ID card goes, and never a public URL. A driver has to
+                // have saved the vehicle first, because a document belongs to a
+                // car rather than to an application.
+                documentTile(kind: "REGISTRATION", title: "Vehicle registration",
+                             subtitle: "Carte grise — matching the plate above",
+                             icon: "doc.text.fill")
+                documentTile(kind: "INSURANCE", title: "Insurance certificate",
+                             subtitle: "Current, and expiring after today",
+                             icon: "shield.lefthalf.filled")
             }
         }
     }
@@ -771,6 +821,75 @@ private struct PartnerKYCPage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// A vehicle paper, uploaded for real.
+    ///
+    /// The tile it replaces toggled a Bool and checked nothing — the same
+    /// pattern the identity half lost when Sumsub arrived, for the same reason:
+    /// a checkbox that claims a photo was taken is worse than no photo, because
+    /// it looks like evidence.
+    ///
+    /// It saves the vehicle first when there isn't one yet. A document belongs
+    /// to a car, and asking somebody to press "add vehicle" before they can
+    /// attach its registration is a step whose only product is confusion.
+    @ViewBuilder
+    private func documentTile(kind: String, title: String, subtitle: String,
+                              icon: String) -> some View {
+        let uploaded = !(app.driverApplication?.activeVehicle?
+            .missingDocuments?.contains(kind) ?? true)
+        PhotosPicker(selection: binding(for: kind), matching: .images) {
+            HStack(spacing: 12) {
+                Image(systemName: uploaded ? "checkmark.circle.fill" : icon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(uploaded ? GGColor.onAccent : GGColor.textPrimary)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(uploaded ? GGColor.white : GGColor.ink(0.08)))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Text(uploaded ? "Uploaded" : subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(uploaded ? GGColor.textSecondary : GGColor.textTertiary)
+                }
+                Spacer(minLength: 0)
+                if uploadingDocument == kind {
+                    ProgressView().controlSize(.small).tint(GGColor.textTertiary)
+                } else {
+                    Image(systemName: uploaded ? "arrow.counterclockwise" : "camera.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(GGColor.ink(0.05)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(uploaded ? GGColor.ink(0.2) : GGColor.ink(0.08),
+                                  lineWidth: uploaded ? 1 : 0.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func binding(for kind: String) -> Binding<PhotosPickerItem?> {
+        Binding(get: { nil }, set: { item in
+            guard let item else { return }
+            Task { await upload(item, kind: kind) }
+        })
+    }
+
+    private func upload(_ item: PhotosPickerItem, kind: String) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+        uploadingDocument = kind
+        defer { uploadingDocument = nil }
+        // The vehicle has to exist before its papers can hang off it.
+        if app.driverApplication?.activeVehicle == nil,
+           !(await app.saveDriverVehicle()) { return }
+        await app.uploadVehicleDocument(kind: kind, image: data)
+    }
+
     private func captureTile(title: String, subtitle: String, icon: String,
                              captured: Binding<Bool>) -> some View {
         Button {
@@ -813,7 +932,7 @@ private struct PartnerKYCPage: View {
 
     private var submitButton: some View {
         Button {
-            app.submitPartnerKYC()
+            app.submitDriverApplication()
         } label: {
             Text("Submit for review")
                 .font(.system(size: 16, weight: .bold))
@@ -823,8 +942,8 @@ private struct PartnerKYCPage: View {
                 .background(Capsule().fill(GGColor.white))
         }
         .buttonStyle(PressableStyle())
-        .disabled(!app.partnerKYCComplete)
-        .opacity(app.partnerKYCComplete ? 1 : 0.4)
+        .disabled(!app.partnerKYCComplete || app.partnerSubmitting)
+        .opacity(app.partnerKYCComplete && !app.partnerSubmitting ? 1 : 0.4)
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 12)
@@ -837,6 +956,10 @@ private struct PartnerDonePage: View {
     @EnvironmentObject var app: AppState
     let role: PartnerRole
     @State private var appear = false
+
+    /// True only once a reviewer has actually said yes — which is the dispatch
+    /// registry existing, not this app deciding.
+    private var approved: Bool { app.partnerRoles.contains(role) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -859,10 +982,17 @@ private struct PartnerDonePage: View {
                 }
 
                 VStack(spacing: 10) {
-                    Text("Process complete")
+                    // Submitting is not being approved, and the screen says so.
+                    // A person reviews this — the same queue a restaurant waits
+                    // in — and telling somebody they are a driver before anybody
+                    // has read their application would be the app lying on its
+                    // own behalf.
+                    Text(approved ? "You're on the road" : "Sent for review")
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(GGColor.textPrimary)
-                    Text("You're now a GojoGo \(role.title.lowercased()). Your \(role.service) partner tools are unlocked — go online whenever you're ready to start earning.")
+                    Text(approved
+                         ? "You're a GojoGo \(role.title.lowercased()). Go online whenever you're ready."
+                         : "A person checks every \(role.title.lowercased()) application, including your papers and your vehicle. We'll let you know as soon as it's decided — your stake stays yours either way.")
                         .explanatory(15)
                         .foregroundStyle(GGColor.textSecondary)
                         .multilineTextAlignment(.center)
@@ -871,9 +1001,10 @@ private struct PartnerDonePage: View {
                 }
 
                 HStack(spacing: 10) {
-                    doneBadge(icon: "checkmark.seal.fill", label: "Verified")
+                    doneBadge(icon: "checkmark.seal.fill", label: "ID verified")
                     doneBadge(icon: "lock.shield.fill", label: "Stake held")
-                    doneBadge(icon: role.icon, label: role.title)
+                    doneBadge(icon: approved ? role.icon : "clock.fill",
+                              label: approved ? role.title : "In review")
                 }
             }
             .opacity(appear ? 1 : 0)
@@ -881,9 +1012,9 @@ private struct PartnerDonePage: View {
 
             VStack(spacing: 10) {
                 Button {
-                    app.finishPartnerOnboarding(openDashboard: true)
+                    app.finishPartnerOnboarding(openDashboard: approved)
                 } label: {
-                    Text("Go to \(role.title) mode")
+                    Text(approved ? "Go to \(role.title) mode" : "Done")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(GGColor.onAccent)
                         .frame(maxWidth: .infinity)
@@ -892,16 +1023,18 @@ private struct PartnerDonePage: View {
                 }
                 .buttonStyle(PressableStyle())
 
-                Button {
-                    app.finishPartnerOnboarding(openDashboard: false)
-                } label: {
-                    Text("Maybe later")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(GGColor.textSecondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
+                if approved {
+                    Button {
+                        app.finishPartnerOnboarding(openDashboard: false)
+                    } label: {
+                        Text("Maybe later")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(PressableStyle())
                 }
-                .buttonStyle(PressableStyle())
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 16)

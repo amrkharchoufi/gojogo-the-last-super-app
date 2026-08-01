@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -61,12 +62,15 @@ class PartnerService {
     private final MediaApi media;
     private final ProfileApi profiles;
     private final IdentityVerificationApi identity;
+    private final VehicleService vehicles;
+    private final PartnerStakeService stakes;
     private final ApplicationEventPublisher events;
 
     PartnerService(PartnerAccountRepository accounts, PartnerDocumentRepository documents,
                    MerchantProvisioningApi merchants, DriverProvisioningApi drivers,
                    CourierProvisioningApi couriers, MediaDocumentApi privateMedia,
                    MediaApi media, ProfileApi profiles, IdentityVerificationApi identity,
+                   VehicleService vehicles, PartnerStakeService stakes,
                    ApplicationEventPublisher events) {
         this.accounts = accounts;
         this.documents = documents;
@@ -77,6 +81,8 @@ class PartnerService {
         this.media = media;
         this.profiles = profiles;
         this.identity = identity;
+        this.vehicles = vehicles;
+        this.stakes = stakes;
         this.events = events;
     }
 
@@ -215,7 +221,22 @@ class PartnerService {
                 "Upload your " + required.stream().map(PartnerService::label)
                     .collect(Collectors.joining(", ")));
         }
+        // The stake is a precondition for submission, not for approval (SPECS
+        // §4) — staking is what funds verification, so it happens before a
+        // human spends time on this rather than after.
+        if (stakes.isStakeRequired(account.getKind()) && !account.hasLiveStake()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Pay your stake before submitting");
+        }
+        vehicles.whatBlocksSubmission(account).ifPresent(blocker -> {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                (bySelf ? "Before you submit, " : "Before this can be submitted, ") + blocker);
+        });
+        boolean firstSubmission = account.getSubmittedAt() == null;
         account.submit(OffsetDateTime.now());
+        // Charged after the state change so a submission that fails a check
+        // above never costs anybody anything.
+        stakes.chargeKycFee(account, firstSubmission);
         return toDto(account);
     }
 
@@ -264,6 +285,91 @@ class PartnerService {
         return account.getKind().requiredDocuments(identity.isConfigured());
     }
 
+    // MARK: The stake and the vehicles
+
+    /**
+     * Locks the stake. A 402 with the shortfall when the wallet won't cover it,
+     * so the app offers a top-up rather than a dead end.
+     */
+    @Transactional
+    PartnerAccountDto payStake(UUID me, UUID accountId) {
+        PartnerAccount account = requireEditable(me, accountId);
+        if (!stakes.isStakeRequired(account.getKind())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                account.getKind() + " partners don't stake anything");
+        }
+        stakes.payStake(account);
+        return toDto(account);
+    }
+
+    @Transactional
+    VehicleDto saveVehicle(UUID me, UUID accountId, UUID vehicleId,
+                           SaveVehicleRequest request) {
+        return vehicles.save(requireEditable(me, accountId), vehicleId, request);
+    }
+
+    @Transactional
+    VehicleDto activateVehicle(UUID me, UUID accountId, UUID vehicleId) {
+        // Deliberately not gated on the application being editable: changing
+        // which car you're driving is a thing an approved driver does every
+        // week, and it is the one field dispatch reads.
+        return vehicles.activate(require(me, accountId), vehicleId);
+    }
+
+    @Transactional
+    void retireVehicle(UUID me, UUID accountId, UUID vehicleId) {
+        vehicles.retire(require(me, accountId), vehicleId);
+    }
+
+    @Transactional(readOnly = true)
+    DocumentUploadResponse presignVehicleDocument(UUID me, UUID accountId, UUID vehicleId,
+                                                  DocumentUploadRequest request) {
+        return vehicles.presignDocument(require(me, accountId), vehicleId, request);
+    }
+
+    @Transactional
+    VehicleDto attachVehicleDocument(UUID me, UUID accountId, UUID vehicleId,
+                                     AttachDocumentRequest request) {
+        return vehicles.attachDocument(require(me, accountId), vehicleId, request);
+    }
+
+    /** Flagging the vehicle somebody is driving takes them off the road, so the
+     *  partner is suspended in the same breath — a flagged car that keeps
+     *  receiving work is a flag that did nothing. */
+    @Transactional
+    ReviewApplicationDto reviewVehicle(UUID accountId, UUID vehicleId, boolean approved,
+                                       String note) {
+        PartnerAccount account = requireExisting(accountId);
+        VehicleDto reviewed = vehicles.review(vehicleId, approved, note);
+        if (!approved && reviewed.active() && account.getStatus() == PartnerStatus.APPROVED) {
+            suspendForVehicle(account, note);
+        }
+        return toReview(account);
+    }
+
+    /**
+     * Takes a partner off the road because their vehicle's papers lapsed.
+     *
+     * <p>Separate from {@link #suspend} because it is not a judgement about the
+     * person: the note says what expired, and re-uploading a certificate is what
+     * fixes it. It still goes through the same status, because dispatch has one
+     * idea of "not receiving work".
+     */
+    @Transactional
+    void suspendForVehicle(PartnerAccount account, String note) {
+        if (account.getStatus() != PartnerStatus.APPROVED) return;
+        account.suspend(note == null || note.isBlank()
+            ? "Your vehicle's papers are out of date" : note, OffsetDateTime.now());
+        setProvisionedSuspended(account, true);
+        setBusinessVerified(account, false);
+        publish(account);
+    }
+
+    @Transactional(readOnly = true)
+    Optional<PartnerAccount> accountOfVehicleOwner(UUID accountId) {
+        return accounts.findById(accountId);
+    }
+
     /** Pulls it back out of the queue so it can be edited again. */
     @Transactional
     PartnerAccountDto withdraw(UUID me, UUID accountId) {
@@ -273,6 +379,10 @@ class PartnerService {
                 "Only an application under review can be withdrawn");
         }
         account.withdraw();
+        // Somebody who has pulled their application is not going to work here
+        // for now, and their money should not sit locked while they think about
+        // it. Paying again is what resubmitting costs.
+        stakes.releaseStake(account);
         return toDto(account);
     }
 
@@ -353,7 +463,8 @@ class PartnerService {
             .map(a -> new ReviewApplicationDto(toDto(a), byAccount
                 .getOrDefault(a.getId(), List.of()).stream()
                 .map(this::toReviewDocument)
-                .toList()))
+                .toList(),
+                vehicles.forReview(a.getId())))
             .toList();
     }
 
@@ -406,6 +517,10 @@ class PartnerService {
                     + account.getStatus() + ")");
         }
         account.reject(note, OffsetDateTime.now());
+        // The stake goes back on a rejection, less whatever the ID check cost.
+        // Keeping it would make refusing somebody profitable, which is not a
+        // pressure a review queue should be under.
+        stakes.releaseStake(account);
         publish(account);
         return toReview(account);
     }
@@ -446,13 +561,14 @@ class PartnerService {
     }
 
     /**
-     * The category is deliberately null: approving somebody says they may drive,
-     * not what they drive. Phase 3 M2 registers vehicles and sets it; until then
-     * dispatch fills in the default for the kind.
+     * What dispatch matches this worker on is the <b>active vehicle's</b>
+     * category — the one they said they are driving, not the one they own most
+     * of. A courier with no vehicle at all passes null, and dispatch fills in the
+     * default for the kind, which is the honest answer for somebody on a bicycle.
      */
-    private static WorkerRegistration workerRegistration(PartnerAccount account) {
-        return new WorkerRegistration(account.getUserId(), account.getId(), null,
-            account.getCity());
+    private WorkerRegistration workerRegistration(PartnerAccount account) {
+        return new WorkerRegistration(account.getUserId(), account.getId(),
+            vehicles.activeCategory(account.getId()).orElse(null), account.getCity());
     }
 
     private void setProvisionedSuspended(PartnerAccount account, boolean suspended) {
@@ -576,7 +692,8 @@ class PartnerService {
         return new ReviewApplicationDto(toDto(account),
             documents.findByAccountIdOrderByKindAsc(account.getId()).stream()
                 .map(this::toReviewDocument)
-                .toList());
+                .toList(),
+            vehicles.forReview(account.getId()));
     }
 
     private ReviewDocumentDto toReviewDocument(PartnerDocument document) {
@@ -603,6 +720,13 @@ class PartnerService {
         boolean identityRequired = identity.isConfigured();
         boolean identityDone = !identityRequired
             || check.status() == IdentityStatus.VERIFIED;
+        // Everything the submit path would refuse on, answered in advance — so
+        // the app renders one checklist rather than discovering the rules one
+        // 400 at a time.
+        boolean stakeRequired = stakes.isStakeRequired(account.getKind());
+        boolean stakeDone = !stakeRequired || account.hasLiveStake();
+        String vehicleBlocker = vehicles.whatBlocksSubmission(account).orElse(null);
+        String blocker = !stakeDone ? "pay your stake" : vehicleBlocker;
         return new PartnerAccountDto(
             account.getId(), account.getKind().name(), account.getStatus().name(),
             account.getBusinessName(), account.getBusinessProfileId(),
@@ -617,8 +741,11 @@ class PartnerService {
                 .toList(),
             required, missing,
             identityRequired, check.status().name(), check.reason(),
+            stakes.statusOf(account), vehicles.forAccount(account.getId()),
+            vehicles.isVehicleRequired(account.getKind()), blocker,
             editable,
-            editable && missing.isEmpty() && identityDone && missingFields(account).isEmpty(),
+            editable && missing.isEmpty() && identityDone && stakeDone && blocker == null
+                && missingFields(account).isEmpty(),
             account.getSubmittedAt(), account.getReviewedAt(), account.getCreatedAt());
     }
 }

@@ -27,6 +27,8 @@ final class LiveLocationProvider: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private var waiters: [CheckedContinuation<CLLocation, Error>] = []
     private var timeout: Task<Void, Never>?
+    /// How many things want a continuous fix right now (see `startTracking`).
+    private var tracking = 0
 
     override private init() {
         super.init()
@@ -63,6 +65,40 @@ final class LiveLocationProvider: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    // MARK: Continuous duty (Driver Mode)
+
+    /// Keeps the GPS warm while somebody is working.
+    ///
+    /// The one-shot path above is right for "send my location" and wrong here:
+    /// it hands back a fix up to a minute old, and dispatch treats a position
+    /// that age as no position at all — a driver would sit invisible in the
+    /// middle of a city. Tracking is opt-in and explicitly stopped, because the
+    /// difference between this and the one-shot is a battery complaint and a
+    /// privacy one.
+    func startTracking() {
+        tracking += 1
+        guard tracking == 1 else { return }
+        let status = manager.authorizationStatus
+        if status == .notDetermined { manager.requestWhenInUseAuthorization() }
+        manager.startUpdatingLocation()
+    }
+
+    func stopTracking() {
+        tracking = max(0, tracking - 1)
+        // Only stop when nothing else is waiting on a fix — a one-shot request
+        // in flight would otherwise be cancelled by a dashboard closing.
+        if tracking == 0 && waiters.isEmpty { manager.stopUpdatingLocation() }
+    }
+
+    /// The last fix, if it is recent enough to be worth sending. Nil rather
+    /// than stale: reporting where somebody was ten minutes ago is worse than
+    /// reporting nothing, because dispatch would act on it.
+    var currentCoordinate: CLLocationCoordinate2D? {
+        guard let fix = manager.location,
+              fix.timestamp.timeIntervalSinceNow > -30 else { return nil }
+        return fix.coordinate
+    }
+
     private func startTimeout(seconds: Double) {
         timeout?.cancel()
         timeout = Task { [weak self] in
@@ -76,7 +112,9 @@ final class LiveLocationProvider: NSObject, CLLocationManagerDelegate {
         timeout?.cancel(); timeout = nil
         let pending = waiters
         waiters = []
-        manager.stopUpdatingLocation()
+        // Leave the manager running if Driver Mode is on duty — this only ends
+        // the one-shot request.
+        if tracking == 0 { manager.stopUpdatingLocation() }
         for cont in pending { cont.resume(with: result) }
     }
 
