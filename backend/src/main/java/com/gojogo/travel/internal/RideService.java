@@ -26,6 +26,7 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -331,8 +332,17 @@ class RideService {
      * A driver accepted in dispatch, at the price the rider asked. Called from
      * the event listener, which is why it takes an assignment rather than a
      * request.
+     *
+     * <p><b>{@code REQUIRES_NEW}, and it is load-bearing.</b> This runs from an
+     * {@code AFTER_COMMIT} listener, where the just-committed transaction's
+     * resources are still bound to the thread — so plain {@code REQUIRED} joins
+     * a transaction that is finished, and the first flush fails with "no
+     * transaction is in progress". The dispatch job is assigned by then, so the
+     * damage is a worker marked busy for a ride that never confirmed and a rider
+     * told nothing. Found in production on 2026-08-01, the first time anybody
+     * accepted a real ride offer at the asking price.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     void confirmFromDispatch(UUID rideId, Assignment assignment) {
         Ride ride = rides.findById(rideId).orElse(null);
         if (ride == null || !ride.getState().isOpen()) return;
@@ -340,8 +350,10 @@ class RideService {
         confirm(ride, assignment, ride.getOfferedFareMinor());
     }
 
-    /** Nobody took it. */
-    @Transactional
+    /** Nobody took it. {@code REQUIRES_NEW} for the same reason as
+     *  {@link #confirmFromDispatch} — the other listener entry point, and it
+     *  writes too. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     void exhaust(UUID rideId) {
         Ride ride = rides.findById(rideId).orElse(null);
         if (ride == null || !ride.getState().isOpen()) return;
