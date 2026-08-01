@@ -81,6 +81,15 @@ jobs:
           # server only fetches JWKS when a request arrives, and none does.
           COGNITO_ISSUER_URI: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ImKOJoJaA
           SERVER_PORT: '8080'
+          # Not a credential and not a service this job talks to — the AWS SDK
+          # resolves a region *eagerly*, when the bean is built, and messaging's
+          # `DynamoDbClient.create()` therefore threw before Flyway's result was
+          # ever inspected. Without this line the job failed on all three of the
+          # runs it had ever had, which meant the one guard standing between a
+          # migration and production had never once actually checked one.
+          # Credentials stay unset on purpose: the client is constructed here and
+          # never called, so it is the region alone that has to be present.
+          AWS_REGION: us-east-1
         run: |
           set -o pipefail
           timeout 180 java -jar target/*.jar 2>&1 | tee boot.log &
