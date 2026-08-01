@@ -2,6 +2,9 @@ package com.gojogo.partner.internal;
 
 import com.gojogo.delivery.MerchantProvisioningApi;
 import com.gojogo.delivery.MerchantRegistration;
+import com.gojogo.dispatch.CourierProvisioningApi;
+import com.gojogo.dispatch.DriverProvisioningApi;
+import com.gojogo.dispatch.WorkerRegistration;
 import com.gojogo.kyc.IdentityStatus;
 import com.gojogo.kyc.IdentityVerificationApi;
 import com.gojogo.media.MediaApi;
@@ -52,6 +55,8 @@ class PartnerService {
     private final PartnerAccountRepository accounts;
     private final PartnerDocumentRepository documents;
     private final MerchantProvisioningApi merchants;
+    private final DriverProvisioningApi drivers;
+    private final CourierProvisioningApi couriers;
     private final MediaDocumentApi privateMedia;
     private final MediaApi media;
     private final ProfileApi profiles;
@@ -59,12 +64,15 @@ class PartnerService {
     private final ApplicationEventPublisher events;
 
     PartnerService(PartnerAccountRepository accounts, PartnerDocumentRepository documents,
-                   MerchantProvisioningApi merchants, MediaDocumentApi privateMedia,
+                   MerchantProvisioningApi merchants, DriverProvisioningApi drivers,
+                   CourierProvisioningApi couriers, MediaDocumentApi privateMedia,
                    MediaApi media, ProfileApi profiles, IdentityVerificationApi identity,
                    ApplicationEventPublisher events) {
         this.accounts = accounts;
         this.documents = documents;
         this.merchants = merchants;
+        this.drivers = drivers;
+        this.couriers = couriers;
         this.privateMedia = privateMedia;
         this.media = media;
         this.profiles = profiles;
@@ -365,7 +373,7 @@ class PartnerService {
         PartnerAccount account = requireExisting(accountId);
         if (account.getStatus() == PartnerStatus.SUSPENDED) {
             account.restore(OffsetDateTime.now());
-            merchants.setMerchantSuspended(account.getProvisionedRefId(), false);
+            setProvisionedSuspended(account, false);
             setBusinessVerified(account, true);
             publish(account);
             return toReview(account);
@@ -379,13 +387,9 @@ class PartnerService {
             // Better a plain refusal than an approval that provisions nothing:
             // the applicant would see "approved" and find no way to work.
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                account.getKind() + " partners can't be provisioned yet — that "
-                    + "needs the dispatch module (Phase 3)");
+                account.getKind() + " partners can't be provisioned yet");
         }
-        UUID refId = merchants.provisionMerchant(new MerchantRegistration(
-            account.getUserId(), account.getBusinessName(), account.getCategory(),
-            account.getLogoUrl(), account.getLatitude(), account.getLongitude()));
-        account.approve(refId, OffsetDateTime.now());
+        account.approve(provision(account), OffsetDateTime.now());
         // The verified badge is the KYC review's, not the owner's: this is the
         // only place it is granted (SPECS.md §8 — no paid verification).
         setBusinessVerified(account, true);
@@ -417,10 +421,50 @@ class PartnerService {
                     + account.getStatus() + ")");
         }
         account.suspend(note, OffsetDateTime.now());
-        merchants.setMerchantSuspended(account.getProvisionedRefId(), true);
+        setProvisionedSuspended(account, true);
         setBusinessVerified(account, false);
         publish(account);
         return toReview(account);
+    }
+
+    /**
+     * Puts an approved partner where their kind belongs — the one place this
+     * module names a vertical, and it names each of them exactly once.
+     *
+     * <p>Every branch is idempotent on the vertical's side, so a retried approval
+     * or a reviewer who clicks twice cannot leave somebody with two restaurants
+     * or two driver registrations.
+     */
+    private UUID provision(PartnerAccount account) {
+        return switch (account.getKind()) {
+            case RESTAURANT -> merchants.provisionMerchant(new MerchantRegistration(
+                account.getUserId(), account.getBusinessName(), account.getCategory(),
+                account.getLogoUrl(), account.getLatitude(), account.getLongitude()));
+            case DRIVER -> drivers.provisionDriver(workerRegistration(account));
+            case COURIER -> couriers.provisionCourier(workerRegistration(account));
+        };
+    }
+
+    /**
+     * The category is deliberately null: approving somebody says they may drive,
+     * not what they drive. Phase 3 M2 registers vehicles and sets it; until then
+     * dispatch fills in the default for the kind.
+     */
+    private static WorkerRegistration workerRegistration(PartnerAccount account) {
+        return new WorkerRegistration(account.getUserId(), account.getId(), null,
+            account.getCity());
+    }
+
+    private void setProvisionedSuspended(PartnerAccount account, boolean suspended) {
+        UUID refId = account.getProvisionedRefId();
+        // An application suspended before it was ever provisioned has nothing to
+        // switch off — the status on the row is the whole block.
+        if (refId == null) return;
+        switch (account.getKind()) {
+            case RESTAURANT -> merchants.setMerchantSuspended(refId, suspended);
+            case DRIVER -> drivers.setDriverSuspended(refId, suspended);
+            case COURIER -> couriers.setCourierSuspended(refId, suspended);
+        }
     }
 
     private void setBusinessVerified(PartnerAccount account, boolean verified) {

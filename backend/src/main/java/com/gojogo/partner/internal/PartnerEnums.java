@@ -10,16 +10,25 @@ import java.util.Set;
  */
 enum PartnerKind {
 
-    /** A restaurant on GojoDelivery. The only kind that can be provisioned today. */
+    /** A restaurant on GojoDelivery, provisioned into {@code delivery}. */
     RESTAURANT,
-    /** Ride-hailing. Waits for the Phase 3 {@code dispatch} module. */
+    /** Ride-hailing, provisioned into {@code dispatch}'s driver registry (Phase 3 M1). */
     DRIVER,
-    /** Delivery courier. Waits for {@code dispatch} too. */
+    /** Delivery courier — the same registry, the other kind. */
     COURIER;
 
-    /** Whether an approval has somewhere to put this partner yet. */
+    /**
+     * Whether an approval has somewhere to put this partner yet.
+     *
+     * <p>All three do, as of Phase 3 M1: {@code DRIVER} and {@code COURIER} spent
+     * a milestone and a half refusing here because {@code dispatch} did not
+     * exist. The method stays because the next two kinds — a seller and a service
+     * provider, Phase 5 — will need it again, and an approval that provisions
+     * nothing is worse than a refusal: the applicant reads "approved" and finds
+     * no way to work.
+     */
     boolean isProvisionable() {
-        return this == RESTAURANT;
+        return true;
     }
 
     /**

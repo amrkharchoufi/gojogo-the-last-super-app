@@ -1,6 +1,8 @@
 package com.gojogo.partner.internal;
 
 import com.gojogo.auth.PlatformAdminApi;
+import com.gojogo.dispatch.DispatchApi;
+import com.gojogo.dispatch.WorkerKind;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -9,6 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -17,8 +20,9 @@ import java.util.UUID;
  *
  * <p>Roles are <em>derived</em>, never stored (SPECS.md §8): owning a business
  * profile makes you a business owner, an approved application makes you a
- * merchant, and a dispatch registry row will make you a driver in Phase 3.
- * There is no role table to drift out of sync with the things it describes.
+ * merchant, and a row in {@code dispatch}'s registry makes you a driver or a
+ * courier. There is no role table to drift out of sync with the things it
+ * describes.
  *
  * <p>It lives in {@code partner} because partner is where the provisioning
  * facts are, and it may depend on {@code profile}; the reverse would be a
@@ -31,13 +35,16 @@ class RolesController {
     private final ProfileApi profiles;
     private final PartnerCurrentProfile current;
     private final PlatformAdminApi admins;
+    private final DispatchApi dispatch;
 
     RolesController(PartnerAccountRepository accounts, ProfileApi profiles,
-                    PartnerCurrentProfile current, PlatformAdminApi admins) {
+                    PartnerCurrentProfile current, PlatformAdminApi admins,
+                    DispatchApi dispatch) {
         this.accounts = accounts;
         this.profiles = profiles;
         this.current = current;
         this.admins = admins;
+        this.dispatch = dispatch;
     }
 
     @GetMapping("/v1/me/roles")
@@ -50,13 +57,18 @@ class RolesController {
             .map(a -> new PartnerRole(a.getKind().name(), a.getStatus().name(),
                 a.getProvisionedRefId(), a.getBusinessProfileId()))
             .toList();
+        // Read from the dispatch registry rather than inferred from an approved
+        // application (SPECS §8: roles are derived from the thing itself). The
+        // two agree today, and will not the first time an approval provisions
+        // and something downstream of it fails.
+        Set<WorkerKind> registries = dispatch.rolesOf(me);
         return new MyRolesResponse(me,
             !businesses.isEmpty(),
             businesses,
             partners,
             merchantIds(partners),
-            approved(partners, "DRIVER"),
-            approved(partners, "COURIER"),
+            registries.contains(WorkerKind.DRIVER),
+            registries.contains(WorkerKind.COURIER),
             // Read from the caller's own token, not from a table: platform
             // operators are a Cognito group, so the claim is the fact.
             admins.isPlatformAdmin(jwt));
@@ -68,13 +80,6 @@ class RolesController {
                 && "APPROVED".equals(p.status()))
             .map(PartnerRole::refId)
             .toList();
-    }
-
-    /** Phase 3 will read this from the dispatch registry; until then an approved
-     *  application of that kind is the only truth there is (and cannot exist yet). */
-    private static boolean approved(List<PartnerRole> partners, String kind) {
-        return partners.stream()
-            .anyMatch(p -> kind.equals(p.kind()) && "APPROVED".equals(p.status()));
     }
 
     private static BusinessRole toBusinessRole(ProfileDto p) {

@@ -61,6 +61,12 @@ gojogo:
       pickup-seconds: ${DELIVERY_PICKUP_SECONDS:75}
       delivering-seconds: ${DELIVERY_DELIVERING_SECONDS:150}
       delivered-seconds: ${DELIVERY_DELIVERED_SECONDS:330}
+  # Dispatch matching. Only the poll interval is here: every *policy* number —
+  # search radii, wave size, offer TTL, ranking weights — lives in the config
+  # registry (SPECS §3/§14) so widening the search on a busy Friday is a row and
+  # not a deploy. This one is infrastructure: how often the matcher wakes up.
+  dispatch:
+    matching-poll-ms: ${DISPATCH_MATCHING_POLL_MS:5000}
   # Marketplace test-data cleanup (EconomyAdminController). /v1/economy/admin/**
   # exists only while this token is set to 16+ characters; unset — the
   # production default — those paths 404. Set ECONOMY_ADMIN_TOKEN for the deploy

@@ -61,7 +61,21 @@ One `payments` schema, double-entry: every movement is a `ledger_entry` (id, ide
 
 ---
 
-## 3. Dispatch matching (platform `dispatch`)
+## 3. Dispatch matching (platform `dispatch`) — **BUILT 2026-08-01**
+
+Refinements the build made to this spec (§11.4: update SPECS when a build refines it):
+
+- **Presence is Postgres, not Redis GEO.** The read is "available workers of kind K within N km", over a table already narrowed by kind, status and suspension. The database runs a **bounding box** (plain index-friendly comparisons, padded so it is never tighter than the circle) and the real great-circle distance is measured in Java over what comes back. Redis is right when thousands of workers are moving; there are zero, an ElastiCache cluster bills by the hour regardless, and moving the presence columns later changes one repository method and no caller.
+- **Positions arrive over REST**, not the WebSocket. The socket that exists is API Gateway with `$connect`/`$disconnect` Lambdas owning a connection registry — there is no inbound message route, and building one belongs in the milestone where a position is *watched* (M3's live trip) rather than merely stored. `POST /v1/dispatch/me/position` returns 204 with no body; the reporting interval is told by the server, since the cost of it is the server's.
+- **One `dispatch.worker` table with a `kind`**, not `dispatch.driver` and `dispatch.courier`. A dual-mode person is one human with two rows, which is what makes "an accepted job in either mode makes you busy in both" a one-line rule, and why a position report fans out to every registration they hold.
+- **Ranking is a pure function over a shortlist**, not SQL — nothing on the build machine can execute JPQL, and this is the last logic in the system that should first run in production. Weights normalise each term before applying (proximity 60 / rating 25 / idle 15): a raw kilometre and a raw star are not comparable. The idle term is a **tiebreak, not a queue** — an hour of waiting outranks a driver about as close, and does not outrank one two kilometres nearer.
+- **A lost race is `WITHDRAWN`, never `EXPIRED`.** Both end with the worker not doing the job, but only one is about the worker, and counting a withdrawal against an acceptance rate punishes people for races nobody told them they were in. Likewise **performance rates are null until there is something to divide by**, and a new worker's 5.00 is display rather than a rating — the first real one replaces it.
+- **First acceptance is settled by a JPA `@Version` on the job**, not by the service's state check: two accepts a millisecond apart both pass an in-memory test. The loser is told plainly and nothing is published.
+- **The wave clock doubles as the courier trigger.** `readyAt − pickupLead` is not a separate mechanism — it is a job whose first wave is scheduled in the future, and a scheduled ride is the same thing with a longer wait. The request TTL runs from the start of the search, not the booking.
+- **Routing/ETA authority is not built.** Distances are straight-line; Mapbox Directions arrives with the live trip that needs a polyline (M3). **Rating floor ships at 0** — a floor is meaningless before enough ratings exist for one to mean anything.
+- **Fare negotiation is not here.** An accept is an accept; §2's counter-offer rounds are `travel` order state layered on top of an offer, not inside it.
+
+### Original spec
 
 Owns: driver/courier presence + assignment. Redis GEO for positions (updated over WebSocket, **CONFIG** every 5s while available); Postgres (or thin ledger) for assignments and provisioning registries.
 
