@@ -25,6 +25,26 @@ public interface DispatchApi {
     UUID request(DispatchRequest request);
 
     /**
+     * The vertical has decided who, and dispatch records it.
+     *
+     * <p>Added in Phase 3 M3, for the one case {@link #request} cannot cover: a
+     * <b>negotiated</b> job. Dispatch's offer book asks "will you do this", which
+     * a driver who wants a different fare has to answer <em>no</em> to — so the
+     * price conversation that follows happens entirely in {@code travel}, and
+     * when the rider accepts a counter there is no open dispatch offer left to
+     * accept. This is how that ends: the vertical names the winner.
+     *
+     * <p>It does not weaken the first-accept-wins rule. The job row is still the
+     * arbiter — assigning one that is already assigned throws, so a rider
+     * accepting a counter a second after somebody took the job at the asking
+     * price loses, exactly as a second driver would.
+     *
+     * @throws org.springframework.web.server.ResponseStatusException 409 if the
+     *         job is already assigned, closed, or the worker is busy
+     */
+    Assignment assign(JobKind jobKind, UUID jobRefId, UUID workerId);
+
+    /**
      * Stops the search, or releases the worker if one had already accepted.
      * Safe to call for a job dispatch has never heard of — a vertical
      * cancelling an order that never reached dispatch should not have to know
@@ -57,4 +77,21 @@ public interface DispatchApi {
      * an approval, which is what SPECS §8 means by roles being derived.
      */
     Set<WorkerKind> rolesOf(UUID userId);
+
+    /**
+     * Was this account offered this job, and if so, which registration answered?
+     *
+     * <p>The narrowest question a negotiating vertical can ask, and deliberately
+     * the only one. {@code travel} has to know that a driver posting a counter is
+     * somebody dispatch actually put the trip in front of — otherwise any driver
+     * in the city could bid on any ride — and it needs their worker id to assign
+     * them if the rider says yes. Both answers in one call, and nothing else
+     * disclosed.
+     *
+     * <p>It answers for a <em>closed</em> offer too, which is the point: a
+     * counteroffer <b>is</b> a decline of the dispatch offer, so by the time the
+     * price conversation happens the row is no longer open. Requiring it to be
+     * would make negotiation impossible.
+     */
+    Optional<UUID> offeredWorkerId(JobKind jobKind, UUID jobRefId, UUID userId);
 }

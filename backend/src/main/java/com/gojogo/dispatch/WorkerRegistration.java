@@ -15,7 +15,13 @@ import java.util.UUID;
  *                         registers vehicles: an approval today knows a person is
  *                         allowed to drive, not what they drive
  * @param homeRegion       the city on the application, for later regional policy
+ * @param vehicleLabel     "White Dacia Logan", and {@code vehiclePlate} beside
+ *                         it. Pushed down rather than read across: the vehicle
+ *                         lives in {@code partner} and a rider on a kerb needs to
+ *                         know which car is theirs, so the fact travels in the
+ *                         direction provisioning already goes
  */
 public record WorkerRegistration(UUID userId, UUID partnerAccountId,
-                                 VehicleCategory category, String homeRegion) {
+                                 VehicleCategory category, String homeRegion,
+                                 String vehicleLabel, String vehiclePlate) {
 }

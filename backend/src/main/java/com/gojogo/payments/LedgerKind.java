@@ -57,6 +57,16 @@ public enum LedgerKind {
     /** Phase 3: a community-verification reward, paid from a driver's stake. */
     REWARD,
 
+    /**
+     * A ride fare, rider → driver. Mechanically a transfer, and named separately
+     * because a year of statements is what this decision is really about: rides
+     * carry no commission (SPECS §1 — the platform's revenue is M4's tokens), so
+     * unlike a delivery this is one movement rather than a split, and "Transfer"
+     * next to a trip is a line nobody can read. Cancellation fees ride here too,
+     * with a memo that says so.
+     */
+    RIDE_FARE,
+
     /** Anything else moving between two accounts on purpose. */
     TRANSFER,
 

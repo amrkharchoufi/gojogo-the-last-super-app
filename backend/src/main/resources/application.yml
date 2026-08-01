@@ -67,6 +67,13 @@ gojogo:
   # not a deploy. This one is infrastructure: how often the matcher wakes up.
   dispatch:
     matching-poll-ms: ${DISPATCH_MATCHING_POLL_MS:5000}
+  # Ride-hailing. Only the sweep interval is here: fares, negotiation rounds,
+  # offer TTLs and the cancellation fee all live in the config registry, and the
+  # price list itself is a table (travel.pricing_config) because it is
+  # per-category and effective-dated. Faster than dispatch's poller because what
+  # is being timed here is a person standing on a street.
+  travel:
+    expiry-poll-ms: ${TRAVEL_EXPIRY_POLL_MS:5000}
   # Marketplace test-data cleanup (EconomyAdminController). /v1/economy/admin/**
   # exists only while this token is set to 16+ characters; unset — the
   # production default — those paths 404. Set ECONOMY_ADMIN_TOKEN for the deploy

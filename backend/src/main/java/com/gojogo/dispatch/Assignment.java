@@ -16,8 +16,16 @@ import java.util.UUID;
  * @param rating         out of 5, or 5.0 for somebody nobody has rated yet
  * @param completedCount lifetime completed jobs, which is what "1,204 trips"
  *                       renders from
+ * @param vehicleLabel   "White Dacia Logan", and {@code vehiclePlate} beside it —
+ *                       the only two things that let somebody on a kerb tell
+ *                       which car is theirs. They live in {@code partner}, a
+ *                       vertical, so they are pushed down here at provisioning
+ *                       rather than read across: a vertical reading another
+ *                       vertical is what ARCHITECTURE §2 keeps out
  */
 public record Assignment(UUID workerId, UUID userId, WorkerKind workerKind,
                          VehicleCategory category, JobKind jobKind, UUID jobRefId,
-                         double rating, int completedCount, OffsetDateTime assignedAt) {
+                         double rating, int completedCount,
+                         String vehicleLabel, String vehiclePlate,
+                         OffsetDateTime assignedAt) {
 }

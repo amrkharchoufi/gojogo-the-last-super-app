@@ -30,4 +30,15 @@ public interface DriverProvisioningApi {
      * not put somebody on the road who had signed off.
      */
     void setDriverSuspended(UUID workerId, boolean suspended);
+
+    /**
+     * The driver changed which car they are driving.
+     *
+     * <p>Separate from provisioning because it happens far more often — a driver
+     * with two vehicles switches between them weekly, and re-running an approval
+     * for that would be absurd. It is the one field dispatch matches on, so it
+     * has to be able to change without one.
+     */
+    void setDriverVehicle(UUID workerId, VehicleCategory category,
+                          String vehicleLabel, String vehiclePlate);
 }

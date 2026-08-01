@@ -149,6 +149,41 @@ class VehicleService {
             .flatMap(v -> parseCategoryQuietly(v.getCategory()));
     }
 
+    /**
+     * Everything dispatch is told about the car — the category it matches on and
+     * the two strings a rider on a kerb identifies it by.
+     *
+     * <p>All empty for a courier with no vehicle, which is a legitimate state (a
+     * bicycle), and for a flagged one, which must not be described as though it
+     * were roadworthy.
+     */
+    @Transactional(readOnly = true)
+    ActiveVehicle activeSnapshot(UUID accountId) {
+        return activeVehicle(accountId)
+            .filter(v -> v.getState() != VehicleState.FLAGGED)
+            .map(v -> new ActiveVehicle(parseCategoryQuietly(v.getCategory()).orElse(null),
+                describe(v), v.getPlate()))
+            .orElse(ActiveVehicle.none());
+    }
+
+    /** "White Dacia Logan" — as much of it as was filled in. */
+    private static String describe(Vehicle vehicle) {
+        return java.util.stream.Stream
+            .of(vehicle.getColor(), vehicle.getMake(), vehicle.getModel())
+            .filter(part -> part != null && !part.isBlank())
+            .map(String::trim)
+            .collect(Collectors.joining(" "));
+    }
+
+    /** @param category null when there is no roadworthy vehicle, which lets
+     *                  dispatch fall back to the default for the kind */
+    record ActiveVehicle(VehicleCategory category, String label, String plate) {
+
+        static ActiveVehicle none() {
+            return new ActiveVehicle(null, "", "");
+        }
+    }
+
     // MARK: Writes (the applicant's own, and the operator's — same path)
 
     @Transactional

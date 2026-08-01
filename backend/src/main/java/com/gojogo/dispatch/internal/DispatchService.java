@@ -108,6 +108,52 @@ class DispatchService implements DispatchApi {
         return job.getId();
     }
 
+    /**
+     * The negotiated path: {@code travel} has run a price conversation and the
+     * rider picked somebody, so there is no open offer left to accept.
+     *
+     * <p>Everything a driver's own accept does still happens — the offer book is
+     * closed, the worker goes busy in every mode, the job row settles the race —
+     * because the only thing that differs is <em>who decided</em>.
+     */
+    @Override
+    @Transactional
+    public Assignment assign(JobKind jobKind, UUID jobRefId, UUID workerId) {
+        DispatchJob job = jobs.findByJobKindAndJobRefId(jobKind, jobRefId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "No such dispatch"));
+        Worker worker = workers.findById(workerId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "No such worker"));
+        if (!job.getState().isOpen()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, taken(job));
+        }
+        if (worker.getStatus() == WorkerStatus.BUSY) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "They've already taken something else");
+        }
+        offers.findByJobIdAndWorkerId(job.getId(), workerId)
+            .filter(o -> o.getState().isOpen())
+            .ifPresent(o -> o.close(OfferState.ACCEPTED));
+        worker.countAccepted();
+        job.assignTo(worker.getId());
+        withdrawOpenOffers(job.getId(), null);
+        workers.findByUserIdOrderByKindAsc(worker.getUserId()).forEach(Worker::markBusy);
+        try {
+            jobs.saveAndFlush(job);
+        } catch (OptimisticLockingFailureException somebodyElseWasQuicker) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Somebody else took that one");
+        }
+        events.publishEvent(new DispatchAssigned(job.getId(), job.getJobKind(), job.getJobRefId(),
+            worker.getId(), worker.getUserId(), worker.getKind(), worker.getCategory(),
+            job.getAssignedAt()));
+        return new Assignment(worker.getId(), worker.getUserId(), worker.getKind(),
+            worker.getCategory(), job.getJobKind(), job.getJobRefId(),
+            worker.getRating().doubleValue(), worker.getCompletedCount(),
+            worker.getVehicleLabel(), worker.getVehiclePlate(), job.getAssignedAt());
+    }
+
     @Override
     @Transactional
     public void cancel(JobKind jobKind, UUID jobRefId, boolean workerAtFault) {
@@ -146,7 +192,8 @@ class DispatchService implements DispatchApi {
             .flatMap(j -> workers.findById(j.getAssignedWorkerId())
                 .map(w -> new Assignment(w.getId(), w.getUserId(), w.getKind(), w.getCategory(),
                     j.getJobKind(), j.getJobRefId(), w.getRating().doubleValue(),
-                    w.getCompletedCount(), j.getAssignedAt())));
+                    w.getCompletedCount(), w.getVehicleLabel(), w.getVehiclePlate(),
+                    j.getAssignedAt())));
     }
 
     @Override
@@ -173,12 +220,41 @@ class DispatchService implements DispatchApi {
 
     @Transactional
     UUID provision(WorkerKind kind, UUID userId, UUID partnerAccountId,
-                   VehicleCategory category, String homeRegion) {
+                   VehicleCategory category, String homeRegion,
+                   String vehicleLabel, String vehiclePlate) {
         return workers.findByUserIdAndKind(userId, kind)
             .map(Worker::getId)
             .orElseGet(() -> workers.save(new Worker(userId, kind, partnerAccountId,
                 category == null ? VehicleCategory.defaultFor(kind) : category,
-                homeRegion)).getId());
+                homeRegion, vehicleLabel, vehiclePlate)).getId());
+    }
+
+    /** The driver switched cars. Not a re-provisioning: it happens weekly, and
+     *  it is the one field matching reads. */
+    @Transactional
+    void setVehicle(WorkerKind kind, UUID workerId, VehicleCategory category,
+                    String vehicleLabel, String vehiclePlate) {
+        workers.findById(workerId)
+            .filter(w -> w.getKind() == kind)
+            .ifPresent(w -> w.setVehicle(category, vehicleLabel, vehiclePlate));
+    }
+
+    /**
+     * Was this account offered this job, and which registration answered?
+     *
+     * <p>Answers for a closed offer too: a counteroffer <em>is</em> a decline of
+     * the dispatch offer, so by the time {@code travel} runs a price conversation
+     * the row is no longer open, and refusing then would make negotiation
+     * impossible.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<UUID> offeredWorkerId(JobKind jobKind, UUID jobRefId, UUID userId) {
+        return jobs.findByJobKindAndJobRefId(jobKind, jobRefId)
+            .flatMap(job -> workers.findByUserIdAndKind(userId, job.getWorkerKind())
+                .filter(worker -> offers.findByJobIdAndWorkerId(job.getId(), worker.getId())
+                    .isPresent())
+                .map(Worker::getId));
     }
 
     @Transactional

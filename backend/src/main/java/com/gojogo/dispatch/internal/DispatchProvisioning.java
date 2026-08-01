@@ -2,6 +2,7 @@ package com.gojogo.dispatch.internal;
 
 import com.gojogo.dispatch.CourierProvisioningApi;
 import com.gojogo.dispatch.DriverProvisioningApi;
+import com.gojogo.dispatch.VehicleCategory;
 import com.gojogo.dispatch.WorkerKind;
 import com.gojogo.dispatch.WorkerRegistration;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,12 @@ class DispatchProvisioning implements DriverProvisioningApi, CourierProvisioning
     }
 
     @Override
+    public void setDriverVehicle(UUID workerId, VehicleCategory category,
+                                 String vehicleLabel, String vehiclePlate) {
+        dispatch.setVehicle(WorkerKind.DRIVER, workerId, category, vehicleLabel, vehiclePlate);
+    }
+
+    @Override
     public UUID provisionCourier(WorkerRegistration registration) {
         return provision(WorkerKind.COURIER, registration);
     }
@@ -45,8 +52,15 @@ class DispatchProvisioning implements DriverProvisioningApi, CourierProvisioning
         dispatch.setSuspended(WorkerKind.COURIER, workerId, suspended);
     }
 
+    @Override
+    public void setCourierVehicle(UUID workerId, VehicleCategory category,
+                                  String vehicleLabel, String vehiclePlate) {
+        dispatch.setVehicle(WorkerKind.COURIER, workerId, category, vehicleLabel, vehiclePlate);
+    }
+
     private UUID provision(WorkerKind kind, WorkerRegistration registration) {
         return dispatch.provision(kind, registration.userId(), registration.partnerAccountId(),
-            registration.category(), registration.homeRegion());
+            registration.category(), registration.homeRegion(),
+            registration.vehicleLabel(), registration.vehiclePlate());
     }
 }

@@ -48,6 +48,14 @@ class Worker {
     @Column(name = "home_region", nullable = false, length = 60)
     private String homeRegion = "";
 
+    /** What a rider on a kerb is looking for. A snapshot pushed down by
+     *  {@code partner}, never read across — see V31. */
+    @Column(name = "vehicle_label", nullable = false, length = 120)
+    private String vehicleLabel = "";
+
+    @Column(name = "vehicle_plate", nullable = false, length = 20)
+    private String vehiclePlate = "";
+
     @Column
     private Double latitude;
 
@@ -91,12 +99,14 @@ class Worker {
     }
 
     Worker(UUID userId, WorkerKind kind, UUID partnerAccountId, VehicleCategory category,
-           String homeRegion) {
+           String homeRegion, String vehicleLabel, String vehiclePlate) {
         this.userId = userId;
         this.kind = kind;
         this.partnerAccountId = partnerAccountId;
         this.category = category;
         this.homeRegion = homeRegion == null ? "" : homeRegion;
+        this.vehicleLabel = trim(vehicleLabel, 120);
+        this.vehiclePlate = trim(vehiclePlate, 20);
         this.idleSince = OffsetDateTime.now();
         this.createdAt = this.idleSince;
     }
@@ -146,6 +156,20 @@ class Worker {
 
     void setCategory(VehicleCategory value) {
         this.category = value;
+    }
+
+    /** The driver switched cars. Category and description move together, because
+     *  a plate that no longer matches the category is worse than neither. */
+    void setVehicle(VehicleCategory category, String label, String plate) {
+        if (category != null) this.category = category;
+        this.vehicleLabel = trim(label, 120);
+        this.vehiclePlate = trim(plate, 20);
+    }
+
+    private static String trim(String value, int max) {
+        if (value == null) return "";
+        String trimmed = value.trim();
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
     }
 
     // MARK: Counters
@@ -219,6 +243,14 @@ class Worker {
 
     String getHomeRegion() {
         return homeRegion;
+    }
+
+    String getVehicleLabel() {
+        return vehicleLabel;
+    }
+
+    String getVehiclePlate() {
+        return vehiclePlate;
     }
 
     Double getLatitude() {

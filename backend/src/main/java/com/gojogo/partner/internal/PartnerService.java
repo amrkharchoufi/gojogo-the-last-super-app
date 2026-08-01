@@ -313,7 +313,10 @@ class PartnerService {
         // Deliberately not gated on the application being editable: changing
         // which car you're driving is a thing an approved driver does every
         // week, and it is the one field dispatch reads.
-        return vehicles.activate(require(me, accountId), vehicleId);
+        PartnerAccount account = require(me, accountId);
+        VehicleDto activated = vehicles.activate(account, vehicleId);
+        pushVehicleToDispatch(account);
+        return activated;
     }
 
     @Transactional
@@ -344,6 +347,9 @@ class PartnerService {
         if (!approved && reviewed.active() && account.getStatus() == PartnerStatus.APPROVED) {
             suspendForVehicle(account, note);
         }
+        // An approval is the moment a car becomes one dispatch may send work in,
+        // so the snapshot a rider identifies it by goes down with the verdict.
+        pushVehicleToDispatch(account);
         return toReview(account);
     }
 
@@ -567,8 +573,33 @@ class PartnerService {
      * default for the kind, which is the honest answer for somebody on a bicycle.
      */
     private WorkerRegistration workerRegistration(PartnerAccount account) {
+        VehicleService.ActiveVehicle active = vehicles.activeSnapshot(account.getId());
         return new WorkerRegistration(account.getUserId(), account.getId(),
-            vehicles.activeCategory(account.getId()).orElse(null), account.getCity());
+            active.category(), account.getCity(), active.label(), active.plate());
+    }
+
+    /**
+     * Tells dispatch the driver switched cars.
+     *
+     * <p>The description and plate go down with the category because a rider on
+     * a kerb identifies the car by those two things, and they live here — in a
+     * vertical — so pushing them is the only direction that does not make
+     * {@code travel} read across at somebody else's tables.
+     *
+     * <p>Only for a provisioned partner: before an approval there is no registry
+     * row, and after a suspension there is one that must not receive work anyway.
+     */
+    private void pushVehicleToDispatch(PartnerAccount account) {
+        UUID refId = account.getProvisionedRefId();
+        if (refId == null) return;
+        VehicleService.ActiveVehicle active = vehicles.activeSnapshot(account.getId());
+        switch (account.getKind()) {
+            case DRIVER -> drivers.setDriverVehicle(refId, active.category(),
+                active.label(), active.plate());
+            case COURIER -> couriers.setCourierVehicle(refId, active.category(),
+                active.label(), active.plate());
+            case RESTAURANT -> { }
+        }
     }
 
     private void setProvisionedSuspended(PartnerAccount account, boolean suspended) {
