@@ -260,7 +260,7 @@ function partnerDetail(row) {
         v.papersExpired
           ? badge('expired', 'badge-bad')
           : el('span', { className: 'mono subtle' },
-              `reg ${v.registrationExpiresOn || '—'} · ins ${v.insuranceExpiresOn || '—'}`)));
+              `reg ${v.registrationExpiresOn || '—'} · ins ${v.insuranceExpiresOn || '—'}`))));
     card.append(documentsBlock(null, rv.documents, v.missingDocuments));
 
     const ok = el('button', { className: 'btn', textContent: 'Approve vehicle' });
