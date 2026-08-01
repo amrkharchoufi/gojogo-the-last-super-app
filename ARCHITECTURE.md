@@ -350,6 +350,8 @@ GoJoAdmin (Dashboard · Studio · Economy · GoJoAds) is a separate web app, **n
 | **Money** | Payouts/settlement via Stripe Connect; balances/earnings via `WalletApi`-backed read endpoints on the **vertical's own `/mine` surface** (`/v1/delivery/merchants/mine/wallet`, `…/payouts`), because only the module that owns a payee can prove the caller owns it. | **Live** (2e M3) |
 | **GoJoAds** | Deferred entirely — no seam reserved beyond content/engagement events. Don't pre-build. | — |
 
+**A local stopgap exists (2026-08-01).** [`tools/admin-console`](tools/admin-console/README.md) is a small operator console for the two jobs that need a human today — partner review and moderation. It is built to this contract rather than around it: no database, no private endpoint, every screen a renderer for the public admin surface. It is meant to be deleted the day the real GojoAdmin ships, and deleting it will cost nothing because nothing depends on it.
+
 **CORS/web note:** the backend currently serves only the iOS app; GoJoAdmin is a browser client, so its origin needs a CORS allowance when it exists — config, not architecture. **Built in 2e M2:** `WEB_ALLOWED_ORIGINS` (empty = no CORS headers, today's behaviour); pass `-c webAllowedOrigins=…` on the Fargate deploy when the console has a domain.
 
 ---
