@@ -63,6 +63,11 @@ interface LedgerEntryRepository extends JpaRepository<LedgerEntry, UUID> {
 
     boolean existsByIdempotencyKey(String idempotencyKey);
 
+    /** How many times an operation with this prefix has already happened — how
+     *  a repeatable purchase derives its next key from a fact rather than a
+     *  clock. The unique index on the column serves the prefix scan. */
+    long countByIdempotencyKeyStartingWith(String prefix);
+
     List<LedgerEntry> findByRefKindAndRefIdOrderByCreatedAtAsc(String refKind, UUID refId);
 
     /** A statement: an account shows up on either side of an entry, so both
@@ -112,6 +117,13 @@ interface FeePolicyRepository extends JpaRepository<FeePolicy, UUID> {
         """)
     List<FeePolicy> inForce(@Param("vertical") String vertical,
                             @Param("at") OffsetDateTime at, Pageable page);
+}
+
+interface TokenPackRepository extends JpaRepository<TokenPack, UUID> {
+
+    /** What is on sale, in the order the seed row asked for. Sorted in the
+     *  query rather than the client so every surface shows the same shelf. */
+    List<TokenPack> findByActiveTrueOrderBySortOrderAsc();
 }
 
 interface ConnectAccountRepository extends JpaRepository<ConnectAccount, UUID> {

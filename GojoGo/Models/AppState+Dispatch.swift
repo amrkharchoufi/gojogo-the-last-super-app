@@ -188,6 +188,10 @@ extension AppState {
                 dispatchOffers.removeAll { $0.id == offer.id }
             }
             await refreshDispatch()
+            // Accepting a ride is what spends a token (Phase 3 M4) — the vertical
+            // charges at confirmation, so the balance on screen is stale the
+            // moment this returns.
+            await refreshTokens()
         }
     }
 

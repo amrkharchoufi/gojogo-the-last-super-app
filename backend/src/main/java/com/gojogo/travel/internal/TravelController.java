@@ -118,6 +118,21 @@ class TravelController {
 
     // MARK: The driver
 
+    /**
+     * Ride tokens: what the caller holds, what a trip costs, and — when they
+     * cannot work — the sentence that says so (Phase 3 M4).
+     *
+     * <p>Here rather than on {@code /v1/payments/tokens} because only this
+     * module knows what a ride costs. Payments sells tokens; travel says what
+     * they buy, and is therefore the only module that can turn "no work is
+     * arriving" into a reason. Being filtered out of dispatch is otherwise
+     * completely silent, which reads as a broken app.
+     */
+    @GetMapping("/v1/travel/tokens")
+    MyRideTokensDto myTokens(@AuthenticationPrincipal Jwt jwt) {
+        return rides.myTokens(current.require(jwt).id());
+    }
+
     /** Prices this driver has on the table, across every ride. */
     @GetMapping("/v1/travel/driver/offers")
     List<RideOfferDto> myOffers(@AuthenticationPrincipal Jwt jwt) {

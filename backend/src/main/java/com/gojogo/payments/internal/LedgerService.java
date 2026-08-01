@@ -60,6 +60,17 @@ class LedgerService implements WalletApi {
         LedgerKind.TOPUP, LedgerKind.REFUND, LedgerKind.REWARD, LedgerKind.TIP,
         LedgerKind.CAPTURE, LedgerKind.TRANSFER, LedgerKind.STAKE_RELEASE);
 
+    /**
+     * Movements between somebody's own pockets that are genuinely bookkeeping,
+     * and therefore not lines on a statement.
+     *
+     * <p>Only these two. Every other own-bucket movement — a stake locked, ride
+     * tokens bought — is something the person did, and leaving them off is how a
+     * spendable balance drops with nothing to explain it.
+     */
+    private static final Set<LedgerKind> INTERNAL = Set.of(
+        LedgerKind.HOLD, LedgerKind.RELEASE);
+
     private final AccountRepository accounts;
     private final LedgerEntryRepository entries;
     private final ConfigApi config;
@@ -170,18 +181,54 @@ class LedgerService implements WalletApi {
 
         List<Entry> statement = new ArrayList<>(rows.size());
         for (LedgerEntry row : rows) {
-            // Signed from this owner's point of view. An entry between two of
-            // their own buckets (a hold) nets to zero and is dropped: it is not
-            // a transaction, it is bookkeeping.
-            boolean credited = byId.containsKey(row.getCreditAccountId());
-            boolean debited = byId.containsKey(row.getDebitAccountId());
-            if (credited && debited) continue;
-            statement.add(new Entry(row.getId(),
-                credited ? row.getAmountMinor() : -row.getAmountMinor(),
-                row.getCurrency(), row.getKind(), row.getRefKind(), row.getRefId(),
-                row.getMemo(), row.getCreatedAt()));
+            Account creditedTo = byId.get(row.getCreditAccountId());
+            Account debitedFrom = byId.get(row.getDebitAccountId());
+            long signed;
+            if (creditedTo != null && debitedFrom != null) {
+                // Both sides are theirs. A hold is bookkeeping and is dropped —
+                // nothing left, and announcing it would train people to ignore
+                // the lines that matter. Everything else between their own
+                // pockets is something they *did*: staking $30 and buying ride
+                // tokens both take money out of what they can spend, and a
+                // balance that drops with no line to explain it is worse than a
+                // line somebody has to read.
+                if (INTERNAL.contains(row.getKind())) continue;
+                // Signed from the spendable pocket, whichever side it is on.
+                signed = debitedFrom.getBucket() == Bucket.AVAILABLE
+                    ? -row.getAmountMinor() : row.getAmountMinor();
+            } else {
+                signed = creditedTo != null ? row.getAmountMinor() : -row.getAmountMinor();
+            }
+            statement.add(new Entry(row.getId(), signed, row.getCurrency(), row.getKind(),
+                row.getRefKind(), row.getRefId(), row.getMemo(), row.getCreatedAt()));
         }
         return statement;
+    }
+
+    /**
+     * The history of one pocket, signed from <em>its</em> point of view.
+     *
+     * <p>Which is a different question from {@link #statement}, and the ride
+     * tokens of Phase 3 M4 are why. Buying tokens is money <em>leaving</em>
+     * AVAILABLE and tokens <em>arriving</em> in TOKENS: on a wallet statement it
+     * is a debit, and on a token history it is a credit. Both are true, and a
+     * screen counting tokens that borrowed the wallet's sign would show a driver
+     * "−11" for the eleven tokens they just bought.
+     */
+    @Transactional(readOnly = true)
+    List<Entry> bucketStatement(OwnerKind ownerKind, UUID ownerId, Bucket bucket, int limit) {
+        String currency = currency();
+        Account account = accounts.findByOwnerKindAndOwnerIdAndBucketAndCurrency(
+            ownerKind, ownerId, bucket, currency).orElse(null);
+        if (account == null) return List.of();
+        return entries.statement(List.of(account.getId()),
+                PageRequest.of(0, Math.clamp(limit, 1, 200))).stream()
+            .map(row -> new Entry(row.getId(),
+                account.getId().equals(row.getCreditAccountId())
+                    ? row.getAmountMinor() : -row.getAmountMinor(),
+                row.getCurrency(), row.getKind(), row.getRefKind(), row.getRefId(),
+                row.getMemo(), row.getCreatedAt()))
+            .toList();
     }
 
     @Override

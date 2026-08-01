@@ -12,6 +12,10 @@ struct PartnerDashboardView: View {
         zoom: 13, bearing: 0, pitch: 0)
     /// Road-snapped polyline for the active leg (Mapbox Directions).
     @State private var activeRoute: [CLLocationCoordinate2D] = []
+    /// The token screen. Local state rather than `AppState`, and presented only
+    /// from here: this cover is the one owner, so there is no second live screen
+    /// that could quietly win the presentation.
+    @State private var showTokens = false
 
     private var role: PartnerRole { app.partnerDashboardRole ?? .driver }
 
@@ -43,6 +47,10 @@ struct PartnerDashboardView: View {
         // leave the nav layout stuck showing a "Trip complete" card over the map.
         .animation(.easeInOut(duration: 0.25), value: navigating)
         .animation(.easeInOut(duration: 0.3), value: app.partnerOnline)
+        .sheet(isPresented: $showTokens) {
+            TokensView().environmentObject(app)
+        }
+        .task { await app.refreshTokens() }
         .onAppear {
             MapboxOptions.accessToken = MapboxConfig.accessToken
             refreshCamera(animated: false)
@@ -82,6 +90,7 @@ struct PartnerDashboardView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 18) {
                     statsRow
+                    tokenCard
                     onlineCard
                     stageContent
                     Color.clear.frame(height: 24)
@@ -258,6 +267,59 @@ struct PartnerDashboardView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
         .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
+    }
+
+    // MARK: Ride tokens (Phase 3 M4)
+
+    /// The one place an empty Driver Mode gets explained.
+    ///
+    /// Dispatch stops offering trips to a driver who can't pay for them —
+    /// silently, which is the correct behaviour and an invisible one. Without
+    /// this card, going online with no tokens looks exactly like going online in
+    /// a quiet city, and the driver has no way to tell those apart.
+    ///
+    /// Only for a real driver. The demo has no tokens because it has no trips,
+    /// and a currency for a job somebody hasn't been approved for is a screen
+    /// that raises a question the app can't answer yet.
+    @ViewBuilder
+    private var tokenCard: some View {
+        if app.isDispatchRegistered, role == .driver, app.partnerJobPhase == .idle {
+            Button {
+                showTokens = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: app.tokensNeedAttention
+                          ? "exclamationmark.circle.fill" : "ticket.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(GGColor.ink(0.1)))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(app.tokenBalance) ride \(app.tokenBalance == 1 ? "token" : "tokens")")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(GGColor.textPrimary)
+                        // The server's sentence, never one composed here: only
+                        // the module that prices a ride knows whether a balance
+                        // is enough to take one.
+                        Text(app.tokenRefusal ?? "Tap to see what a trip costs, or top up.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity)
+                .glass(cornerRadius: 20, fillOpacity: 0.05, borderOpacity: 0.08)
+            }
+            .buttonStyle(PressableStyle())
+        }
     }
 
     // MARK: Online status card (radar / prompt)

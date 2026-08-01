@@ -74,19 +74,22 @@ class RideService {
     private final TravelPolicy policy;
     private final DispatchApi dispatch;
     private final WalletApi wallet;
+    private final RideTokenService rideTokens;
     private final MessagingApi messaging;
     private final ProfileApi profiles;
     private final ApplicationEventPublisher events;
 
     RideService(RideRepository rides, RideOfferRepository offers, PricingConfigRepository pricing,
                 TravelPolicy policy, DispatchApi dispatch, WalletApi wallet,
-                MessagingApi messaging, ProfileApi profiles, ApplicationEventPublisher events) {
+                RideTokenService rideTokens, MessagingApi messaging, ProfileApi profiles,
+                ApplicationEventPublisher events) {
         this.rides = rides;
         this.offers = offers;
         this.pricing = pricing;
         this.policy = policy;
         this.dispatch = dispatch;
         this.wallet = wallet;
+        this.rideTokens = rideTokens;
         this.messaging = messaging;
         this.profiles = profiles;
         this.events = events;
@@ -305,6 +308,11 @@ class RideService {
     /**
      * Matched — from either route: a driver accepting in dispatch at the asking
      * price, or a negotiated price settled above.
+     *
+     * <p>The tokens are charged <em>after</em> the row survives its optimistic
+     * lock (Phase 3 M4). Charging first would mean the loser of a race pays for
+     * a trip they did not get, and the refund for that is a correction nobody
+     * asked for rather than a movement that never happened.
      */
     private void confirm(Ride ride, Assignment assignment, long fareMinor) {
         ride.confirm(assignment.workerId(), assignment.userId(),
@@ -314,6 +322,7 @@ class RideService {
         } catch (OptimisticLockingFailureException raced) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Somebody else took that one");
         }
+        ride.recordTokenCost(rideTokens.charge(ride));
         openConversation(ride);
         publishStatus(ride, ride.getRiderId());
     }
@@ -439,6 +448,14 @@ class RideService {
         if (byRider && ride.getState() == RideState.ARRIVING) {
             fee = chargeCancelFee(ride);
         }
+        // The tokens follow the trip, not the fault. SPECS §4 returns them only
+        // on a driver-fault cancellation; that would make cancelling a source of
+        // revenue for the platform and would charge a driver for a rider's
+        // change of mind — the first is an incentive nobody should install in a
+        // dispatch system, and the second teaches drivers to decline. A driver
+        // who accepts and cancels repeatedly is already priced: dispatch counts
+        // every one of those against them.
+        rideTokens.refund(ride);
         withdrawOtherOffers(rideId, null);
         ride.cancel(byRider, reason, fee);
         dispatch.cancel(JobKind.RIDE, rideId, byDriver);
@@ -549,6 +566,21 @@ class RideService {
             .filter(o -> !o.isLapsed(now))
             .map(this::toOfferDto)
             .toList();
+    }
+
+    /**
+     * The driver's token standing and the price list behind it (Phase 3 M4).
+     *
+     * <p>Lives on {@code travel} rather than {@code payments} because only this
+     * module knows what a ride costs — and only this module can therefore say
+     * whether a balance is enough to work with, which is the sentence a driver
+     * with an empty screen actually needs.
+     */
+    @Transactional(readOnly = true)
+    MyRideTokensDto myTokens(UUID driverUserId) {
+        String refusal = rideTokens.refusalFor(driverUserId);
+        return new MyRideTokensDto(rideTokens.balanceOf(driverUserId),
+            rideTokens.cheapestRide(), refusal == null, refusal, rideTokens.priceList());
     }
 
     // MARK: The sweep
@@ -738,6 +770,7 @@ class RideService {
             ride.getNote(), ride.getDistanceMetres(), ride.getDurationSeconds(),
             ride.getSuggestedFareMinor(), ride.getOfferedFareMinor(), ride.getAgreedFareMinor(),
             ride.getCurrency(), ride.getCancelFeeMinor(),
+            isDriver ? ride.getTokenCost() : null,
             other == null ? null : other.id(),
             other == null ? null : displayName(other),
             other == null ? null : other.avatarUrl(),

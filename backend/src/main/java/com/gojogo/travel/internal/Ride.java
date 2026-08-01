@@ -112,6 +112,12 @@ class Ride {
     @Column(name = "cancel_fee_minor", nullable = false)
     private long cancelFeeMinor;
 
+    /** Tokens the driver paid to take this trip, frozen at CONFIRMED alongside
+     *  the fare — it is what a cancellation gives back, and re-deriving it from
+     *  a price list that has since moved would return the wrong number. */
+    @Column(name = "token_cost", nullable = false)
+    private int tokenCost;
+
     @Column(name = "rider_rating")
     private Integer riderRating;
 
@@ -176,6 +182,12 @@ class Ride {
         this.agreedFareMinor = agreedFareMinor;
         this.confirmedAt = OffsetDateTime.now();
         moveTo(RideState.CONFIRMED);
+    }
+
+    /** What the driver was charged to take it. Recorded after the movement, so
+     *  the row never claims a spend the ledger does not have. */
+    void recordTokenCost(int tokens) {
+        this.tokenCost = Math.max(0, tokens);
     }
 
     void attachConversation(UUID conversationId) {
@@ -273,6 +285,7 @@ class Ride {
     OffsetDateTime getCompletedAt() { return completedAt; }
     String getCancelReason() { return cancelReason; }
     long getCancelFeeMinor() { return cancelFeeMinor; }
+    int getTokenCost() { return tokenCost; }
     Integer getRiderRating() { return riderRating; }
     Integer getDriverRating() { return driverRating; }
 }

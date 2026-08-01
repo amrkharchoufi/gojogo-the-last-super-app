@@ -73,7 +73,7 @@ class DispatchAssignmentTests {
         when(policy.ranking()).thenReturn(
             new CandidateRanker.Policy(60, 0, 900, 60, 25, 15));
 
-        service = new DispatchService(workers, jobs, offers, policy, events);
+        service = new DispatchService(workers, jobs, offers, policy, List.of(), events);
 
         driver = worker(DRIVER_USER, WorkerKind.DRIVER);
         rival = worker(RIVAL_USER, WorkerKind.DRIVER);

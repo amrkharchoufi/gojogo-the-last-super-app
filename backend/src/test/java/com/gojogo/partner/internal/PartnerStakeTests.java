@@ -5,6 +5,7 @@ import com.gojogo.payments.AccountRef;
 import com.gojogo.payments.Bucket;
 import com.gojogo.payments.InsufficientFundsException;
 import com.gojogo.payments.LedgerKind;
+import com.gojogo.payments.TokenApi;
 import com.gojogo.payments.WalletApi;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,6 +40,7 @@ class PartnerStakeTests {
     private static final UUID DRIVER = UUID.randomUUID();
 
     private WalletApi wallet;
+    private TokenApi tokens;
     private ConfigApi config;
     private PartnerStakeService stakes;
     private PartnerAccount account;
@@ -46,6 +48,7 @@ class PartnerStakeTests {
     @BeforeEach
     void setUp() {
         wallet = mock(WalletApi.class);
+        tokens = mock(TokenApi.class);
         config = mock(ConfigApi.class);
         // The compiled-in defaults are the contract: an empty config table has
         // to behave exactly like a populated one.
@@ -54,7 +57,7 @@ class PartnerStakeTests {
         when(wallet.currency()).thenReturn("USD");
         when(wallet.transfer(any(), any(), anyLong(), any(), any(), anyString()))
             .thenReturn(new WalletApi.Movement(UUID.randomUUID(), 0, false));
-        stakes = new PartnerStakeService(wallet, config);
+        stakes = new PartnerStakeService(wallet, tokens, config);
         account = new PartnerAccount(DRIVER, PartnerKind.DRIVER, "Amina drives");
     }
 

@@ -56,6 +56,22 @@ interface RideOfferRepository extends JpaRepository<RideOffer, UUID> {
                                                   Pageable page);
 }
 
+interface RideTokenPriceRepository extends JpaRepository<RideTokenPrice, UUID> {
+
+    /**
+     * Every band in force for a category, newest effective generation first.
+     *
+     * <p>Returns the whole history that has taken effect rather than one row,
+     * because a "band" is a set: the caller keeps only the rows sharing the
+     * newest {@code effectiveFrom}, which is what makes scheduling a price
+     * change an insert of several rows with one timestamp.
+     */
+    @Query("select p from RideTokenPrice p where p.category = :category "
+        + "and p.effectiveFrom <= :now order by p.effectiveFrom desc, p.upToMetres asc")
+    List<RideTokenPrice> inForce(@Param("category") String category,
+                                 @Param("now") OffsetDateTime now);
+}
+
 interface PricingConfigRepository extends JpaRepository<PricingConfig, UUID> {
 
     /**

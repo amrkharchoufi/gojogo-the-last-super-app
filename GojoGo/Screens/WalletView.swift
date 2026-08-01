@@ -99,11 +99,17 @@ struct WalletView: View {
 
             // Phase 3's buckets, shown only once they hold something — an empty
             // "Tokens 0" row on every wallet would be a promise, not a feature.
-            let extras: [(String, Int)] = [
-                ("Staked", app.wallet?.stakingMinor ?? 0),
-                ("Tokens", app.wallet?.tokensMinor ?? 0),
-                ("Rewards", app.wallet?.rewardsMinor ?? 0)
-            ].filter { $0.1 > 0 }
+            //
+            // Tokens are counted rather than priced: the ledger holds them as
+            // money (a token is a fixed number of minor units) but the thing a
+            // driver has is a number of trips, and "$12.00" here would be asking
+            // them to divide. Buying them lives in Driver Mode, which is the
+            // only place they mean anything.
+            let extras: [(String, String)] = [
+                ("Staked", moneyOrNil(app.wallet?.stakingMinor)),
+                ("Tokens", app.wallet.map { $0.tokenCount > 0 ? "\($0.tokenCount)" : "" } ?? ""),
+                ("Rewards", moneyOrNil(app.wallet?.rewardsMinor))
+            ].filter { !$0.1.isEmpty }
             if !extras.isEmpty {
                 HStack(spacing: 16) {
                     ForEach(extras, id: \.0) { name, value in
@@ -111,7 +117,7 @@ struct WalletView: View {
                             Text(name.uppercased())
                                 .font(.ggMono(10, .semibold))
                                 .foregroundStyle(GGColor.textTertiary)
-                            Text(WalletStore.money(value, currency: currency))
+                            Text(value)
                                 .font(.ggMono(14, .semibold))
                                 .foregroundStyle(GGColor.textPrimary)
                         }
@@ -125,6 +131,12 @@ struct WalletView: View {
             .fill(GGColor.surface))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
             .stroke(GGColor.hairline, lineWidth: 1))
+    }
+
+    /// Money, or nothing at all for an empty bucket.
+    private func moneyOrNil(_ minor: Int?) -> String {
+        guard let minor, minor > 0 else { return "" }
+        return WalletStore.money(minor, currency: currency)
     }
 
     // MARK: Top up

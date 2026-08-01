@@ -367,6 +367,19 @@ final class AppState: ObservableObject {
     @Published var walletNotice: String? = nil
     var walletNoticeTask: Task<Void, Never>?
 
+    // Ride tokens (Phase 3 M4). A driver spends one to accept a trip, and a
+    // driver with none is filtered out of every search — silently, by design.
+    // These two are what turns that silence into a sentence. See
+    // AppState+Tokens.swift.
+    /// The shelf: balance, packs, and recent token movements.
+    @Published var tokenWallet: TokenWalletDTO? = nil
+    /// What a trip costs, and whether this driver can take one right now.
+    @Published var rideTokens: MyRideTokensDTO? = nil
+    @Published var tokensBusy: Bool = false
+    /// What a refused purchase was short by — the amount the "top up" button on
+    /// the token screen fills, so the driver never has to work it out.
+    @Published var pendingTokenTopUpMinor: Int? = nil
+
     // Merchant partner — running a restaurant on GojoDelivery (Phase 2b M6).
     // Distinct from the driver/courier `partner*` state below: that one is the
     // gig-worker prototype waiting on Phase 3 dispatch, this one is live.

@@ -67,13 +67,17 @@ record RateRideRequest(@NotNull @Min(1) @Max(5) Integer stars) {
  * @param offers            live counteroffers. A rider sees all of them; a driver
  *                          sees only their own, because three drivers' prices are
  *                          three private conversations
+ * @param tokenCost         what this trip cost the driver in tokens, and
+ *                          <b>null to the rider</b> — the price list is public,
+ *                          but what the driver paid for the job is not a line on
+ *                          a passenger's receipt
  */
 record RideDto(UUID id, String state, String category,
                String pickupLabel, double pickupLatitude, double pickupLongitude,
                String dropoffLabel, double dropoffLatitude, double dropoffLongitude,
                String note, int distanceMetres, int durationSeconds,
                long suggestedFareMinor, long offeredFareMinor, Long agreedFareMinor,
-               String currency, long cancelFeeMinor,
+               String currency, long cancelFeeMinor, Integer tokenCost,
                UUID otherPartyId, String otherPartyName, String otherPartyAvatarUrl,
                String vehicleLabel, String vehiclePlate,
                Double driverLatitude, Double driverLongitude, OffsetDateTime driverPositionAt,
@@ -82,6 +86,32 @@ record RideDto(UUID id, String state, String category,
                OffsetDateTime expiresAt, OffsetDateTime requestedAt,
                OffsetDateTime confirmedAt, OffsetDateTime startedAt,
                OffsetDateTime completedAt, String cancelReason) {
+}
+
+/**
+ * What a ride costs its driver, one band (Phase 3 M4).
+ *
+ * @param upToMetres trips of this length or shorter cost {@code tokens}; the
+ *                   longest band per category is the catch-all
+ */
+record TokenPriceDto(String category, int upToMetres, int tokens) {
+}
+
+/**
+ * The driver's token standing — the screen that explains why work is or isn't
+ * arriving.
+ *
+ * <p>{@code refusal} is the point of this endpoint. Dispatch stops offering
+ * silently and correctly when a driver cannot pay, so without a sentence here a
+ * driver sits online watching nothing happen and concludes the app is broken.
+ *
+ * @param balance    whole tokens held
+ * @param cheapest   the least any trip could cost — zero when the model is off
+ * @param canWork    whether anything at all could be offered right now
+ * @param refusal    null when they can work, otherwise a sentence to show them
+ */
+record MyRideTokensDto(long balance, int cheapest, boolean canWork, String refusal,
+                       List<TokenPriceDto> prices) {
 }
 
 /** @param party RIDER | DRIVER — which decides who may accept it */

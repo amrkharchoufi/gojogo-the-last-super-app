@@ -4,6 +4,7 @@ import com.gojogo.config.ConfigApi;
 import com.gojogo.payments.AccountRef;
 import com.gojogo.payments.Bucket;
 import com.gojogo.payments.LedgerKind;
+import com.gojogo.payments.TokenApi;
 import com.gojogo.payments.WalletApi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,10 +39,12 @@ class PartnerStakeService {
     private static final Logger log = LoggerFactory.getLogger(PartnerStakeService.class);
 
     private final WalletApi wallet;
+    private final TokenApi tokens;
     private final ConfigApi config;
 
-    PartnerStakeService(WalletApi wallet, ConfigApi config) {
+    PartnerStakeService(WalletApi wallet, TokenApi tokens, ConfigApi config) {
         this.wallet = wallet;
+        this.tokens = tokens;
         this.config = config;
     }
 
@@ -146,6 +149,32 @@ class PartnerStakeService {
             WalletApi.Reference.of("PARTNER_STAKE", account.getId(), "Stake returned"),
             "partner:" + account.getId() + ":stake:release");
         account.recordStakeReleased(OffsetDateTime.now());
+    }
+
+    /**
+     * The tokens a newly approved driver starts with (Phase 3 M4).
+     *
+     * <p>Not in SPECS, and added because without it this milestone would ship a
+     * silent stop: a ride token is spent to accept a trip, a driver who cannot
+     * pay is filtered out of every search, and an approval that hands somebody a
+     * registration and an empty token balance therefore hands them a Driver Mode
+     * where nothing ever arrives and nothing says why. A first handful on the
+     * platform is the honest fix, and it is a real product decision rather than a
+     * workaround — the first rides are the ones that prove the app works.
+     *
+     * <p>Only for a worker who spends them. A restaurant has no use for one, and
+     * a courier does not spend tokens (Phase 4 will decide whether they should).
+     * Idempotency-keyed on the application, so a re-approval after a suspension
+     * does not top somebody up for free.
+     */
+    void grantWelcomeTokens(PartnerAccount account) {
+        if (account.getKind() != PartnerKind.DRIVER) return;
+        long grant = Math.max(0, config.number("payments.tokens.welcome.grant", 5));
+        if (grant <= 0) return;
+        tokens.grant(account.getUserId(), grant,
+            WalletApi.Reference.of("PARTNER_WELCOME", account.getId(),
+                "Welcome tokens — your first trips are on us"),
+            "partner:" + account.getId() + ":welcome-tokens");
     }
 
     /** What the app shows on the stake page, and what a 402 would be for. */

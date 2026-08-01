@@ -46,16 +46,19 @@ class PaymentsService {
     private static final int ABANDONED_AFTER_HOURS = 24;
 
     private final LedgerService ledger;
+    private final TokenService tokens;
     private final StripeClient stripe;
     private final ConfigApi config;
     private final StripePaymentRepository payments;
     private final StripeEventRepository providerEvents;
     private final ConnectAccountRepository connectAccounts;
 
-    PaymentsService(LedgerService ledger, StripeClient stripe, ConfigApi config,
-                    StripePaymentRepository payments, StripeEventRepository providerEvents,
+    PaymentsService(LedgerService ledger, TokenService tokens, StripeClient stripe,
+                    ConfigApi config, StripePaymentRepository payments,
+                    StripeEventRepository providerEvents,
                     ConnectAccountRepository connectAccounts) {
         this.ledger = ledger;
+        this.tokens = tokens;
         this.stripe = stripe;
         this.config = config;
         this.payments = payments;
@@ -71,7 +74,8 @@ class PaymentsService {
             balances.staking(), balances.tokens(), balances.rewards(),
             stripe.enabled() && stripe.webhooksEnabled(), stripe.publishableKey(),
             config.number(TOPUP_MIN_KEY, TOPUP_MIN_DEFAULT),
-            config.number(TOPUP_MAX_KEY, TOPUP_MAX_DEFAULT));
+            config.number(TOPUP_MAX_KEY, TOPUP_MAX_DEFAULT),
+            tokens.minorPerToken());
     }
 
     @Transactional(readOnly = true)

@@ -8,6 +8,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 /**
  * Who to ask, in what order — SPECS §3's candidate search, as a pure function.
@@ -45,14 +46,22 @@ final class CandidateRanker {
     /**
      * The rules a candidate has to pass and the order the survivors come back in.
      *
-     * @param exclude workers already offered this job in an earlier ring. A wave
-     *                that re-asks the driver who just declined is the fastest way
-     *                to teach them to turn the app off
-     * @param limit   the wave size — the shortlist is truncated, not the search
+     * @param exclude  workers already offered this job in an earlier ring. A wave
+     *                 that re-asks the driver who just declined is the fastest way
+     *                 to teach them to turn the app off
+     * @param eligible whether this person may be sent <em>this</em> job at all —
+     *                 the vertical's veto (Phase 3 M4's ride tokens), taken by
+     *                 user id because a person's affordability is not a property
+     *                 of one registration. Applied <b>after</b> the sort and
+     *                 before the limit, so an ineligible driver is reached past
+     *                 rather than shrinking the wave: the stream is lazy, so it
+     *                 is only asked until the wave is full
+     * @param limit    the wave size — the shortlist is truncated, not the search
      */
     static List<Ranked> rank(List<Candidate> candidates, Policy policy, double latitude,
                              double longitude, double radiusKm, Set<VehicleCategory> categories,
-                             Set<UUID> exclude, int limit, OffsetDateTime now) {
+                             Set<UUID> exclude, Predicate<UUID> eligible, int limit,
+                             OffsetDateTime now) {
         OffsetDateTime freshEnough = now.minusSeconds(policy.presenceStaleSeconds());
         return candidates.stream()
             .filter(c -> !exclude.contains(c.workerId()))
@@ -73,6 +82,7 @@ final class CandidateRanker {
                 // people rather than shuffling by whatever order the rows arrived.
                 .thenComparingDouble(Ranked::distanceKm)
                 .thenComparing(r -> r.candidate().workerId()))
+            .filter(r -> eligible == null || eligible.test(r.candidate().userId()))
             .limit(Math.max(0, limit))
             .toList();
     }

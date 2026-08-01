@@ -57,6 +57,7 @@ class RideNegotiationTests {
     private DispatchApi dispatch;
     private WalletApi wallet;
     private MessagingApi messaging;
+    private RideTokenService rideTokens;
     private RideService service;
     private Ride ride;
 
@@ -94,8 +95,9 @@ class RideNegotiationTests {
         });
         when(rides.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
 
+        rideTokens = mock(RideTokenService.class);
         service = new RideService(rides, offers, pricing, policy, dispatch, wallet,
-            messaging, profiles, events);
+            rideTokens, messaging, profiles, events);
 
         ride = new Ride(RIDER, "CAR", 33.5731, -7.5898, "Bd Anfa",
             33.5892, -7.6031, "Maarif", "", 4_000, 600, 1_000, 900, "USD",
@@ -174,6 +176,51 @@ class RideNegotiationTests {
         assertThatThrownBy(() -> service.acceptAsRider(RIDER, ride.getId(), mine.getId()))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("your own price");
+    }
+
+    // MARK: Tokens (Phase 3 M4)
+
+    @Test
+    @DisplayName("confirming charges the driver's tokens and freezes what they cost")
+    void confirmingChargesTokens() {
+        when(rideTokens.charge(any())).thenReturn(2);
+        RideOffer theirs = offer(OfferParty.DRIVER, 1_200, 1);
+        when(offers.findById(theirs.getId())).thenReturn(Optional.of(theirs));
+
+        service.acceptAsRider(RIDER, ride.getId(), theirs.getId());
+
+        // Frozen onto the row, like the fare and for the same reason: it is what
+        // a cancellation gives back, and a price list that moves afterwards must
+        // not change it.
+        assertThat(ride.getTokenCost()).isEqualTo(2);
+        verify(rideTokens).charge(ride);
+    }
+
+    @Test
+    @DisplayName("a cancelled trip gives the tokens back")
+    void cancellingRefundsTokens() {
+        when(rideTokens.charge(any())).thenReturn(2);
+        RideOffer theirs = offer(OfferParty.DRIVER, 1_200, 1);
+        when(offers.findById(theirs.getId())).thenReturn(Optional.of(theirs));
+        service.acceptAsRider(RIDER, ride.getId(), theirs.getId());
+
+        service.cancel(RIDER, ride.getId(), "changed my mind");
+
+        verify(rideTokens).refund(ride);
+    }
+
+    @Test
+    @DisplayName("a completed trip keeps them — that is what they bought")
+    void completingKeepsTokens() {
+        when(rideTokens.charge(any())).thenReturn(2);
+        RideOffer theirs = offer(OfferParty.DRIVER, 1_200, 1);
+        when(offers.findById(theirs.getId())).thenReturn(Optional.of(theirs));
+        service.acceptAsRider(RIDER, ride.getId(), theirs.getId());
+        service.startTrip(DRIVER, ride.getId());
+
+        service.complete(DRIVER, ride.getId());
+
+        verify(rideTokens, never()).refund(any());
     }
 
     // MARK: Settling

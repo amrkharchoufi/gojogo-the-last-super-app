@@ -507,6 +507,11 @@ class PartnerService {
                 account.getKind() + " partners can't be provisioned yet");
         }
         account.approve(provision(account), OffsetDateTime.now());
+        // A driver spends a token to accept a trip (Phase 3 M4), and a driver
+        // with none is filtered out of every search — silently, which is correct
+        // and invisible. So an approval hands over a first handful, or it hands
+        // over a Driver Mode where nothing ever arrives.
+        stakes.grantWelcomeTokens(account);
         // The verified badge is the KYC review's, not the owner's: this is the
         // only place it is granted (SPECS.md §8 — no paid verification).
         setBusinessVerified(account, true);

@@ -8,6 +8,7 @@ import com.gojogo.dispatch.DispatchOffered;
 import com.gojogo.dispatch.DispatchRequest;
 import com.gojogo.dispatch.JobKind;
 import com.gojogo.dispatch.VehicleCategory;
+import com.gojogo.dispatch.WorkerEligibility;
 import com.gojogo.dispatch.WorkerKind;
 import com.gojogo.dispatch.WorkerPosition;
 import org.slf4j.Logger;
@@ -58,14 +59,17 @@ class DispatchService implements DispatchApi {
     private final DispatchJobRepository jobs;
     private final OfferRepository offers;
     private final DispatchPolicy policy;
+    private final List<WorkerEligibility> eligibility;
     private final ApplicationEventPublisher events;
 
     DispatchService(WorkerRepository workers, DispatchJobRepository jobs, OfferRepository offers,
-                    DispatchPolicy policy, ApplicationEventPublisher events) {
+                    DispatchPolicy policy, List<WorkerEligibility> eligibility,
+                    ApplicationEventPublisher events) {
         this.workers = workers;
         this.jobs = jobs;
         this.offers = offers;
         this.policy = policy;
+        this.eligibility = eligibility;
         this.events = events;
     }
 
@@ -434,7 +438,7 @@ class DispatchService implements DispatchApi {
             .toList();
         List<CandidateRanker.Ranked> chosen = CandidateRanker.rank(candidates, policy.ranking(),
             job.getPickupLatitude(), job.getPickupLongitude(), radiusKm, job.categories(),
-            alreadyAsked, policy.waveSize(), now);
+            alreadyAsked, userId -> mayBeOffered(job, userId), policy.waveSize(), now);
 
         OffsetDateTime offerExpiry = now.plusSeconds(policy.offerTtlSeconds());
         List<Worker> byId = new ArrayList<>(shortlist);
@@ -451,6 +455,34 @@ class DispatchService implements DispatchApi {
             log.debug("Dispatch wave {} for {} {} found nobody within {} km",
                 wave, job.getJobKind(), job.getJobRefId(), radiusKm);
         }
+    }
+
+    /**
+     * Asks every vertical that has an opinion whether this person may be sent
+     * this job — Phase 3 M4's token check, and whatever comes after it.
+     *
+     * <p>A plugin that throws is treated as no objection. A matching engine that
+     * stops finding drivers because a vertical had a bad second is a worse
+     * failure than an offer that is later refused, and the wave is the wrong
+     * place to discover that somebody else's database is down.
+     */
+    private boolean mayBeOffered(DispatchJob job, UUID workerUserId) {
+        for (WorkerEligibility check : eligibility) {
+            String refusal;
+            try {
+                refusal = check.refuseOffer(job.getJobKind(), job.getJobRefId(), workerUserId);
+            } catch (RuntimeException broken) {
+                log.warn("Eligibility check {} failed for {} — treating as eligible: {}",
+                    check.getClass().getSimpleName(), workerUserId, broken.toString());
+                continue;
+            }
+            if (refusal != null) {
+                log.debug("Skipping {} for {} {}: {}", workerUserId, job.getJobKind(),
+                    job.getJobRefId(), refusal);
+                return false;
+            }
+        }
+        return true;
     }
 
     private void exhaust(DispatchJob job) {

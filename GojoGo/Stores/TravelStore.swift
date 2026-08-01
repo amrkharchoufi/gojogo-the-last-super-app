@@ -56,6 +56,10 @@ struct RideDTO: Decodable, Equatable, Identifiable {
     let agreedFareMinor: Int?
     let currency: String
     let cancelFeeMinor: Int?
+    /// What this trip cost the driver in ride tokens — **nil to the rider**.
+    /// The price list is public; what the driver paid for the job is not a line
+    /// on a passenger's receipt.
+    let tokenCost: Int?
     let otherPartyId: UUID?
     let otherPartyName: String?
     let otherPartyAvatarUrl: String?
@@ -97,6 +101,30 @@ struct RideDTO: Decodable, Equatable, Identifiable {
 
 struct MyRideDTO: Decodable {
     let ride: RideDTO?
+}
+
+/// One band of the token price list: trips up to `upToMetres` cost `tokens`.
+struct RideTokenPriceDTO: Decodable, Equatable, Identifiable {
+    let category: String
+    let upToMetres: Int
+    let tokens: Int
+
+    var id: String { "\(category)-\(upToMetres)" }
+}
+
+/// The driver's token standing (Phase 3 M4).
+///
+/// `refusal` is the reason this endpoint exists. Dispatch stops offering trips
+/// to a driver who can't pay for them — silently and correctly — so without a
+/// sentence from the server the driver watches an empty screen and concludes
+/// the app is broken.
+struct MyRideTokensDTO: Decodable, Equatable {
+    let balance: Int
+    /// The least any trip could cost. Zero means the model is off in this market.
+    let cheapest: Int
+    let canWork: Bool
+    let refusal: String?
+    let prices: [RideTokenPriceDTO]
 }
 
 struct QuoteRideBody: Encodable {
@@ -201,6 +229,13 @@ final class TravelStore {
     }
 
     // MARK: The driver
+
+    /// Tokens: what the caller holds, what a trip costs, and — when they can't
+    /// work — why. On `travel` rather than `payments` because only the module
+    /// that prices a ride can say whether a balance is enough to take one.
+    func tokens() async throws -> MyRideTokensDTO {
+        try await APIClient.shared.get("/v1/travel/tokens")
+    }
 
     /// "Not at that price." Posting one is also a decline of the dispatch offer.
     func counter(_ rideID: UUID, amountMinor: Int) async throws -> RideOfferDTO {

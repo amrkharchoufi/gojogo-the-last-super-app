@@ -101,7 +101,7 @@ class CandidateRankingTests {
         CandidateRanker.Candidate fresh = candidate(LAT + 0.01, LON, 5.0, NOW);
 
         List<CandidateRanker.Ranked> ranked = CandidateRanker.rank(List.of(asked, fresh),
-            PROXIMITY_ONLY, LAT, LON, 7, CARS, Set.of(asked.workerId()), 5, NOW);
+            PROXIMITY_ONLY, LAT, LON, 7, CARS, Set.of(asked.workerId()), null, 5, NOW);
 
         assertThat(ranked).extracting(r -> r.candidate().workerId())
             .containsExactly(fresh.workerId());
@@ -211,11 +211,53 @@ class CandidateRankingTests {
         assertThat(rank(List.of(), DEFAULTS, 7, 5)).isEmpty();
     }
 
+    // MARK: The vertical's veto (Phase 3 M4)
+
+    @Test
+    @DisplayName("a wave reaches past an ineligible driver rather than shrinking")
+    void anIneligibleCandidateCostsNobodyTheirPlace() {
+        CandidateRanker.Candidate nearest = candidate(LAT, LON, 5.0, NOW);
+        CandidateRanker.Candidate second = candidate(LAT + 0.005, LON, 5.0, NOW);
+        CandidateRanker.Candidate third = candidate(LAT + 0.01, LON, 5.0, NOW);
+
+        List<CandidateRanker.Ranked> ranked = CandidateRanker.rank(
+            List.of(nearest, second, third), PROXIMITY_ONLY, LAT, LON, 7, CARS, Set.of(),
+            userId -> !userId.equals(nearest.userId()), 2, NOW);
+
+        // Filtering before the limit would have offered this job to one person
+        // and called the ring done, which is how a wave of five quietly becomes
+        // a wave of one on a night when tokens are short.
+        assertThat(ranked).extracting(r -> r.candidate().workerId())
+            .containsExactly(second.workerId(), third.workerId());
+    }
+
+    @Test
+    @DisplayName("no veto on the classpath means everybody is eligible")
+    void noPluginNoChange() {
+        CandidateRanker.Candidate only = candidate(LAT, LON, 5.0, NOW);
+        assertThat(CandidateRanker.rank(List.of(only), PROXIMITY_ONLY, LAT, LON, 7, CARS,
+            Set.of(), null, 5, NOW)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("the veto is asked about the person, not the registration")
+    void eligibilityIsPerUser() {
+        // One human with a driver row and a courier row has one wallet. Keying
+        // the check on the worker id would let them be short of tokens in one
+        // mode and not the other.
+        UUID person = UUID.randomUUID();
+        CandidateRanker.Candidate driving = new CandidateRanker.Candidate(UUID.randomUUID(),
+            person, VehicleCategory.CAR, LAT, LON, NOW, 5.0, NOW);
+
+        assertThat(CandidateRanker.rank(List.of(driving), PROXIMITY_ONLY, LAT, LON, 7, CARS,
+            Set.of(), userId -> !userId.equals(person), 5, NOW)).isEmpty();
+    }
+
     private static List<CandidateRanker.Ranked> rank(List<CandidateRanker.Candidate> candidates,
                                                      CandidateRanker.Policy policy,
                                                      double radiusKm, int limit) {
         return CandidateRanker.rank(candidates, policy, LAT, LON, radiusKm, CARS,
-            Set.of(), limit, NOW);
+            Set.of(), null, limit, NOW);
     }
 
     private static CandidateRanker.Candidate candidate(double lat, double lon, double rating,
