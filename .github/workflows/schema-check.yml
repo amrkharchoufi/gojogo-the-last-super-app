@@ -81,15 +81,15 @@ jobs:
           # server only fetches JWKS when a request arrives, and none does.
           COGNITO_ISSUER_URI: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ImKOJoJaA
           SERVER_PORT: '8080'
-          # Not a credential and not a service this job talks to — the AWS SDK
-          # resolves a region *eagerly*, when the bean is built, and messaging's
-          # `DynamoDbClient.create()` therefore threw before Flyway's result was
-          # ever inspected. Without this line the job failed on all three of the
-          # runs it had ever had, which meant the one guard standing between a
-          # migration and production had never once actually checked one.
-          # Credentials stay unset on purpose: the client is constructed here and
-          # never called, so it is the region alone that has to be present.
-          AWS_REGION: us-east-1
+          # AWS_REGION is deliberately absent, as is every other AWS variable.
+          # It was set here for one day, on 2026-08-01, because the SDK resolves
+          # a region *eagerly* when a client is constructed and three modules
+          # built theirs at startup — so `DynamoDbClient.create()` threw before
+          # Flyway's result was ever inspected, and the job had failed on all
+          # three of the runs it had ever had. The modules now build their AWS
+          # clients on first call instead, which is what the claim above says
+          # they do. Putting this line back would hide the next module that
+          # forgets.
         run: |
           set -o pipefail
           timeout 180 java -jar target/*.jar 2>&1 | tee boot.log &

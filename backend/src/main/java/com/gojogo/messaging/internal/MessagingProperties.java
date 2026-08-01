@@ -13,6 +13,12 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "gojogo.messaging")
 record MessagingProperties(String table, String wsEndpoint) {
 
+    /** False when no table is configured: messaging is off, not broken — see
+     *  {@link MessagingRepository}, which builds no DynamoDB client at all. */
+    boolean enabled() {
+        return table != null && !table.isBlank();
+    }
+
     boolean fanoutEnabled() {
         return wsEndpoint != null && !wsEndpoint.isBlank();
     }

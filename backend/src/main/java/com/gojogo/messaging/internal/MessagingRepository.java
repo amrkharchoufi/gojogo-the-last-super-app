@@ -3,8 +3,13 @@ package com.gojogo.messaging.internal;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gojogo.messaging.ConversationContext;
+import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Repository;
+import org.springframework.web.server.ResponseStatusException;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.Delete;
@@ -41,19 +46,54 @@ import java.util.UUID;
  * messages in time order". Complex sub-objects (media, poll, reply) are stored
  * as JSON strings; reactions are a native map so a single tapback is a nested
  * update, not a read-modify-write of the whole message.
+ *
+ * <p>The client is built on the first call, not at startup: {@code create()}
+ * resolves the region eagerly and throws when there isn't one, which would turn
+ * "messaging isn't configured here" into "the application does not start". With
+ * no table configured no client is ever built and every call fails with a 503,
+ * the same shape as an unconfigured Sumsub or APNs.
  */
 @Repository
 @EnableConfigurationProperties(MessagingProperties.class)
 class MessagingRepository {
 
-    private final DynamoDbClient db;
-    private final ObjectMapper json;
-    private final String table;
+    private static final Logger log = LoggerFactory.getLogger(MessagingRepository.class);
 
-    MessagingRepository(DynamoDbClient db, ObjectMapper json, MessagingProperties props) {
-        this.db = db;
+    private final ObjectMapper json;
+    private final MessagingProperties props;
+    private final String table;
+    private volatile DynamoDbClient db;
+
+    MessagingRepository(ObjectMapper json, MessagingProperties props) {
         this.json = json;
+        this.props = props;
         this.table = props.table();
+        if (!props.enabled()) {
+            log.info("Messaging is off (no MESSAGING_TABLE) — conversations, My World and "
+                + "send-later are unavailable on this environment; nothing else depends on them");
+        } else {
+            log.info("Messaging on: table '{}', WebSocket fan-out {}", table,
+                props.fanoutEnabled() ? "on" : "OFF (writes land, nothing is pushed)");
+        }
+    }
+
+    /** The DynamoDB client, built on first use. */
+    private synchronized DynamoDbClient db() {
+        if (!props.enabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                "Messaging isn't configured on this environment");
+        }
+        if (db == null) {
+            db = DynamoDbClient.create();
+        }
+        return db;
+    }
+
+    @PreDestroy
+    void close() {
+        if (db != null) {
+            db.close();
+        }
     }
 
     // ---- keys -------------------------------------------------------------
@@ -80,14 +120,14 @@ class MessagingRepository {
 
     /** Returns the existing direct conversation id for the pair, if any. */
     Optional<UUID> findDirectConversation(UUID a, UUID b) {
-        var item = db.getItem(r -> r.tableName(table).key(Map.of(
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
             "pk", s(directKey(a, b)), "sk", s("META")))).item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(UUID.fromString(item.get("convId").s()));
     }
 
     Optional<ConversationMeta> getConversation(UUID convId) {
-        var item = db.getItem(r -> r.tableName(table).key(Map.of(
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
             "pk", s("CONV#" + convId), "sk", s("META")))).item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(readMeta(item));
@@ -152,14 +192,14 @@ class MessagingRepository {
                 .tableName(table).item(lookup).build()).build());
         }
 
-        db.transactWriteItems(TransactWriteItemsRequest.builder()
+        db().transactWriteItems(TransactWriteItemsRequest.builder()
             .transactItems(writes).build());
     }
 
     /** Overwrites the reference card on an existing conversation (the reuse path:
      *  a buyer re-opens a thread from a different listing). */
     void updateContext(UUID convId, ConversationContext context) {
-        db.updateItem(r -> r.tableName(table)
+        db().updateItem(r -> r.tableName(table)
             .key(Map.of("pk", s("CONV#" + convId), "sk", s("META")))
             .updateExpression("SET contextJson = :c")
             .conditionExpression("attribute_exists(sk)")
@@ -187,7 +227,7 @@ class MessagingRepository {
     }
 
     List<Membership> listMemberships(UUID userId) {
-        QueryResponse resp = db.query(QueryRequest.builder()
+        QueryResponse resp = db().query(QueryRequest.builder()
             .tableName(table).indexName("gsi1")
             .keyConditionExpression("gsi1pk = :p")
             .expressionAttributeValues(Map.of(":p", s("USERCONV#" + userId)))
@@ -199,7 +239,7 @@ class MessagingRepository {
     }
 
     Optional<Membership> getMembership(UUID userId, UUID convId) {
-        var item = db.getItem(r -> r.tableName(table).key(Map.of(
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
             "pk", s("USER#" + userId), "sk", s("CONV#" + convId)))).item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(readMembership(item));
@@ -280,11 +320,11 @@ class MessagingRepository {
             }
             writes.add(TransactWriteItem.builder().update(u.build()).build());
         }
-        db.transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
+        db().transactWriteItems(TransactWriteItemsRequest.builder().transactItems(writes).build());
     }
 
     Optional<StoredMessage> getMessage(UUID convId, UUID msgId) {
-        var item = db.getItem(r -> r.tableName(table).key(Map.of(
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
             "pk", s("CONV#" + convId), "sk", s("MSG#" + msgId)))).item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(readMessage(item));
@@ -299,7 +339,7 @@ class MessagingRepository {
             cond += " AND gsi1sk < :b";
             values.put(":b", s(before.toString()));
         }
-        QueryResponse resp = db.query(QueryRequest.builder()
+        QueryResponse resp = db().query(QueryRequest.builder()
             .tableName(table).indexName("gsi1")
             .keyConditionExpression(cond)
             .expressionAttributeValues(values)
@@ -351,11 +391,11 @@ class MessagingRepository {
         item.put("createdAt", s(msg.scheduledAt().toString()));
         item.put("scheduledAt", s(msg.scheduledAt().toString()));
         if (msg.clientId() != null) item.put("clientId", s(msg.clientId().toString()));
-        db.putItem(r -> r.tableName(table).item(item));
+        db().putItem(r -> r.tableName(table).item(item));
     }
 
     List<ScheduledMessage> listDueScheduled(Instant now, int limit) {
-        QueryResponse resp = db.query(QueryRequest.builder()
+        QueryResponse resp = db().query(QueryRequest.builder()
             .tableName(table)
             .keyConditionExpression("pk = :p AND sk < :cutoff")
             .expressionAttributeValues(Map.of(
@@ -374,7 +414,7 @@ class MessagingRepository {
     /** Atomically claims a due message (only one poller instance wins). */
     boolean claimScheduled(String scheduleKey) {
         try {
-            db.deleteItem(r -> r.tableName(table)
+            db().deleteItem(r -> r.tableName(table)
                 .key(Map.of("pk", s("SCHED#DUE"), "sk", s(scheduleKey)))
                 .conditionExpression("attribute_exists(sk)"));
             return true;
@@ -386,7 +426,7 @@ class MessagingRepository {
     // ---- reactions --------------------------------------------------------
 
     void setReaction(UUID convId, UUID msgId, UUID userId, String tapback) {
-        db.updateItem(r -> r.tableName(table)
+        db().updateItem(r -> r.tableName(table)
             .key(Map.of("pk", s("CONV#" + convId), "sk", s("MSG#" + msgId)))
             .updateExpression("SET reactions.#u = :t")
             .conditionExpression("attribute_exists(sk)")
@@ -395,7 +435,7 @@ class MessagingRepository {
     }
 
     void clearReaction(UUID convId, UUID msgId, UUID userId) {
-        db.updateItem(r -> r.tableName(table)
+        db().updateItem(r -> r.tableName(table)
             .key(Map.of("pk", s("CONV#" + convId), "sk", s("MSG#" + msgId)))
             .updateExpression("REMOVE reactions.#u")
             .expressionAttributeNames(Map.of("#u", userId.toString())));
@@ -403,7 +443,7 @@ class MessagingRepository {
 
     /** Overwrites the stored poll after a vote is applied (read-modify-write). */
     void updatePoll(UUID convId, UUID msgId, PollDto poll) {
-        db.updateItem(r -> r.tableName(table)
+        db().updateItem(r -> r.tableName(table)
             .key(Map.of("pk", s("CONV#" + convId), "sk", s("MSG#" + msgId)))
             .updateExpression("SET pollJson = :p")
             .conditionExpression("attribute_exists(sk)")
@@ -413,7 +453,7 @@ class MessagingRepository {
     // ---- read state -------------------------------------------------------
 
     void markRead(UUID userId, UUID convId, UUID lastReadMessageId) {
-        db.updateItem(r -> r.tableName(table)
+        db().updateItem(r -> r.tableName(table)
             .key(Map.of("pk", s("USER#" + userId), "sk", s("CONV#" + convId)))
             .updateExpression("SET unread = :zero, lastReadMessageId = :m")
             .expressionAttributeValues(Map.of(
@@ -421,14 +461,14 @@ class MessagingRepository {
     }
 
     void setPinned(UUID userId, UUID convId, boolean pinned) {
-        db.updateItem(r -> r.tableName(table)
+        db().updateItem(r -> r.tableName(table)
             .key(Map.of("pk", s("USER#" + userId), "sk", s("CONV#" + convId)))
             .updateExpression("SET pinned = :v")
             .expressionAttributeValues(Map.of(":v", bool(pinned))));
     }
 
     void deleteMembership(UUID userId, UUID convId) {
-        db.deleteItem(r -> r.tableName(table)
+        db().deleteItem(r -> r.tableName(table)
             .key(Map.of("pk", s("USER#" + userId), "sk", s("CONV#" + convId))));
     }
 
@@ -438,7 +478,7 @@ class MessagingRepository {
         Map<String, AttributeValue> item = membershipItem(
             userId, meta.id(), 0, meta.lastActivityAt(), meta.preview(), meta.title(),
             !"DIRECT".equals(meta.type()), false, false, null);
-        db.putItem(r -> r.tableName(table).item(item));
+        db().putItem(r -> r.tableName(table).item(item));
         return readMembership(item);
     }
 
@@ -450,7 +490,7 @@ class MessagingRepository {
 
     /** Live WebSocket connection ids for a Cognito subject, for @connections fan-out. */
     List<String> connectionsForSub(String cognitoSub) {
-        QueryResponse resp = db.query(QueryRequest.builder()
+        QueryResponse resp = db().query(QueryRequest.builder()
             .tableName(table)
             .keyConditionExpression("pk = :p AND begins_with(sk, :c)")
             .expressionAttributeValues(Map.of(
@@ -462,7 +502,7 @@ class MessagingRepository {
     }
 
     void removeConnection(String cognitoSub, String connectionId) {
-        db.deleteItem(r -> r.tableName(table)
+        db().deleteItem(r -> r.tableName(table)
             .key(Map.of("pk", s("SUB#" + cognitoSub), "sk", s("CONN#" + connectionId))));
     }
 
@@ -479,7 +519,7 @@ class MessagingRepository {
     record OtpRecord(String phone, String codeHash, Instant expiresAt, int attempts) {}
 
     Optional<WorldProfile> getWorldProfile(UUID profileId) {
-        var item = db.getItem(r -> r.tableName(table).key(Map.of(
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
             "pk", s("WORLDUSER#" + profileId), "sk", s("PROFILE")))).item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(readWorldProfile(item));
@@ -513,17 +553,17 @@ class MessagingRepository {
         putIfPresent(item, "avatarUrl", p.avatarUrl());
         if (p.verifiedAt() != null) item.put("verifiedAt", s(p.verifiedAt().toString()));
         item.put("setupComplete", bool(p.setupComplete()));
-        db.putItem(r -> r.tableName(table).item(item));
+        db().putItem(r -> r.tableName(table).item(item));
     }
 
     void putPhoneIndex(String e164, UUID profileId) {
-        db.putItem(r -> r.tableName(table).item(Map.of(
+        db().putItem(r -> r.tableName(table).item(Map.of(
             "pk", s("WORLDPHONE#" + e164), "sk", s("PROFILE"),
             "profileId", s(profileId.toString()))));
     }
 
     Optional<UUID> profileIdForPhone(String e164) {
-        var item = db.getItem(r -> r.tableName(table).key(Map.of(
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
             "pk", s("WORLDPHONE#" + e164), "sk", s("PROFILE")))).item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(UUID.fromString(item.get("profileId").s()));
@@ -538,11 +578,11 @@ class MessagingRepository {
         item.put("expiresAt", s(expiresAt.toString()));
         item.put("attempts", n(attempts));
         item.put("ttl", n(expiresAt.getEpochSecond() + 300)); // sweep 5 min after expiry
-        db.putItem(r -> r.tableName(table).item(item));
+        db().putItem(r -> r.tableName(table).item(item));
     }
 
     Optional<OtpRecord> getOtp(UUID profileId) {
-        var item = db.getItem(r -> r.tableName(table).key(Map.of(
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
             "pk", s("WORLDOTP#" + profileId), "sk", s("OTP")))).item();
         if (item == null || item.isEmpty()) return Optional.empty();
         return Optional.of(new OtpRecord(
@@ -552,7 +592,7 @@ class MessagingRepository {
     }
 
     void deleteOtp(UUID profileId) {
-        db.deleteItem(r -> r.tableName(table)
+        db().deleteItem(r -> r.tableName(table)
             .key(Map.of("pk", s("WORLDOTP#" + profileId), "sk", s("OTP"))));
     }
 

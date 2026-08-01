@@ -7,4 +7,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "gojogo.media")
 record MediaProperties(String bucket, String cdnDomain) {
+
+    /** False when no bucket is configured: uploads are off, not broken — no S3
+     *  client is built, and the presign endpoints answer 503. */
+    boolean enabled() {
+        return bucket != null && !bucket.isBlank();
+    }
 }

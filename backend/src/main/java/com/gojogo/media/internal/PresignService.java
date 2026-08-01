@@ -70,12 +70,39 @@ class PresignService implements MediaDocumentApi {
 
     private final MediaProperties properties;
     private final MediaReferenceService references;
-    private final S3Presigner presigner = S3Presigner.create();
-    private final S3Client s3 = S3Client.create();
+
+    // Built on first use, never at startup: S3Presigner.create() and
+    // S3Client.create() resolve the region *eagerly* and throw when there is
+    // none, which would stop the whole application from starting over a bucket
+    // this environment may not have. Unconfigured is a mode here, not a failure.
+    private volatile S3Presigner presigner;
+    private volatile S3Client s3;
 
     PresignService(MediaProperties properties, MediaReferenceService references) {
         this.properties = properties;
         this.references = references;
+        if (!properties.enabled()) {
+            log.info("Media uploads are off (no MEDIA_BUCKET) — presign requests answer 503");
+        }
+    }
+
+    private synchronized S3Presigner presigner() {
+        requireConfigured();
+        if (presigner == null) presigner = S3Presigner.create();
+        return presigner;
+    }
+
+    private synchronized S3Client s3() {
+        requireConfigured();
+        if (s3 == null) s3 = S3Client.create();
+        return s3;
+    }
+
+    private void requireConfigured() {
+        if (!properties.enabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                "Media uploads aren't configured on this environment");
+        }
     }
 
     PresignResponse presign(UUID profileId, String contentType) {
@@ -91,7 +118,7 @@ class PresignService implements MediaDocumentApi {
             .contentType(contentType)
             .cacheControl(MEDIA_CACHE_CONTROL)
             .build();
-        String uploadUrl = presigner.presignPutObject(PutObjectPresignRequest.builder()
+        String uploadUrl = presigner().presignPutObject(PutObjectPresignRequest.builder()
                 .signatureDuration(EXPIRY)
                 .putObjectRequest(put)
                 .build())
@@ -123,7 +150,7 @@ class PresignService implements MediaDocumentApi {
             .key(key)
             .contentType(contentType)
             .build();
-        String uploadUrl = presigner.presignPutObject(PutObjectPresignRequest.builder()
+        String uploadUrl = presigner().presignPutObject(PutObjectPresignRequest.builder()
                 .signatureDuration(EXPIRY)
                 .putObjectRequest(put)
                 .build())
@@ -137,7 +164,7 @@ class PresignService implements MediaDocumentApi {
     @Override
     public String presignDocumentRead(String objectKey) {
         requirePrivate(objectKey);
-        return presigner.presignGetObject(GetObjectPresignRequest.builder()
+        return presigner().presignGetObject(GetObjectPresignRequest.builder()
                 .signatureDuration(DOCUMENT_READ_EXPIRY)
                 .getObjectRequest(GetObjectRequest.builder()
                     .bucket(properties.bucket())
@@ -152,7 +179,7 @@ class PresignService implements MediaDocumentApi {
     public void deleteDocument(String objectKey) {
         requirePrivate(objectKey);
         try {
-            s3.deleteObject(DeleteObjectRequest.builder()
+            s3().deleteObject(DeleteObjectRequest.builder()
                 .bucket(properties.bucket()).key(objectKey).build());
         } catch (RuntimeException e) {
             // Best-effort: the row is going regardless, and a stranded private
@@ -176,6 +203,7 @@ class PresignService implements MediaDocumentApi {
 
     @PreDestroy
     void close() {
-        presigner.close();
+        if (presigner != null) presigner.close();
+        if (s3 != null) s3.close();
     }
 }

@@ -36,7 +36,11 @@ class MediaCleanupJob {
     private final UploadObjectRepository uploads;
     private final MediaProperties media;
     private final MediaCleanupProperties config;
-    private final S3Client s3 = S3Client.create();
+
+    // Built on the first real deletion, not at startup — S3Client.create()
+    // resolves the region eagerly and throws without one. Report-only sweeps
+    // never touch S3 at all, so they never build it.
+    private volatile S3Client s3;
 
     MediaCleanupJob(UploadObjectRepository uploads, MediaProperties media, MediaCleanupProperties config) {
         this.uploads = uploads;
@@ -80,11 +84,16 @@ class MediaCleanupJob {
             keys.size(), config.minAgeHours());
     }
 
+    private synchronized S3Client s3() {
+        if (s3 == null) s3 = S3Client.create();
+        return s3;
+    }
+
     private void deleteFromS3(List<String> keys) {
         List<ObjectIdentifier> ids = keys.stream()
             .map(k -> ObjectIdentifier.builder().key(k).build())
             .toList();
-        s3.deleteObjects(DeleteObjectsRequest.builder()
+        s3().deleteObjects(DeleteObjectsRequest.builder()
             .bucket(media.bucket())
             .delete(Delete.builder().objects(ids).quiet(true).build())
             .build());
@@ -92,6 +101,8 @@ class MediaCleanupJob {
 
     @PreDestroy
     void close() {
-        s3.close();
+        if (s3 != null) {
+            s3.close();
+        }
     }
 }
