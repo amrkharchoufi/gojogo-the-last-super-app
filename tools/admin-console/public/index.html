@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GojoAdmin — operator console</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23171717'/></svg>">
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-row">
+      <div class="wordmark">GojoAdmin <span>· local</span></div>
+      <div class="masthead-meta">
+        <span id="whoami" class="muted">…</span>
+        <span class="badge" id="api-health">checking</span>
+      </div>
+    </div>
+    <p class="stopgap">
+      A stopgap operator console. It holds no data of its own — every screen is a
+      renderer for <code class="mono">/v1/partner/admin/**</code> and
+      <code class="mono">/v1/moderation/admin/**</code>, the same public surface the
+      real GojoAdmin will call. Decisions here are real and take effect in production.
+    </p>
+  </header>
+
+  <div class="shell">
+    <nav class="sidebar" aria-label="Sections">
+      <div class="nav-group-label">Review</div>
+      <button class="nav-row" data-view="partners" aria-current="page">
+        Applications <span class="nav-count" id="count-partners"></span>
+      </button>
+      <button class="nav-row" data-view="moderation">
+        Reports <span class="nav-count" id="count-reports"></span>
+      </button>
+      <div class="nav-group-label">Onboarding</div>
+      <button class="nav-row" data-view="create">File an application</button>
+      <div class="nav-group-label">Reference</div>
+      <button class="nav-row" data-view="help">What this can do</button>
+    </nav>
+
+    <main class="main" id="main"></main>
+  </div>
+
+  <div class="toast-stack" id="toasts"></div>
+  <div id="modal-root"></div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

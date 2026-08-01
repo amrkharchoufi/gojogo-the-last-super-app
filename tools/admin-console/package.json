@@ -1,0 +1,13 @@
+{
+  "name": "gojogo-admin-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stopgap operator console for partner review and moderation, until GojoAdmin exists. No dependencies on purpose.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}

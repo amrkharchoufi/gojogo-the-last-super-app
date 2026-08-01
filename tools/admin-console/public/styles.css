@@ -1,0 +1,364 @@
+/*
+ * The design language of DESIGN.md, as tokens.
+ *
+ * Two decisions worth stating, because both are the spec being followed rather
+ * than taste:
+ *
+ *   1. **6 px radius, not the 100 px pill.** DESIGN.md's "Don't" list says not
+ *      to pair the marketing pill with the nav radius on one screen — pick a
+ *      scale and stay there. This is an in-product surface, so it is `sm` (6 px)
+ *      everywhere, which is the brand's own `--geist-radius`.
+ *
+ *   2. **The mesh gradient appears exactly once, at full width.** It is the
+ *      brand's entire decorative system and the spec forbids miniaturising it or
+ *      reducing it to one colour, so it is not a badge, an icon or a border — it
+ *      is the atmospheric backdrop behind the masthead and nowhere else.
+ *
+ * Weight ceiling is 600. Display sizes carry the negative tracking the spec
+ * calls non-negotiable. Mono is for technical labels only — ids, eyebrows,
+ * amounts — never body copy.
+ */
+
+:root {
+  --primary: #171717;
+  --on-primary: #ffffff;
+  --ink: #171717;
+  --body: #4d4d4d;
+  --mute: #888888;
+  --hairline: #ebebeb;
+  --hairline-strong: #a1a1a1;
+  --canvas: #ffffff;
+  --canvas-soft: #fafafa;
+  --canvas-soft-2: #f5f5f5;
+  --link: #0070f3;
+  --link-deep: #0761d1;
+  --link-bg-soft: #d3e5ff;
+  --error: #ee0000;
+  --error-soft: #f7d4d6;
+  --error-deep: #c50000;
+  --warning: #f5a623;
+  --warning-soft: #ffefcf;
+  --warning-deep: #ab570a;
+  --violet: #7928ca;
+  --violet-soft: #d8ccf1;
+  --cyan: #50e3c2;
+  --highlight-pink: #ff0080;
+
+  --sans: Geist, Inter, system-ui, -apple-system, sans-serif;
+  --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+
+  --xxs: 4px;  --xs: 8px;   --sm: 12px;  --md: 16px;
+  --lg: 24px;  --xl: 32px;  --2xl: 40px; --3xl: 48px;
+  --4xl: 64px;
+
+  --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-full: 9999px;
+
+  /* Stacked, never a single heavy drop (DESIGN.md "Elevation & Depth"). */
+  --e1: inset 0 0 0 1px #00000014;
+  --e2: 0 1px 1px #00000005, 0 2px 2px #0000000a, inset 0 0 0 1px #00000014;
+  --e3: 0 2px 2px #0000000a, 0 8px 8px -8px #0000000a, inset 0 0 0 1px #00000014;
+  --e5: 0 1px 1px #00000005, 0 8px 16px -4px #0000000a,
+        0 24px 32px -8px #0000000f, inset 0 0 0 1px #00000014;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--canvas-soft);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 24px;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "ss02";
+}
+
+::selection { background: var(--primary); color: #f2f2f2; }
+
+h1, h2, h3 { margin: 0; font-weight: 600; }
+h1 { font-size: 32px; line-height: 40px; letter-spacing: -1.28px; }
+h2 { font-size: 24px; line-height: 32px; letter-spacing: -0.96px; }
+h3 { font-size: 20px; line-height: 28px; letter-spacing: -0.6px; }
+p  { margin: 0; }
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Masthead: the one place the mesh gradient lives ──────────────────────── */
+
+.masthead {
+  position: relative;
+  overflow: hidden;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--hairline);
+  padding: var(--lg) var(--lg) var(--md);
+}
+
+/* Full-bleed, uncropped, not reduced to one stop. */
+.masthead::before {
+  content: "";
+  position: absolute;
+  inset: -60% -10% auto -10%;
+  height: 220%;
+  background:
+    radial-gradient(40% 55% at 12% 40%, #007cf033 0%, transparent 70%),
+    radial-gradient(35% 50% at 38% 20%, #00dfd82e 0%, transparent 70%),
+    radial-gradient(38% 55% at 63% 45%, #7928ca26 0%, transparent 70%),
+    radial-gradient(34% 50% at 82% 25%, #ff008024 0%, transparent 70%),
+    radial-gradient(30% 45% at 95% 55%, #f9cb2824 0%, transparent 70%);
+  filter: blur(6px);
+  pointer-events: none;
+}
+
+.masthead > * { position: relative; }
+
+.masthead-row { display: flex; align-items: center; gap: var(--md); }
+
+.wordmark {
+  font-size: 20px; font-weight: 600; letter-spacing: -0.6px;
+}
+.wordmark span { color: var(--mute); font-weight: 400; }
+
+.masthead-meta {
+  margin-left: auto; display: flex; align-items: center; gap: var(--sm);
+  font-family: var(--mono); font-size: 12px; line-height: 16px; color: var(--body);
+}
+
+.stopgap {
+  margin-top: var(--sm);
+  font-size: 14px; line-height: 20px; letter-spacing: -0.28px; color: var(--body);
+  max-width: 78ch;
+}
+
+/* ── Shell ────────────────────────────────────────────────────────────────── */
+
+.shell { display: grid; grid-template-columns: 232px 1fr; min-height: calc(100% - 1px); }
+
+.sidebar {
+  background: var(--canvas);
+  border-right: 1px solid var(--hairline);
+  padding: var(--md) var(--sm);
+}
+
+.nav-group-label {
+  font-family: var(--mono); font-size: 12px; line-height: 16px;
+  color: var(--mute); text-transform: uppercase;
+  padding: var(--xs) var(--sm) var(--xxs);
+}
+
+/* Active state is a left-edge indicator bar in brand primary (ex-app-shell-row). */
+.nav-row {
+  display: flex; align-items: center; gap: var(--xs);
+  width: 100%; text-align: left;
+  padding: var(--xs) var(--sm);
+  border: 0; border-left: 2px solid transparent;
+  background: var(--canvas); color: var(--body);
+  font-family: var(--sans); font-size: 14px; line-height: 20px; letter-spacing: -0.28px;
+  border-radius: var(--r-sm); cursor: pointer;
+}
+.nav-row:hover { background: var(--canvas-soft-2); color: var(--ink); }
+.nav-row[aria-current="page"] {
+  border-left-color: var(--primary); background: var(--canvas-soft);
+  color: var(--ink); font-weight: 500; border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.nav-count {
+  margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--mute);
+}
+
+.main { padding: var(--lg); min-width: 0; }
+
+.main-head { display: flex; align-items: flex-end; gap: var(--md); margin-bottom: var(--md); }
+.main-head p { color: var(--body); font-size: 14px; line-height: 20px; letter-spacing: -0.28px; }
+
+/* ── Controls ─────────────────────────────────────────────────────────────── */
+
+.filters { display: flex; flex-wrap: wrap; gap: var(--xs); margin-bottom: var(--md); }
+
+.chip {
+  height: 32px; padding: 0 var(--sm);
+  background: var(--canvas); color: var(--body);
+  border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  font-family: var(--sans); font-size: 14px; font-weight: 500; line-height: 20px;
+  letter-spacing: -0.28px; cursor: pointer;
+}
+.chip:hover { color: var(--ink); border-color: var(--hairline-strong); }
+.chip[aria-pressed="true"] {
+  background: var(--primary); color: var(--on-primary); border-color: var(--primary);
+}
+
+.btn {
+  height: 32px; padding: 0 var(--sm);
+  border-radius: var(--r-sm); border: 1px solid var(--hairline);
+  background: var(--canvas); color: var(--ink);
+  font-family: var(--sans); font-size: 14px; font-weight: 500; line-height: 20px;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { border-color: var(--hairline-strong); }
+.btn:disabled { color: var(--mute); cursor: not-allowed; background: var(--canvas-soft-2); }
+.btn-primary {
+  background: var(--primary); color: var(--on-primary); border-color: var(--primary);
+}
+.btn-primary:hover:not(:disabled) { background: #000; }
+.btn-danger { color: var(--error-deep); border-color: var(--error-soft); }
+.btn-danger:hover:not(:disabled) { background: #fff5f5; border-color: var(--error); }
+
+input[type="text"], textarea, select {
+  width: 100%;
+  background: var(--canvas); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  font-family: var(--sans); font-size: 14px; line-height: 20px; letter-spacing: -0.28px;
+  padding: 0 var(--sm); height: 40px;
+}
+textarea { height: auto; min-height: 72px; padding: var(--xs) var(--sm); resize: vertical; }
+input:focus, textarea:focus, select:focus {
+  outline: none; border-color: var(--hairline-strong);
+}
+label.field { display: block; margin-bottom: var(--sm); }
+label.field > span {
+  display: block; margin-bottom: var(--xxs);
+  font-family: var(--mono); font-size: 12px; line-height: 16px; color: var(--body);
+}
+
+/* ── Cards & tables ───────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--canvas); border-radius: var(--r-md);
+  box-shadow: var(--e2); padding: var(--lg);
+}
+.card + .card { margin-top: var(--md); }
+.card-soft { background: var(--canvas-soft); border-radius: var(--r-md); padding: var(--lg); }
+
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  background: var(--canvas-soft); text-align: left;
+  font-family: var(--mono); font-weight: 400; font-size: 12px; line-height: 16px;
+  text-transform: uppercase; color: var(--body);
+  padding: var(--xs) var(--sm); border-bottom: 1px solid var(--hairline);
+}
+tbody td {
+  padding: var(--sm); border-bottom: 1px solid var(--hairline);
+  font-size: 14px; line-height: 20px; letter-spacing: -0.28px;
+}
+tbody tr { cursor: pointer; }
+tbody tr:hover td { background: var(--canvas-soft); }
+tbody tr[aria-selected="true"] td { background: var(--canvas-soft-2); }
+
+.mono { font-family: var(--mono); font-size: 12px; line-height: 16px; }
+.muted { color: var(--mute); }
+.subtle { color: var(--body); }
+
+/* ── Badges ───────────────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-flex; align-items: center; gap: var(--xxs);
+  height: 20px; padding: 0 var(--xs);
+  border-radius: var(--r-full);
+  background: var(--canvas-soft); color: var(--body);
+  font-size: 12px; line-height: 16px; white-space: nowrap;
+}
+.badge-pending { background: var(--warning-soft); color: var(--warning-deep); }
+.badge-ok      { background: var(--link-bg-soft); color: var(--link-deep); }
+.badge-bad     { background: var(--error-soft);   color: var(--error-deep); }
+.badge-off     { background: var(--violet-soft);  color: #4c2889; }
+
+/* ── Detail pane ──────────────────────────────────────────────────────────── */
+
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: var(--md); align-items: start; }
+@media (max-width: 1180px) { .split { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 860px)  { .shell { grid-template-columns: 1fr; } .sidebar { border-right: 0; border-bottom: 1px solid var(--hairline); } }
+
+/*
+ * The detail pane pins beside the table, and scrolls *inside itself*.
+ *
+ * Plain `position: sticky` is wrong here and was wrong in the first draft: an
+ * application with a vehicle and its papers is taller than the viewport, so
+ * sticky pinned the top and left the decision buttons at the bottom
+ * permanently out of reach. On a review screen that is not a cosmetic bug —
+ * the buttons are the entire screen.
+ */
+.detail {
+  position: sticky;
+  top: var(--lg);
+  max-height: calc(100vh - var(--xl));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.kv { display: grid; grid-template-columns: 132px 1fr; gap: var(--xxs) var(--sm); }
+.kv dt {
+  font-family: var(--mono); font-size: 12px; line-height: 16px; color: var(--mute);
+}
+.kv dd { margin: 0; font-size: 14px; line-height: 20px; letter-spacing: -0.28px; }
+
+.section-label {
+  font-family: var(--mono); font-size: 12px; line-height: 16px;
+  text-transform: uppercase; color: var(--mute);
+  margin: var(--lg) 0 var(--xs);
+}
+
+.doc-row {
+  display: flex; align-items: center; gap: var(--xs);
+  padding: var(--xs) 0; border-bottom: 1px solid var(--hairline);
+  font-size: 14px; line-height: 20px;
+}
+.doc-row:last-child { border-bottom: 0; }
+
+.blocker {
+  display: flex; gap: var(--xs);
+  background: var(--warning-soft); color: var(--warning-deep);
+  border-radius: var(--r-sm); padding: var(--xs) var(--sm);
+  font-size: 14px; line-height: 20px; letter-spacing: -0.28px;
+}
+.blocker-ok { background: var(--link-bg-soft); color: var(--link-deep); }
+
+.actions { display: flex; flex-wrap: wrap; gap: var(--xs); margin-top: var(--md); }
+
+/* ── Empty / loading ──────────────────────────────────────────────────────── */
+
+/* Canvas, not canvas-soft: the page is already canvas-soft, and DESIGN.md's
+ * empty-state token assumes a white page under it. Soft-on-soft is a frame
+ * nobody can see. */
+.empty {
+  background: var(--canvas); border-radius: var(--r-lg); box-shadow: var(--e1);
+  padding: var(--3xl); text-align: center; color: var(--body);
+}
+.empty h3 { margin-bottom: var(--xs); }
+
+.skeleton {
+  height: 14px; border-radius: var(--r-xs);
+  background: linear-gradient(90deg, #f0f0f0, #f7f7f7, #f0f0f0);
+  background-size: 200% 100%; animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* ── Modal (Level 5) ──────────────────────────────────────────────────────── */
+
+.scrim {
+  position: fixed; inset: 0; background: #17171733;
+  display: flex; align-items: center; justify-content: center; padding: var(--lg);
+  z-index: 10;
+}
+.modal {
+  background: var(--canvas); border-radius: var(--r-lg); box-shadow: var(--e5);
+  padding: var(--xl); width: min(520px, 100%);
+}
+.modal h2 { margin-bottom: var(--xs); }
+.modal p  { color: var(--body); font-size: 14px; line-height: 20px; letter-spacing: -0.28px; }
+
+/* ── Toast (Level 4) ──────────────────────────────────────────────────────── */
+
+.toast-stack {
+  position: fixed; bottom: var(--lg); right: var(--lg);
+  display: flex; flex-direction: column; gap: var(--xs); z-index: 20;
+}
+.toast {
+  background: var(--canvas); border-radius: var(--r-md);
+  box-shadow: 0 2px 2px #0000000a, 0 8px 16px -4px #0000000a, inset 0 0 0 1px #00000014;
+  padding: var(--sm) var(--md);
+  font-size: 14px; line-height: 20px; letter-spacing: -0.28px;
+  max-width: 380px;
+}
+.toast-bad { color: var(--error-deep); }
