@@ -282,17 +282,27 @@ struct WorldChatView: View {
         }
     }
 
-    /// What the header and composer sit on. Opaque with no wallpaper — the plain
-    /// page, exactly as before — and a thin material over one, so the picture
-    /// carries on behind them instead of being cropped by them.
+    /// What the header and composer sit on. The plain page with no wallpaper —
+    /// exactly as before — and *nothing at all* over one.
+    ///
+    /// Material was the cautious answer and it was still a band: a frosted strip
+    /// at each end of somebody's photo, which reads as the picture being cropped
+    /// rather than as chrome floating on it. The controls carry their own
+    /// contrast instead — the composer's field and buttons have fills of their
+    /// own, and the header's labels get a shadow (`chromeShadow`), which is what
+    /// keeps them readable over a bright sky without putting a lid on it.
     @ViewBuilder
     private var chromeFill: some View {
         if live.background.isDecorated {
-            Rectangle().fill(.ultraThinMaterial)
+            Color.clear
         } else {
             IMColor.bg
         }
     }
+
+    /// Legibility for text sitting directly on a wallpaper. Zero radius without
+    /// one, so the plain page is untouched.
+    private var chromeShadowRadius: CGFloat { live.background.isDecorated ? 4 : 0 }
 
     // MARK: Tapback / action overlay
 
@@ -474,14 +484,16 @@ struct WorldChatView: View {
         .padding(.bottom, 8)
         .padding(.top, 2)
         .frame(maxWidth: .infinity)
+        .shadow(color: .black.opacity(live.background.isDecorated ? 0.45 : 0),
+                radius: chromeShadowRadius, y: 1)
         .background(
             // No wallpaper: the same clear fade as Home, no material shelf.
-            // Over a wallpaper the fade would be a grey block across the top of
-            // somebody's picture, so the chrome goes translucent instead and the
-            // image runs under the status bar.
+            // Over a wallpaper: nothing. The fade would be a grey block across
+            // the top of somebody's picture, and the point of a wallpaper is
+            // that it is the whole screen.
             Group {
                 if live.background.isDecorated {
-                    chromeFill
+                    Color.clear
                 } else {
                     LinearGradient(
                         colors: [IMColor.bg.opacity(0.96), IMColor.bg.opacity(0.72),
