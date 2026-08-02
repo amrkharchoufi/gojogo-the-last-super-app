@@ -218,6 +218,11 @@ function partnerDetail(row) {
     el('dt', {}, 'status'), el('dd', {}, badge(a.status.toLowerCase(), badgeClass(a.status))),
     el('dt', {}, 'contact'), el('dd', {}, [a.contactName, a.contactPhone].filter(Boolean).join(' · ') || '—'),
     el('dt', {}, 'address'), el('dd', {}, [a.addressLine, a.city, a.country].filter(Boolean).join(', ') || '—'),
+    // Only for the kinds that hold one — a restaurant's row would always read
+    // "—", which is a line of noise on every card in the queue. It sits next to
+    // the licence photos below so the reviewer can read one against the other.
+    a.driverLicenseNumber ? el('dt', {}, 'licence no.') : null,
+    a.driverLicenseNumber ? el('dd', { className: 'mono' }, a.driverLicenseNumber) : null,
     el('dt', {}, 'identity'), el('dd', {},
       a.identityRequired
         ? badge(a.identityStatus?.toLowerCase() || 'unknown',

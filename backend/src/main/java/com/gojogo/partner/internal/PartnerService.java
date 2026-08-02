@@ -131,6 +131,22 @@ class PartnerService {
         return toDto(account);
     }
 
+    /**
+     * Records the number printed on a driving licence.
+     *
+     * <p>Separate from {@link #save} because that is a whole-object upsert and
+     * this is one field: an app calling save to record a number would blank the
+     * address an operator typed. It is also the only part of the licence the
+     * applicant types rather than photographs, which is why it can be written
+     * before either photo arrives.
+     */
+    @Transactional
+    PartnerAccountDto saveDriverLicense(UUID me, UUID accountId, SaveDriverLicenseRequest request) {
+        PartnerAccount account = requireEditable(me, accountId);
+        account.applyDriverLicenseNumber(request.number());
+        return toDto(account);
+    }
+
     /** Somewhere private to put one paper. Nothing is recorded until the client
      *  comes back with the key, so an abandoned upload leaves no row. */
     @Transactional(readOnly = true)
@@ -291,7 +307,10 @@ class PartnerService {
      */
     private Set<DocumentKind> requiredDocuments(PartnerAccount account) {
         Set<DocumentKind> required = account.getKind().requiredDocuments(identity.isConfigured());
-        if (vehicles.isDriverLicenseRequired(account)) required.add(DocumentKind.DRIVER_LICENSE);
+        if (vehicles.isDriverLicenseRequired(account)) {
+            required.add(DocumentKind.DRIVER_LICENSE_FRONT);
+            required.add(DocumentKind.DRIVER_LICENSE_BACK);
+        }
         return required;
     }
 
@@ -690,15 +709,21 @@ class PartnerService {
      * stricter check; it is a wall.
      *
      * <p>What is left for a driver is their name, which the app fills in from
-     * the account. Everything a reviewer actually weighs about them — the
-     * identity verdict, the licence, the vehicle and its papers — is checked
+     * the account, and the number off their licence — the one thing on that card
+     * they type rather than photograph, and the thing a reviewer reads the
+     * photograph against. Everything else weighed about them — the identity
+     * verdict, the licence photos, the vehicle and its papers — is checked
      * further down {@code submitAccount}, and reaching them by phone is what the
      * account itself is for.
      */
-    private static List<String> missingFields(PartnerAccount account) {
+    private List<String> missingFields(PartnerAccount account) {
         List<String> missing = new ArrayList<>();
         if (account.getBusinessName().isBlank()) missing.add("business name");
         if (account.getContactName().isBlank()) missing.add("contact name");
+        if (vehicles.isDriverLicenseRequired(account)
+            && account.getDriverLicenseNumber().isBlank()) {
+            missing.add("licence number");
+        }
         if (account.getKind() != PartnerKind.RESTAURANT) return missing;
         if (account.getContactPhone().isBlank()) missing.add("contact phone");
         if (account.getCategory().isBlank()) missing.add("category");
@@ -742,9 +767,14 @@ class PartnerService {
 
     /** "ID_FRONT" → "ID front", for a message the applicant reads. */
     private static String label(DocumentKind kind) {
-        if (kind == DocumentKind.DRIVER_LICENSE) return "driving licence";
-        String words = kind.name().replace('_', ' ').toLowerCase();
-        return kind.name().startsWith("ID") ? "ID" + words.substring(2) : words;
+        return switch (kind) {
+            case DRIVER_LICENSE_FRONT -> "driving licence (front)";
+            case DRIVER_LICENSE_BACK -> "driving licence (back)";
+            default -> {
+                String words = kind.name().replace('_', ' ').toLowerCase();
+                yield kind.name().startsWith("ID") ? "ID" + words.substring(2) : words;
+            }
+        };
     }
 
     // MARK: Mapping
@@ -805,6 +835,7 @@ class PartnerService {
             account.getLogoUrl(), account.getContactName(), account.getContactPhone(),
             account.getContactEmail(), account.getCountry(), account.getCity(),
             account.getAddressLine(), account.getLatitude(), account.getLongitude(),
+            account.getDriverLicenseNumber(),
             account.getReviewNote(), account.getProvisionedRefId(),
             uploaded.stream()
                 .map(d -> new PartnerDocumentDto(d.getId(), d.getKind().name(),

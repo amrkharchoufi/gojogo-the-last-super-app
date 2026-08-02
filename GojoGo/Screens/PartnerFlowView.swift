@@ -458,6 +458,14 @@ private struct PartnerKYCPage: View {
     let role: PartnerRole
     /// Which paper is in flight, so the tile can say so rather than looking dead.
     @State private var uploadingDocument: String?
+    /// Which paper the picker on screen is for. One set of pickers serves every
+    /// tile — presenting a camera and a library per tile would be six sheets
+    /// racing each other for the same screen.
+    @State private var pendingDocument: String?
+    @State private var choosingSource = false
+    @State private var showLibrary = false
+    @State private var showCamera = false
+    @State private var libraryItem: PhotosPickerItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -478,6 +486,15 @@ private struct PartnerKYCPage: View {
         // The verdict can land while this page is open — a check that was
         // "in review" when they got here may be done by the time they look.
         .task { await app.refreshIdentity() }
+        .modifier(DocumentSourcePickers(
+            choosingSource: $choosingSource, showLibrary: $showLibrary,
+            showCamera: $showCamera, libraryItem: $libraryItem,
+            onCancel: { pendingDocument = nil },
+            onPicked: { data in
+                guard let kind = pendingDocument else { return }
+                pendingDocument = nil
+                Task { await upload(data, kind: kind) }
+            }))
     }
 
     private var intro: some View {
@@ -687,15 +704,21 @@ private struct PartnerKYCPage: View {
             formCard(title: "Driver's licence", icon: "creditcard.fill") {
                 fieldRow(title: "Licence number", placeholder: "Licence number",
                          text: $app.partnerApplication.licenseNumber, autocaps: .characters)
-                // Hangs off the application rather than off the car: the licence
-                // is the driver's, and it outlives the Yaris.
-                // "Both sides" is gone with the placeholder that promised it:
-                // one upload is one image, and telling somebody to photograph
-                // two would be asking for something this can't keep.
-                uploadTile(kind: PartnerDocumentKind.driverLicense,
-                           title: "Licence photo", subtitle: "The front, clearly readable",
+                // Both hang off the application rather than off the car: the
+                // licence is the driver's, and it outlives the Yaris. Two tiles
+                // rather than one "both sides" because one upload is one image,
+                // and the back is a different document — it carries what you're
+                // entitled to drive and when that runs out.
+                uploadTile(kind: PartnerDocumentKind.driverLicenseFront,
+                           title: "Licence — front", subtitle: "The photo side",
                            icon: "creditcard.fill",
-                           uploaded: app.driverLicenseUploaded)
+                           uploaded: app.driverLicenseUploaded(
+                               PartnerDocumentKind.driverLicenseFront))
+                uploadTile(kind: PartnerDocumentKind.driverLicenseBack,
+                           title: "Licence — back", subtitle: "Categories and expiry",
+                           icon: "creditcard.and.123",
+                           uploaded: app.driverLicenseUploaded(
+                               PartnerDocumentKind.driverLicenseBack))
             }
             formCard(title: "Your vehicle", icon: "car.fill") {
                 HStack(spacing: 10) {
@@ -847,10 +870,17 @@ private struct PartnerKYCPage: View {
     /// it looks like evidence. So `uploaded` is always somebody else's answer —
     /// the server's `missingDocuments` — and never a flag this screen sets on
     /// itself the moment it is tapped.
-    @ViewBuilder
+    ///
+    /// Tapping asks camera or library rather than assuming. Most of these papers
+    /// are in somebody's hand while they fill this in, and a tile that only ever
+    /// opened the library asked them to go and photograph it somewhere else first.
     private func uploadTile(kind: String, title: String, subtitle: String,
                             icon: String, uploaded: Bool) -> some View {
-        PhotosPicker(selection: binding(for: kind), matching: .images) {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            pendingDocument = kind
+            choosingSource = true
+        } label: {
             HStack(spacing: 12) {
                 Image(systemName: uploaded ? "checkmark.circle.fill" : icon)
                     .font(.system(size: 15, weight: .semibold))
@@ -885,29 +915,29 @@ private struct PartnerKYCPage: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // One upload at a time. Two in flight would race each other to replace
+        // `driverApplication`, and the loser's tile would go back to un-uploaded.
+        .disabled(uploadingDocument != nil)
     }
 
-    private func binding(for kind: String) -> Binding<PhotosPickerItem?> {
-        Binding(get: { nil }, set: { item in
-            guard let item else { return }
-            Task { await upload(item, kind: kind) }
-        })
-    }
-
-    private func upload(_ item: PhotosPickerItem, kind: String) async {
-        guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+    private func upload(_ data: Data, kind: String) async {
         uploadingDocument = kind
         defer { uploadingDocument = nil }
-        guard kind != PartnerDocumentKind.driverLicense else {
+        guard !PartnerDocumentKind.driverLicense.contains(kind) else {
             // The licence belongs to the applicant, so it needs no vehicle —
             // and asking for one first would be a car standing between somebody
             // and photographing their own licence.
-            await app.uploadDriverLicense(image: data)
+            await app.uploadDriverLicense(kind: kind, image: data)
             return
         }
-        // A car's papers do: the vehicle has to exist before they can hang off it.
-        if app.driverApplication?.activeVehicle == nil,
-           !(await app.saveDriverVehicle()) { return }
+        // A car's papers do: the vehicle has to exist before they can hang off
+        // it. The licence number goes with that save — the server wants it
+        // before it will call the application complete, and this is the first
+        // moment the app has anything to send.
+        if app.driverApplication?.activeVehicle == nil {
+            await app.saveDriverLicenseNumber()
+            guard await app.saveDriverVehicle() else { return }
+        }
         await app.uploadVehicleDocument(kind: kind, image: data)
     }
 
@@ -947,6 +977,68 @@ private struct PartnerKYCPage: View {
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+}
+
+// MARK: - Camera or library, for a paper you're holding
+
+/// The three presentations every document tile shares: the choice, the library
+/// and the camera.
+///
+/// One set for the whole page rather than one per tile. SwiftUI presents at most
+/// one sheet per view, so six tiles carrying their own pickers would mean six
+/// modifiers competing for the same slot — and a photo landing on whichever tile
+/// won. The page holds the pickers; the tile only says which paper it is for.
+private struct DocumentSourcePickers: ViewModifier {
+    @Binding var choosingSource: Bool
+    @Binding var showLibrary: Bool
+    @Binding var showCamera: Bool
+    @Binding var libraryItem: PhotosPickerItem?
+    let onCancel: () -> Void
+    let onPicked: (Data) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog("Add this document", isPresented: $choosingSource,
+                                titleVisibility: .visible) {
+                // Absent in the Simulator and on a device with no usable camera,
+                // where offering it would present an empty controller.
+                if CameraCaptureView.isAvailable {
+                    Button("Take a photo") { showCamera = true }
+                }
+                Button("Choose from library") { showLibrary = true }
+                Button("Cancel", role: .cancel) { onCancel() }
+            }
+            .photosPicker(isPresented: $showLibrary, selection: $libraryItem,
+                          matching: .images)
+            .onChange(of: libraryItem) { _, item in
+                guard let item else { return }
+                libraryItem = nil
+                Task {
+                    guard let data = try? await item.loadTransferable(type: Data.self) else {
+                        onCancel()
+                        return
+                    }
+                    onPicked(data)
+                }
+            }
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraCaptureView(
+                    onCapture: { capture in
+                        showCamera = false
+                        guard case .photo(let data) = capture else {
+                            onCancel()
+                            return
+                        }
+                        onPicked(data)
+                    },
+                    onCancel: {
+                        showCamera = false
+                        onCancel()
+                    },
+                    photosOnly: true)
+                .ignoresSafeArea()
+            }
     }
 }
 

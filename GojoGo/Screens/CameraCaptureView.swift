@@ -16,6 +16,10 @@ struct CameraCaptureView: UIViewControllerRepresentable {
 
     var onCapture: (Capture) -> Void
     var onCancel: () -> Void
+    /// Photographing a document, not filming one. The partner flow's paper tiles
+    /// each hold exactly one still image, so offering a Video mode there would be
+    /// a button whose only outcome is a recording nothing can accept.
+    var photosOnly: Bool = false
 
     /// False in the Simulator and on devices with no usable camera — callers
     /// fall back to the photo library rather than presenting an empty controller.
@@ -30,7 +34,9 @@ struct CameraCaptureView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
-        picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
+        picker.mediaTypes = photosOnly
+            ? [UTType.image.identifier]
+            : [UTType.image.identifier, UTType.movie.identifier]
         picker.videoQuality = .typeHigh
         picker.videoMaximumDuration = 60
         picker.cameraDevice = .rear

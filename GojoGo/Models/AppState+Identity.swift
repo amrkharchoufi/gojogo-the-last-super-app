@@ -65,7 +65,7 @@ extension AppState {
         guard partnerApplication.vehicleDetailsComplete, !partnerSubmitting,
               let application = driverApplication else { return nil }
         let wanted = missingUploadLabels(application)
-        if !wanted.isEmpty { return "Add a photo of your " + Self.sentenceList(wanted) + "." }
+        if !wanted.isEmpty { return "Add a photo of " + Self.sentenceList(wanted) + "." }
         guard let blocker = driverSubmitBlocker else { return nil }
         return blocker.prefix(1).uppercased() + String(blocker.dropFirst())
     }
@@ -87,8 +87,14 @@ extension AppState {
         guard partnerApplication.role == .driver,
               partnerApplication.driverVehicle.requiresLicense else { return [] }
         var wanted: [String] = []
-        if application.needsDocument(PartnerDocumentKind.driverLicense) {
-            wanted.append("driving licence")
+        let front = application.needsDocument(PartnerDocumentKind.driverLicenseFront)
+        let back = application.needsDocument(PartnerDocumentKind.driverLicenseBack)
+        if front && back {
+            wanted.append("both sides of your licence")
+        } else if front {
+            wanted.append("the front of your licence")
+        } else if back {
+            wanted.append("the back of your licence")
         }
         guard application.vehicleRequired == true else { return wanted }
         // No vehicle on file yet means neither of its papers can have been
@@ -100,10 +106,10 @@ extension AppState {
             papers = [VehicleDocumentKind.registration, VehicleDocumentKind.insurance]
         }
         if papers.contains(VehicleDocumentKind.registration) {
-            wanted.append("vehicle registration")
+            wanted.append("your vehicle registration")
         }
         if papers.contains(VehicleDocumentKind.insurance) {
-            wanted.append("insurance certificate")
+            wanted.append("your insurance certificate")
         }
         return wanted
     }

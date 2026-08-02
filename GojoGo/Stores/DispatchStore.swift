@@ -73,6 +73,16 @@ final class DispatchStore {
         try await APIClient.shared.post("/v1/partner/applications/\(applicationID)/withdraw")
     }
 
+    /// The one part of a licence that is typed rather than photographed. Its own
+    /// endpoint because `POST /applications` is a whole-object upsert — sending
+    /// that to record one number would blank everything the app doesn't know.
+    func saveDriverLicenseNumber(_ applicationID: UUID,
+                                 _ number: String) async throws -> DriverApplicationDTO {
+        try await APIClient.shared.put(
+            "/v1/partner/applications/\(applicationID)/driver-licence",
+            body: SaveDriverLicenseBody(number: number))
+    }
+
     /// Uploads a paper that belongs to the *applicant* rather than to a car —
     /// their driving licence. Same private prefix and the same two-step presign
     /// as a vehicle document; a different owner, which is why it hangs off the
@@ -136,9 +146,14 @@ final class DispatchStore {
 /// because the server owns both lists — a build that doesn't know a kind should
 /// ignore it, not fail to decode an application because of it.
 enum PartnerDocumentKind {
-    /// Hangs off the application rather than off a vehicle: a licence belongs
-    /// to the person holding it, and stays theirs when the car is sold.
-    static let driverLicense = "DRIVER_LICENSE"
+    /// Both hang off the application rather than off a vehicle: a licence
+    /// belongs to the person holding it, and stays theirs when the car is sold.
+    /// Two kinds because the back is where the categories somebody may drive and
+    /// the expiry are printed.
+    static let driverLicenseFront = "DRIVER_LICENSE_FRONT"
+    static let driverLicenseBack = "DRIVER_LICENSE_BACK"
+
+    static let driverLicense = [driverLicenseFront, driverLicenseBack]
 }
 
 enum VehicleDocumentKind {
@@ -156,6 +171,10 @@ struct DocumentUploadDTO: Decodable {
     let objectKey: String
     let contentType: String
     let expiresSeconds: Int
+}
+
+struct SaveDriverLicenseBody: Encodable {
+    let number: String
 }
 
 struct AttachDocumentBody: Encodable {

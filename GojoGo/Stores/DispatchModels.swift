@@ -189,6 +189,9 @@ struct DriverApplicationDTO: Decodable, Equatable {
     let businessName: String
     let reviewNote: String?
     let refId: UUID?
+    /// What the driver typed off their licence, echoed back so re-entering the
+    /// flow doesn't ask for it again.
+    let driverLicenseNumber: String?
     let identityRequired: Bool?
     let identityStatus: String?
     let identityReason: String?

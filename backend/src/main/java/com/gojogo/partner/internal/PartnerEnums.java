@@ -107,12 +107,17 @@ enum DocumentKind {
      *
      * <p>Deliberately not {@link #isIdentity()}: an IDV vendor matches a face to
      * an ID document and says nothing whatever about whether that person may
-     * drive a car, so this one survives the vendor filter and a driver uploads
-     * it however identity is being proved. Required only when the vehicle needs
-     * one — see {@code PartnerService.requiredDocuments} — because a trottinette
+     * drive a car, so these survive the vendor filter and a driver uploads them
+     * however identity is being proved. Required only when the vehicle needs one
+     * — see {@code PartnerService.requiredDocuments} — because a trottinette
      * doesn't.
+     *
+     * <p>Two kinds, not one: the back is where the categories a person may drive
+     * and the expiry date are printed, so a reviewer holding only the front is
+     * being asked to approve half a document.
      */
-    DRIVER_LICENSE;
+    DRIVER_LICENSE_FRONT,
+    DRIVER_LICENSE_BACK;
 
     /**
      * Whether this paper proves <em>a person</em> rather than a business.
