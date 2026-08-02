@@ -76,9 +76,19 @@ extension AppState {
         guard backendConnected else { return }
         do {
             merchantStorefront = try await PartnerStore.shared.storefront()
-        } catch {
-            // A 404 here is normal for anyone who doesn't run a restaurant.
+        } catch APIClient.APIError.http(let status, _) where status == 404 {
+            // Normal for anyone who doesn't run a restaurant — and the only
+            // answer that actually means there isn't one.
             merchantStorefront = nil
+        } catch {
+            // Everything else has learned nothing, and nothing is what it
+            // should overwrite. A dropped connection was blanking a restaurant
+            // that exists — the dashboard fell back to "Opening your
+            // restaurant…" over a menu somebody was in the middle of, and stayed
+            // there until they closed the drawer and came back.
+            #if DEBUG
+            print("Storefront refresh failed: \(error.localizedDescription)")
+            #endif
         }
     }
 

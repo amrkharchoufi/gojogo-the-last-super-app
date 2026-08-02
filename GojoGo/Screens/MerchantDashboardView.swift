@@ -121,12 +121,22 @@ struct MerchantDashboardBody: View {
             .padding(.horizontal, 16)
             .padding(.top, 14)
         }
-        // Refreshes the *account* too, not just the restaurant: a suspension
-        // lands on the application, and its note is what this screen shows.
-        .refreshable {
-            await app.refreshMerchantPartner()
-            await app.refreshMerchantOrders()
-        }
+        // There is no `.refreshable` here, and its absence is the feature.
+        //
+        // This screen is the whole content of a sheet, and a refresh control at
+        // the top of a sheet's scroll view takes the one gesture that closes
+        // it: pulling down on the dashboard spun a spinner instead of dragging
+        // the drawer away, which left the grabber — a few points of it, above
+        // the first card — as the only way out. The app's other refreshable
+        // sheets get away with it because they sit in a navigation stack with a
+        // Done button and a bar to drag; this one has neither.
+        //
+        // Little is lost by dropping it. The orders — the half that actually
+        // goes stale — are polled below, and the account and the restaurant are
+        // re-read every time the drawer is opened, which is a gesture away now
+        // that closing it works. The restaurant is deliberately *not* polled:
+        // this screen is a menu editor, and a poll that landed on top of a save
+        // would take a dish back off the screen a second after it was added.
         .task { await app.refreshMerchantOrders() }
         // A kitchen screen that goes stale is a kitchen that misses an order and
         // times it out. Cheap enough to poll: one small list for one restaurant.
