@@ -421,6 +421,11 @@ extension AppState {
         merged.reserveCapacity(worldConversations.count + live.count)
 
         for var incoming in live {
+            // The wallpaper you chose on this device outranks the one the row
+            // was created with — otherwise every refresh quietly undoes it.
+            if let mine = WorldPreference.background(for: incoming.id) {
+                incoming.background = mine
+            }
             if let existing = worldConversations.first(where: { $0.id == incoming.id }) {
                 incoming.messages = existing.messages
                 incoming.contactID = existing.contactID

@@ -1223,9 +1223,24 @@ struct WorldContactMember: Identifiable {
 }
 
 /// Selectable chat wallpaper for a My World conversation (mirrors iMessage Backgrounds).
-enum WorldChatBackground: String, CaseIterable, Identifiable {
+enum WorldChatBackground: Hashable, Identifiable {
     case none, sky, water, aurora, dusk, bloom, graphite
+    /// A picture the reader chose, held on this device and named by its file.
+    /// The image itself never leaves the phone — a wallpaper is a fact about
+    /// how you like to look at a conversation, not part of the conversation.
+    case photo(String)
+
+    /// The built-in choices, in the order the picker shows them. Replaces
+    /// `CaseIterable`, which cannot enumerate a case that carries a value.
+    static let presets: [WorldChatBackground] =
+        [.none, .sky, .water, .aurora, .dusk, .bloom, .graphite]
+
     var id: String { rawValue }
+
+    var photoName: String? {
+        if case .photo(let name) = self { return name }
+        return nil
+    }
 
     var title: String {
         switch self {
@@ -1236,13 +1251,15 @@ enum WorldChatBackground: String, CaseIterable, Identifiable {
         case .dusk:     return "Dusk"
         case .bloom:    return "Bloom"
         case .graphite: return "Graphite"
+        case .photo:    return "Photo"
         }
     }
 
-    /// Gradient stops for the wallpaper (empty = use the plain page background).
+    /// Gradient stops for the wallpaper (empty = not a gradient: either the
+    /// plain page background, or a picture that draws itself).
     var gradient: [Color] {
         switch self {
-        case .none:     return []
+        case .none, .photo: return []
         case .sky:      return [Color(hex: "2E5B9E"), Color(hex: "8AB6E8"), Color(hex: "E7B98F")]
         case .water:    return [Color(hex: "0B4F6C"), Color(hex: "1B98C4"), Color(hex: "8FD3E8")]
         case .aurora:   return [Color(hex: "0B2A3A"), Color(hex: "1D7A6E"), Color(hex: "3AC0E0")]
@@ -1257,6 +1274,47 @@ enum WorldChatBackground: String, CaseIterable, Identifiable {
         switch self {
         case .bloom: return true
         default:     return false
+        }
+    }
+
+    /// Whether anything is behind the thread at all — which decides whether the
+    /// header and composer stay opaque or step back and let it through.
+    var isDecorated: Bool {
+        if case .none = self { return false }
+        return true
+    }
+
+    // MARK: Wire / storage form
+
+    var rawValue: String {
+        switch self {
+        case .none:     return "none"
+        case .sky:      return "sky"
+        case .water:    return "water"
+        case .aurora:   return "aurora"
+        case .dusk:     return "dusk"
+        case .bloom:    return "bloom"
+        case .graphite: return "graphite"
+        case .photo(let name): return "photo:" + name
+        }
+    }
+
+    init?(rawValue: String) {
+        if rawValue.hasPrefix("photo:") {
+            let name = String(rawValue.dropFirst("photo:".count))
+            guard !name.isEmpty else { return nil }
+            self = .photo(name)
+            return
+        }
+        switch rawValue {
+        case "none":     self = .none
+        case "sky":      self = .sky
+        case "water":    self = .water
+        case "aurora":   self = .aurora
+        case "dusk":     self = .dusk
+        case "bloom":    self = .bloom
+        case "graphite": self = .graphite
+        default:         return nil
         }
     }
 }

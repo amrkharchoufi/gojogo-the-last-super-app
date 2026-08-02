@@ -1434,13 +1434,30 @@ final class AppState: ObservableObject {
 
     // MARK: My World — chat background
 
+    /// Sets this thread's wallpaper and remembers it.
+    ///
+    /// It used to only set it, which meant the next conversation refresh — a
+    /// foreground, a socket reconnect — replaced the row with the server's copy
+    /// and the wallpaper reverted, having looked for all the world like it had
+    /// been applied.
     func setWorldBackground(_ background: WorldChatBackground) {
         guard let convo = selectedWorldConversation,
               let i = worldConversations.firstIndex(where: { $0.id == convo.id }) else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        WorldPreference.setBackground(background, for: convo.id)
         withAnimation(.easeInOut(duration: 0.3)) {
             worldConversations[i].background = background
         }
+    }
+
+    /// Picks a photo from the library as this thread's wallpaper. The image is
+    /// downscaled and kept on the device — see `WorldWallpaperStore`.
+    func setWorldBackgroundPhoto(_ data: Data) {
+        guard let name = WorldWallpaperStore.save(data) else {
+            showWorldNotice("Couldn't use that picture.")
+            return
+        }
+        setWorldBackground(.photo(name))
     }
 
     /// Marks a thread as most recent so it floats to the top of the list.

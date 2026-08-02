@@ -252,15 +252,45 @@ struct WorldChatView: View {
 
     // MARK: Wallpaper
 
+    /// Edge to edge, under everything — including the status bar, the header and
+    /// the composer. A wallpaper that stops where the chrome starts isn't a
+    /// wallpaper, it's a panel; the header and composer go translucent over it
+    /// (see `chromeFill`) so the picture runs the whole height of the screen.
     @ViewBuilder
     private var chatWallpaper: some View {
-        let stops = live.background.gradient
-        if stops.isEmpty {
+        let background = live.background
+        if let name = background.photoName, let image = WorldWallpaperStore.image(named: name) {
+            GeometryReader { geo in
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+            }
+            .ignoresSafeArea()
+            // Somebody's own photo is not designed for text to sit on. A small
+            // scrim buys legibility for the timestamps and the incoming bubbles
+            // without turning the picture grey.
+            .overlay(Color.black.opacity(0.22).ignoresSafeArea())
+        } else if background.gradient.isEmpty {
             IMColor.bg.ignoresSafeArea()
         } else {
-            LinearGradient(colors: stops, startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: background.gradient,
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
                 .ignoresSafeArea()
                 .overlay(Color.black.opacity(0.06).ignoresSafeArea())
+        }
+    }
+
+    /// What the header and composer sit on. Opaque with no wallpaper — the plain
+    /// page, exactly as before — and a thin material over one, so the picture
+    /// carries on behind them instead of being cropped by them.
+    @ViewBuilder
+    private var chromeFill: some View {
+        if live.background.isDecorated {
+            Rectangle().fill(.ultraThinMaterial)
+        } else {
+            IMColor.bg
         }
     }
 
@@ -445,12 +475,21 @@ struct WorldChatView: View {
         .padding(.top, 2)
         .frame(maxWidth: .infinity)
         .background(
-            // Same clear fade as Home — no material shelf.
-            LinearGradient(
-                colors: [IMColor.bg.opacity(0.96), IMColor.bg.opacity(0.72), IMColor.bg.opacity(0)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            // No wallpaper: the same clear fade as Home, no material shelf.
+            // Over a wallpaper the fade would be a grey block across the top of
+            // somebody's picture, so the chrome goes translucent instead and the
+            // image runs under the status bar.
+            Group {
+                if live.background.isDecorated {
+                    chromeFill
+                } else {
+                    LinearGradient(
+                        colors: [IMColor.bg.opacity(0.96), IMColor.bg.opacity(0.72),
+                                 IMColor.bg.opacity(0)],
+                        startPoint: .top,
+                        endPoint: .bottom)
+                }
+            }
             .ignoresSafeArea(edges: .top)
             .allowsHitTesting(false)
         )
@@ -507,7 +546,7 @@ struct WorldChatView: View {
             .overlay(alignment: .bottom) {
                 Rectangle().fill(IMColor.separator).frame(height: 0.5)
             }
-            .background(IMColor.bg)
+            .background(chromeFill)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -571,7 +610,7 @@ struct WorldChatView: View {
             .overlay(alignment: .bottom) {
                 Rectangle().fill(IMColor.separator).frame(height: 0.5)
             }
-            .background(IMColor.bg)
+            .background(chromeFill)
             .padding(.horizontal, 8)
             .padding(.bottom, 2)
         }
@@ -809,9 +848,16 @@ struct WorldChatView: View {
                 .transition(.opacity)
             } else if shouldShowReceipt(msg, at: index),
                       let text = receiptText(for: msg) {
+                // A receipt sits on the wallpaper rather than in a bubble, so
+                // over a picture it has nothing behind it. Grey-on-anything is
+                // legible against the plain page and vanishes against a bright
+                // sky; the shadow costs nothing where there is no wallpaper.
                 Text(text)
                     .font(.system(size: 11))
-                    .foregroundStyle(IMColor.secondary)
+                    .foregroundStyle(live.background.isDecorated
+                                     ? Color.white.opacity(0.85) : IMColor.secondary)
+                    .shadow(color: .black.opacity(live.background.isDecorated ? 0.5 : 0),
+                            radius: 2, y: 0.5)
                     .padding(.trailing, msg.fromUser ? 4 : 0)
                     .padding(.leading, msg.fromUser ? 0 : 4)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -1107,7 +1153,7 @@ struct WorldChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background(IMColor.bg)
+        .background(chromeFill.ignoresSafeArea(edges: .bottom))
         .safeAreaPadding(.bottom, 0)
         .animation(.ggNav, value: app.worldReplyingTo)
         .animation(.ggNav, value: app.worldSendLaterLabel)

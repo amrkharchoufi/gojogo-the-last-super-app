@@ -252,7 +252,11 @@ struct WorldSettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
-                        ForEach(WorldChatBackground.allCases) { bg in
+                        // Presets only. This is the wallpaper *new* chats start
+                        // with, and one picture behind every future thread is a
+                        // different decision from choosing one for a thread you
+                        // are looking at — which is where the photo option is.
+                        ForEach(WorldChatBackground.presets) { bg in
                             Button {
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 withAnimation(.ggSnappy) { app.worldDefaultBackground = bg }

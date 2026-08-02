@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import PhotosUI
 import UIKit
 
 /// Contact / conversation info page for a My World thread.
@@ -38,6 +39,8 @@ struct WorldContactView: View {
     @State private var canAddBack = false
     /// First fetch for this person only — a refresh keeps what's on screen.
     @State private var loadingPosts = false
+    /// The photo being picked as this thread's wallpaper.
+    @State private var wallpaperPick: PhotosPickerItem?
     @State private var addingContact = false
 
     private var convo: WorldConversation? { app.selectedWorldConversation }
@@ -810,52 +813,90 @@ struct WorldContactView: View {
 
     private var backgroundsGrid: some View {
         let current = convo?.background ?? .none
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3),
-                         spacing: 18) {
-            ForEach(WorldChatBackground.allCases) { bg in
-                Button {
-                    app.setWorldBackground(bg)
-                } label: {
-                    VStack(spacing: 8) {
-                        ZStack {
+        return VStack(spacing: 18) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3),
+                      spacing: 18) {
+                ForEach(WorldChatBackground.presets) { bg in
+                    Button { app.setWorldBackground(bg) } label: {
+                        swatch(bg, selected: current == bg) {
                             if bg == .none {
                                 Circle().fill(IMColor.chrome)
                                     .overlay(
                                         Image(systemName: "circle.slash")
                                             .font(.system(size: 22))
-                                            .foregroundStyle(IMColor.secondary)
-                                    )
+                                            .foregroundStyle(IMColor.secondary))
                             } else {
                                 Circle().fill(
                                     LinearGradient(colors: bg.gradient,
                                                    startPoint: .topLeading, endPoint: .bottomTrailing))
                             }
                         }
-                        .frame(width: 84, height: 84)
-                        .overlay(
-                            Circle().strokeBorder(
-                                current == bg ? IMColor.blue : Color.clear, lineWidth: 3)
-                        )
-                        .overlay(alignment: .bottomTrailing) {
-                            if current == bg {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .symbolRenderingMode(.palette)
-                                    .foregroundStyle(.white, IMColor.blue)
-                                    .font(.system(size: 22))
-                                    .offset(x: 2, y: 2)
-                            }
-                        }
+                    }
+                    .buttonStyle(.plain)
+                }
 
-                        Text(bg.title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(current == bg ? IMColor.label : IMColor.secondary)
+                // Your own picture, last: the presets are a closed set and this
+                // is the one that opens it.
+                PhotosPicker(selection: $wallpaperPick, matching: .images) {
+                    swatch(.photo(""), selected: current.photoName != nil, label: "Photo") {
+                        if let name = current.photoName,
+                           let image = WorldWallpaperStore.image(named: name) {
+                            Image(uiImage: image).resizable().scaledToFill()
+                        } else {
+                            Circle().fill(IMColor.chrome)
+                                .overlay(
+                                    Image(systemName: "photo.on.rectangle.angled")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(IMColor.secondary))
+                        }
                     }
                 }
                 .buttonStyle(.plain)
             }
+
+            if current.photoName != nil {
+                Text("Your wallpaper stays on this phone — the other side never sees it.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(IMColor.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 6)
+        .onChange(of: wallpaperPick) { _, pick in
+            guard let pick else { return }
+            Task {
+                if let data = try? await pick.loadTransferable(type: Data.self) {
+                    app.setWorldBackgroundPhoto(data)
+                }
+                wallpaperPick = nil
+            }
+        }
+    }
+
+    /// One circle in the wallpaper grid, with its selection ring and caption.
+    private func swatch<Content: View>(_ bg: WorldChatBackground, selected: Bool,
+                                       label: String? = nil,
+                                       @ViewBuilder fill: () -> Content) -> some View {
+        VStack(spacing: 8) {
+            fill()
+                .frame(width: 84, height: 84)
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(selected ? IMColor.blue : Color.clear, lineWidth: 3))
+                .overlay(alignment: .bottomTrailing) {
+                    if selected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, IMColor.blue)
+                            .font(.system(size: 22))
+                            .offset(x: 2, y: 2)
+                    }
+                }
+            Text(label ?? bg.title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(selected ? IMColor.label : IMColor.secondary)
+        }
     }
 
     // MARK: Links
