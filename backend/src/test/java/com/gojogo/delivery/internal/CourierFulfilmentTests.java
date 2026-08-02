@@ -8,6 +8,8 @@ import com.gojogo.dispatch.JobKind;
 import com.gojogo.dispatch.VehicleCategory;
 import com.gojogo.dispatch.VehicleRef;
 import com.gojogo.dispatch.WorkerKind;
+import com.gojogo.media.MediaDocumentApi;
+import com.gojogo.messaging.MessagingApi;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +59,8 @@ class CourierFulfilmentTests {
     private OrderPayments payments;
     private DispatchApi dispatch;
     private ProfileApi profiles;
+    private MessagingApi messaging;
+    private MediaDocumentApi privateMedia;
     private ApplicationEventPublisher events;
     private OrderFulfilmentService service;
     private CustomerOrder order;
@@ -69,11 +73,13 @@ class CourierFulfilmentTests {
         payments = mock(OrderPayments.class);
         dispatch = mock(DispatchApi.class);
         profiles = mock(ProfileApi.class);
+        messaging = mock(MessagingApi.class);
+        privateMedia = mock(MediaDocumentApi.class);
         events = mock(ApplicationEventPublisher.class);
 
         DeliveryPolicy policy = new DeliveryPolicy(new StubConfig());
         service = new OrderFulfilmentService(orders, merchants, payments, policy,
-            dispatch, profiles, events);
+            dispatch, profiles, messaging, privateMedia, events);
 
         merchant = new Merchant(OWNER, "Forno Nero", "Pizza", null, 33.57, -7.58);
         set(merchant, "id", MERCHANT);
@@ -240,7 +246,7 @@ class CourierFulfilmentTests {
     void aRepeatedAssignmentDoesNotStandTheCourierDown() {
         service.accept(OWNER, ORDER, 20);
         service.courierAssigned(ORDER, assignment());
-        service.pickedUp(COURIER_USER, ORDER);
+        collect();
 
         service.courierAssigned(ORDER, assignment());
 
@@ -268,7 +274,7 @@ class CourierFulfilmentTests {
         service.accept(OWNER, ORDER, 20);
         service.courierAssigned(ORDER, assignment());
 
-        assertThatThrownBy(() -> service.pickedUp(UUID.randomUUID(), ORDER))
+        assertThatThrownBy(() -> service.pickedUp(UUID.randomUUID(), ORDER, order.getPickupCode()))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("No such order");
     }
@@ -278,7 +284,7 @@ class CourierFulfilmentTests {
         service.accept(OWNER, ORDER, 20);
         service.courierAssigned(ORDER, assignment());
 
-        assertThatThrownBy(() -> service.delivered(COURIER_USER, ORDER))
+        assertThatThrownBy(() -> handOver())
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("Pick the order up first");
         verify(payments, never()).settle(any(), anyString());
@@ -289,10 +295,10 @@ class CourierFulfilmentTests {
     void deliveringSettlesAndFreesTheCourier() {
         service.accept(OWNER, ORDER, 20);
         service.courierAssigned(ORDER, assignment());
-        service.pickedUp(COURIER_USER, ORDER);
+        collect();
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERING);
 
-        service.delivered(COURIER_USER, ORDER);
+        handOver();
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERED);
         verify(payments).settle(order, "Forno Nero");
@@ -305,10 +311,10 @@ class CourierFulfilmentTests {
     void deliveringTwiceCannotPayTwice() {
         service.accept(OWNER, ORDER, 20);
         service.courierAssigned(ORDER, assignment());
-        service.pickedUp(COURIER_USER, ORDER);
-        service.delivered(COURIER_USER, ORDER);
+        collect();
+        handOver();
 
-        assertThatThrownBy(() -> service.delivered(COURIER_USER, ORDER))
+        assertThatThrownBy(() -> handOver())
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("already delivered");
         verify(payments).settle(any(), anyString());
@@ -351,8 +357,8 @@ class CourierFulfilmentTests {
     void statusChangesArePublished() {
         service.accept(OWNER, ORDER, 20);
         service.courierAssigned(ORDER, assignment());
-        service.pickedUp(COURIER_USER, ORDER);
-        service.delivered(COURIER_USER, ORDER);
+        collect();
+        handOver();
 
         ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
         verify(events, org.mockito.Mockito.atLeast(4)).publishEvent(published.capture());
@@ -363,6 +369,20 @@ class CourierFulfilmentTests {
     }
 
     // MARK: Helpers
+
+    /**
+     * The two courier taps, with the codes M2 mints at accept. They are one line
+     * each here on purpose: this file is about the state machine and the money,
+     * and what happens when a code is <em>wrong</em> belongs in
+     * {@link HandoffTests}.
+     */
+    private HandoffResultDto collect() {
+        return service.pickedUp(COURIER_USER, ORDER, order.getPickupCode());
+    }
+
+    private HandoffResultDto handOver() {
+        return service.delivered(COURIER_USER, ORDER, order.getDeliveryPin());
+    }
 
     private Assignment assignment() {
         return new Assignment(COURIER_WORKER, COURIER_USER, WorkerKind.COURIER,

@@ -1,6 +1,7 @@
 package com.gojogo.payments.internal;
 
 import com.gojogo.payments.Bucket;
+import com.gojogo.payments.LedgerKind;
 import com.gojogo.payments.OwnerKind;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
@@ -11,6 +12,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -79,6 +81,24 @@ interface LedgerEntryRepository extends JpaRepository<LedgerEntry, UUID> {
         """)
     List<LedgerEntry> statement(@Param("accountIds") List<UUID> accountIds, Pageable page);
 
+    /**
+     * What arrived on these accounts under these kinds — the one aggregate the
+     * ledger exposes ({@link com.gojogo.payments.WalletApi#totalByKind}).
+     *
+     * <p>Credit side only, deliberately: the question is what this owner was
+     * <em>paid</em>, and an entry where they are the debit is money they sent.
+     * {@code coalesce} because a worker who has never been paid should read zero
+     * rather than null, and a null here would surface as a crash on the first
+     * wallet screen a new courier ever opens.
+     */
+    @Query("""
+        select coalesce(sum(e.amountMinor), 0)
+        from LedgerEntry e
+        where e.creditAccountId in :accountIds and e.kind in :kinds
+        """)
+    long totalCredited(@Param("accountIds") Collection<UUID> accountIds,
+                       @Param("kinds") Collection<LedgerKind> kinds);
+
     /** What the entries say an account's balance should be. Read only by
      *  {@link LedgerAuditJob} — everything else trusts the materialised one. */
     @Query("""
@@ -139,4 +159,18 @@ interface PayoutRepository extends JpaRepository<Payout, UUID> {
     /** The cooldown check: the last payout that actually went out. */
     Optional<Payout> findFirstByOwnerKindAndOwnerIdAndStatusOrderByCreatedAtDesc(
         OwnerKind ownerKind, UUID ownerId, Payout.Status status);
+
+    /**
+     * How much has left for this payee, over their whole history. The caller
+     * chooses the statuses, because "already paid out" and "sent" are not the
+     * same set: a REQUESTED row has been debited and may yet land, and a cap
+     * that ignored it would let a second withdrawal out alongside the first.
+     */
+    @Query("""
+        select coalesce(sum(p.amountMinor), 0)
+        from Payout p
+        where p.ownerKind = :ownerKind and p.ownerId = :ownerId and p.status in :statuses
+        """)
+    long totalMinor(@Param("ownerKind") OwnerKind ownerKind, @Param("ownerId") UUID ownerId,
+                    @Param("statuses") Collection<Payout.Status> statuses);
 }

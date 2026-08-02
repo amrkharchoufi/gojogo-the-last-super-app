@@ -2,6 +2,7 @@ package com.gojogo.payments;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -76,6 +77,32 @@ public interface WalletApi {
     /** Everything that happened to one thing — the receipt query, and what a
      *  dispute is argued from. */
     List<Entry> entriesFor(String refKind, UUID refId);
+
+    /**
+     * Lifetime total of money that <em>arrived</em> on this owner's accounts
+     * under these kinds, as a positive number.
+     *
+     * <p>The one aggregate this ledger exposes, and it should stay the only one.
+     * A ledger's job is to say what happened, entry by entry; a sum is a derived
+     * number that will eventually disagree with the entries it came from, and
+     * the moment a screen shows one, somebody will want it stored in a column
+     * where it can drift for real. This one exists because a payout out of a
+     * bucket that also holds top-up money has to be bounded by work actually
+     * done, and that bound cannot be computed from a balance — a balance has
+     * forgotten where its money came from. Only the entries remember.
+     *
+     * <p><strong>Credits only.</strong> An entry counts when one of this owner's
+     * accounts is on the <em>receiving</em> side, which is what makes the answer
+     * "what you were paid" rather than "what passed through you". The difference
+     * is not academic: a vehicle-verification {@code REWARD} is paid out of one
+     * driver's STAKING into another person's REWARDS, so a sum that counted both
+     * sides would hand the driver who funded it the earnings of the passenger
+     * who collected it.
+     *
+     * @param kinds an empty set is 0 rather than everything — a caller that
+     *              computed its own kind list and got nothing meant nothing
+     */
+    long totalByKind(OwnerKind ownerKind, UUID ownerId, Set<LedgerKind> kinds);
 
     /**
      * What a movement was about: {@code ("ORDER", orderId, "Lunch at Pizza

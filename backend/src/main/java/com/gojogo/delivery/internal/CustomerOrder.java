@@ -159,6 +159,53 @@ class CustomerOrder {
     @Column(name = "picked_up_at")
     private OffsetDateTime pickedUpAt;
 
+    /**
+     * The two codes that make a handoff evidence rather than an assertion, both
+     * minted when the restaurant accepts (Phase 4 M2).
+     *
+     * <p>They are stored on the order and not derived from it, because they must
+     * survive being read out: a code recomputed from the row would change the
+     * moment anything else on the row did. Blank means "no check to run", which
+     * is what every order accepted before M2 has and is deliberately not
+     * treated as a locked door — see {@code V38}.
+     *
+     * <p>Which of the two a given screen may see is the whole security model:
+     * {@code pickupCode} goes to the kitchen only and {@code deliveryPin} to the
+     * customer only, and neither ever reaches the courier's own job, because a
+     * code the courier can read is a code that proves nothing.
+     */
+    @Column(name = "pickup_code", nullable = false)
+    private String pickupCode = "";
+
+    @Column(name = "delivery_pin", nullable = false)
+    private String deliveryPin = "";
+
+    /** The customer's choice of how it is handed over. PIN until they say
+     *  otherwise, and changeable right up until the moment it happens. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "handoff_mode", nullable = false)
+    private HandoffMode handoffMode = HandoffMode.PIN;
+
+    /**
+     * Wrong delivery PINs. Counted, unlike the pickup code's, because this is
+     * the handoff that pays somebody — and kept on the row after the fallback
+     * opens rather than reset, since the count is the only record that the
+     * fallback was used and how it was reached.
+     */
+    @Column(name = "handoff_attempts", nullable = false)
+    private int handoffAttempts;
+
+    /** The drop-off photo's private object key — never a URL, never returned to
+     *  a client, and always one the server itself minted. */
+    @Column(name = "proof_photo_key")
+    private String proofPhotoKey;
+
+    /** The courier↔customer thread, opened at assignment. Nullable, and stays
+     *  null when messaging was having a moment: a chat that did not open must
+     *  never cost somebody their delivery. */
+    @Column(name = "conversation_id")
+    private UUID conversationId;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "courier_search", nullable = false)
     private CourierSearch courierSearch = CourierSearch.NONE;
@@ -316,6 +363,34 @@ class CustomerOrder {
         this.pickedUpAt = at;
     }
 
+    /**
+     * Mints both codes, once. Guarded rather than assigned, so that a second
+     * accept — a retried request, a duplicated event, anything — cannot change a
+     * number a restaurant has already read aloud to somebody standing at their
+     * counter. Re-minting would not be a smaller bug than not minting at all: it
+     * would make a courier with the right code wrong.
+     */
+    void mintHandoffCodes(String pickup, String pin) {
+        if (pickupCode.isBlank()) this.pickupCode = pickup;
+        if (deliveryPin.isBlank()) this.deliveryPin = pin;
+    }
+
+    void chooseHandoffMode(HandoffMode mode) {
+        this.handoffMode = mode;
+    }
+
+    void handoffRefused() {
+        this.handoffAttempts++;
+    }
+
+    void proofPhotographedAt(String objectKey) {
+        this.proofPhotoKey = objectKey;
+    }
+
+    void attachConversation(UUID conversationId) {
+        this.conversationId = conversationId;
+    }
+
     void rate(int stars) {
         this.rating = stars;
     }
@@ -446,6 +521,30 @@ class CustomerOrder {
 
     OffsetDateTime getPickedUpAt() {
         return pickedUpAt;
+    }
+
+    String getPickupCode() {
+        return pickupCode;
+    }
+
+    String getDeliveryPin() {
+        return deliveryPin;
+    }
+
+    HandoffMode getHandoffMode() {
+        return handoffMode;
+    }
+
+    int getHandoffAttempts() {
+        return handoffAttempts;
+    }
+
+    String getProofPhotoKey() {
+        return proofPhotoKey;
+    }
+
+    UUID getConversationId() {
+        return conversationId;
     }
 
     CourierSearch getCourierSearch() {

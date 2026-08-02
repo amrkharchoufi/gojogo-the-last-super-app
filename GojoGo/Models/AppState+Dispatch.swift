@@ -217,6 +217,80 @@ extension AppState {
         }
     }
 
+    // MARK: The money the work made (Phase 4 M2)
+
+    /// One wallet for both roles, because a person who drives and delivers has
+    /// one balance — and it is `dispatch`'s surface rather than `payments`',
+    /// because the registry is the only thing that can prove this caller is
+    /// somebody the platform pays for work.
+    ///
+    /// Only asked for once there is a registration. A 404 is the correct answer
+    /// for everybody else and there is no point spending a round trip to be
+    /// told it.
+    func refreshWorkerWallet() async {
+        guard backendConnected, isDispatchRegistered else { return }
+        do {
+            workerWallet = try await DispatchStore.shared.workerWallet()
+        } catch {
+            #if DEBUG
+            print("Worker wallet refresh failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Opens Stripe's hosted onboarding. The link is single-use and
+    /// authenticates whoever opens it, so it is minted each time rather than
+    /// stored — and the bank details it asks for go to Stripe, never through
+    /// this app.
+    func startWorkerPayoutOnboarding() {
+        guard !workerMoneyBusy else { return }
+        workerMoneyBusy = true
+        Task {
+            defer { workerMoneyBusy = false }
+            do {
+                let link = try await DispatchStore.shared.workerPayoutOnboarding()
+                guard let url = URL(string: link) else {
+                    showWalletNotice("Couldn't open the payout setup page.")
+                    return
+                }
+                _ = await CheckoutSession().present(url)
+                // Whatever they did over there, the answer is on the server.
+                await refreshWorkerWallet()
+            } catch {
+                showWalletNotice(Self.message(from: error,
+                                              fallback: "Couldn't start payout setup."))
+            }
+        }
+    }
+
+    /// Asks for money to leave. The amount is checked here only to keep a
+    /// pointless round trip off a phone on a kerb: the server caps a payout at
+    /// what this person has actually *earned* (not at what is in the bucket,
+    /// which also holds top-ups) and refuses anything above it with a 409 that
+    /// names the number. That refusal is the authority, and it is shown as
+    /// written.
+    func requestWorkerPayout(_ amountMinor: Int) {
+        guard !workerMoneyBusy, amountMinor > 0 else { return }
+        workerMoneyBusy = true
+        Task {
+            defer { workerMoneyBusy = false }
+            do {
+                let payout = try await DispatchStore.shared.workerPayout(amountMinor: amountMinor)
+                await refreshWorkerWallet()
+                await refreshWallet()
+                // A failed payout is reported rather than hidden: the money has
+                // already gone back to the balance, and the person who asked for
+                // it needs to know why it didn't go.
+                showWalletNotice(payout.status == "SENT"
+                    ? "\(WalletStore.money(payout.amountMinor, currency: payout.currency)) is on its way to your bank."
+                    : (payout.failureReason.isEmpty ? "That payout didn't go through."
+                                                    : payout.failureReason))
+            } catch {
+                showWalletNotice(Self.message(from: error, fallback: "Couldn't pay that out."))
+            }
+        }
+    }
+
     // MARK: What the dashboard renders
 
     /// Lifetime jobs, from the registry rather than a local counter.

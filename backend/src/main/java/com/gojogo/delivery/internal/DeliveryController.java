@@ -117,6 +117,23 @@ class DeliveryController {
         return delivery.cancel(current.require(jwt).id(), orderId);
     }
 
+    /**
+     * How the food should be handed over — {@code PIN}, {@code PHOTO} or
+     * {@code CONFIRM} — changeable right up until it is.
+     *
+     * <p>Contactless is a decision people make when the courier is already
+     * close, which is why this is not a checkout-only field. <b>409</b> once the
+     * order is finished; an unrecognised word is the configured default rather
+     * than a 400, because a one-tap control that can return an error is a
+     * control that looks broken.
+     */
+    @PostMapping("/v1/delivery/orders/{orderId}/handoff-mode")
+    OrderDto setHandoffMode(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
+                            @Valid @RequestBody(required = false) HandoffModeRequest request) {
+        return delivery.setHandoffMode(current.require(jwt).id(), orderId,
+            request == null ? null : request.mode());
+    }
+
     @PostMapping("/v1/delivery/orders/{orderId}/rate")
     OrderDto rate(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
                   @Valid @RequestBody RateOrderRequest request) {

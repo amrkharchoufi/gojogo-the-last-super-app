@@ -210,7 +210,10 @@ final class AppState: ObservableObject {
     @Published var browsingProduct: Product? = nil
     @Published var sellerChat: [ChatMessage] = []
     @Published var sellerDraft: String = ""
-    /// A listing thread waiting on My World setup — opened once it completes.
+    /// A thread waiting on My World setup — opened once it completes. Named for
+    /// the listing chat it was built for; since Phase 4 M2 an order thread parks
+    /// here too, because the gate is the same one and it is about the *reader*
+    /// rather than about what they were reading.
     var pendingSellerConversation: (id: UUID, draft: String)? = nil
     @Published var showSellSheet: Bool = false
 
@@ -358,6 +361,18 @@ final class AppState: ObservableObject {
     /// NONE / SEARCHING / ASSIGNED / FAILED (Phase 4 M1) — whether anybody is
     /// actually coming for this order, which the six order statuses cannot say.
     @Published var deliveryCourierSearch: String? = nil
+    // How this order gets handed over, and the half of it the customer holds
+    // (Phase 4 M2). The PIN is the server's — it is minted when the restaurant
+    // accepts and this app only ever reads it out.
+    /// PIN / PHOTO / CONFIRM.
+    @Published var deliveryHandoffMode: String = "CONFIRM"
+    /// Six digits to give the courier, or empty when there is nothing to give.
+    @Published var deliveryPin: String = ""
+    /// A short-lived signed URL for the drop-off photo, once there is one.
+    @Published var deliveryProofPhotoURL: String? = nil
+    /// The thread with whoever is bringing it, opened server-side at assignment.
+    @Published var deliveryConversationID: UUID? = nil
+    @Published var deliveryHandoffBusy: Bool = false
     @Published var deliveryRating: Int = 0
     @Published var deliveryPastOrders: [DeliveryPastOrder] = []
     /// Restaurant the active order was placed from (kept after cart clears).
@@ -558,6 +573,25 @@ final class AppState: ObservableObject {
     // and what it pays.
     @Published var courierJob: CourierJobDTO? = nil
     @Published var courierDeliveries: [CourierJobDTO] = []
+
+    // Handoff integrity (Phase 4 M2). A refused code is an answer rather than
+    // an error, so what a refusal leaves behind is state on this screen: the
+    // server's sentence under the field, how many tries are left, and whether
+    // the photo fallback has opened. Cleared on a success and on a new job.
+    @Published var courierHandoffNotice: String? = nil
+    /// Tries remaining on the delivery PIN. `-1` is "not counted", which is
+    /// what the pickup code always is.
+    @Published var courierAttemptsLeft: Int = -1
+    @Published var courierSupportUnlocked: Bool = false
+    @Published var courierHandoffBusy: Bool = false
+    /// True while the drop-off photo is being uploaded — a PUT to S3 on a phone
+    /// at a doorstep, which is long enough to need a spinner.
+    @Published var courierProofUploading: Bool = false
+
+    // What the work paid (Phase 4 M2). Dispatch's surface, so one wallet serves
+    // Driver Mode and Courier Mode both.
+    @Published var workerWallet: WorkerWalletDTO? = nil
+    @Published var workerMoneyBusy: Bool = false
 
     // The kitchen's queue (Phase 4 M1). Empty for anybody who doesn't run a
     // restaurant, which is almost everybody.

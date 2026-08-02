@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import PhotosUI
 import UIKit
 @_spi(Experimental) import MapboxMaps
 
@@ -90,19 +91,34 @@ struct PartnerDashboardView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
 
+            // This screen has been calling `showWalletNotice` since Phase 3 and
+            // never drawing it — a refused go-online, a lost race for an offer,
+            // and now a refused payout all went to a banner nothing rendered.
+            // Money made that unaffordable: a withdrawal that quietly does
+            // nothing is the worst thing a screen about money can do.
+            if let notice = app.walletNotice {
+                EconomyNoticeBanner(message: notice) { app.walletNotice = nil }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 18) {
                     statsRow
                     tokenCard
                     courierDeliveryCard
                     onlineCard
+                    workerWalletCard
                     stageContent
                     Color.clear.frame(height: 24)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
             }
+            .dismissesKeyboard()
         }
+        .animation(.ggOverlay, value: app.walletNotice)
     }
 
     // MARK: Navigation (live route map + info card)
@@ -326,91 +342,27 @@ struct PartnerDashboardView: View {
         }
     }
 
-    // MARK: The delivery they are carrying (Phase 4 M1)
+    // MARK: The delivery they are carrying (Phase 4 M1/M2)
 
-    /// The other half of Courier Mode. Dispatch found the work; this is what the
-    /// work turned out to be, and it is the whole screen while it is on it —
-    /// above the online card, because somebody holding a bag of food is not
-    /// looking for the go-offline button.
-    ///
-    /// Two taps and no more: collected, and handed over. Both are deliberate
-    /// rather than inferred from a position, because being *at* a counter is not
-    /// the same as having what is on it, and a delivery confirmed by geofence is
-    /// a delivery somebody can be paid for without doing.
     @ViewBuilder
     private var courierDeliveryCard: some View {
         if let job = app.courierJob {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
-                    Image(systemName: job.isCollected ? "figure.wave" : "bag.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
-                        .frame(width: 34, height: 34)
-                        .background(Circle().fill(GGColor.ink(0.1)))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(app.courierInstruction ?? "")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(GGColor.textPrimary)
-                        Text("\(job.itemCount) \(job.itemCount == 1 ? "item" : "items") · "
-                             + DeliveryStore.money(cents: job.payMinor) + " for this delivery")
-                            .font(.system(size: 12))
-                            .foregroundStyle(GGColor.textSecondary)
-                    }
-                    Spacer(minLength: 4)
-                }
-
-                courierLeg(icon: "storefront.fill", title: job.merchantName,
-                           detail: job.isCollected ? "Collected" : "Pick up here",
-                           dim: job.isCollected)
-                courierLeg(icon: "house.fill", title: job.addressLabel,
-                           detail: job.addressLine.isEmpty ? "Delivery address" : job.addressLine,
-                           dim: !job.isCollected)
-
-                // The customer's note is the one piece of free text a courier
-                // genuinely needs — "second floor, no bell" is the difference
-                // between a delivery and a phone call.
-                if !job.note.isEmpty || !job.addressNote.isEmpty {
-                    Text([job.note, job.addressNote].filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(.system(size: 12))
-                        .foregroundStyle(GGColor.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Button {
-                    if job.isCollected { app.courierDelivered() } else { app.courierPickedUp() }
-                } label: {
-                    Text(job.isCollected ? "Delivered" : "I've collected the order")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(GGColor.onAccent)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .background(Capsule().fill(GGColor.white))
-                }
-                .buttonStyle(PressableStyle())
-            }
-            .padding(18)
-            .frame(maxWidth: .infinity)
-            .glass(cornerRadius: 24, tint: Color.black.opacity(0.3), floating: true)
+            // Keyed on the order, so the next delivery gets empty fields. A card
+            // that kept its `@State` across two orders would offer the last
+            // customer's PIN to this one's door.
+            CourierDeliveryCard(job: job)
+                .id(job.id)
         }
     }
 
-    private func courierLeg(icon: String, title: String, detail: String,
-                            dim: Bool) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(dim ? GGColor.textTertiary : GGColor.textPrimary)
-                .frame(width: 26, height: 26)
-                .background(Circle().fill(GGColor.ink(0.08)))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(dim ? GGColor.textSecondary : GGColor.textPrimary)
-                Text(detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(GGColor.textTertiary)
-            }
-            Spacer(minLength: 4)
+    // MARK: What the work paid (Phase 4 M2)
+
+    /// Shown to anybody in a registry, in either mode, because the surface is
+    /// `dispatch`'s and a person who drives and delivers has one balance.
+    @ViewBuilder
+    private var workerWalletCard: some View {
+        if app.isDispatchRegistered {
+            WorkerWalletCard()
         }
     }
 
@@ -473,6 +425,567 @@ struct PartnerDashboardView: View {
         case .completed:
             if let job = app.partnerJob { PartnerJobCompleteCard(job: job) }
         }
+    }
+}
+
+// MARK: - The delivery being carried (Phase 4 M1), and its handoff (M2)
+
+/// The other half of Courier Mode. Dispatch found the work; this is what the
+/// work turned out to be, and it is the whole screen while it is on it — above
+/// the online card, because somebody holding a bag of food is not looking for
+/// the go-offline button.
+///
+/// M1 gave it two taps and no more: collected, and handed over. Both are
+/// deliberate rather than inferred from a position, because being *at* a counter
+/// is not the same as having what is on it, and a delivery confirmed by geofence
+/// is a delivery somebody can be paid for without doing.
+///
+/// M2 made each tap prove something, and everything about how it is drawn comes
+/// from the same constraint: this is read at a counter with a bag in one hand,
+/// or on a doorstep in the rain. So the digits are large enough to check at
+/// arm's length, the refusal appears *under the field* with what was typed still
+/// in it, and there is never more than one primary action on screen.
+private struct CourierDeliveryCard: View {
+    @EnvironmentObject var app: AppState
+    let job: CourierJobDTO
+
+    /// The two codes are separate pieces of state on purpose: they are two
+    /// different numbers from two different people, and carrying one into the
+    /// other's field is how a courier hands over using the restaurant's code.
+    @State private var pickupCode = ""
+    @State private var deliveryPin = ""
+    @State private var showCamera = false
+    @State private var showLibrary = false
+    @State private var libraryItem: PhotosPickerItem?
+
+    private var busy: Bool { app.courierHandoffBusy || app.courierProofUploading }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: job.isCollected ? "figure.wave" : "bag.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(GGColor.ink(0.1)))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.courierInstruction ?? "")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Text("\(job.itemCount) \(job.itemCount == 1 ? "item" : "items") · "
+                         + DeliveryStore.money(cents: job.payMinor) + " for this delivery")
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textSecondary)
+                }
+                Spacer(minLength: 4)
+            }
+
+            courierLeg(icon: "storefront.fill", title: job.merchantName,
+                       detail: job.isCollected ? "Collected" : "Pick up here",
+                       dim: job.isCollected)
+            courierLeg(icon: "house.fill", title: job.addressLabel,
+                       detail: job.addressLine.isEmpty ? "Delivery address" : job.addressLine,
+                       dim: !job.isCollected)
+
+            // The customer's note is the one piece of free text a courier
+            // genuinely needs — "second floor, no bell" is the difference
+            // between a delivery and a phone call.
+            if !job.note.isEmpty || !job.addressNote.isEmpty {
+                Text([job.note, job.addressNote].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // And when the note isn't enough, the thread the server opened when
+            // this was assigned — the other half of an address.
+            if job.conversationId != nil {
+                Button {
+                    app.messageDeliveryCustomer()
+                } label: {
+                    Label("Message the customer", systemImage: "message.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .glass(cornerRadius: 16)
+                }
+                .buttonStyle(PressableStyle())
+            }
+
+            if job.isCollected { handOver } else { collect }
+
+            // The server's own words, kept under the field that produced them.
+            // Never a sentence composed here: only the server knows whether the
+            // attempt that just failed was the last one.
+            if let notice = app.courierHandoffNotice {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(notice)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(GGColor.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // Strictly positive. `-1` is "nobody is counting" — always
+                    // so at a counter, and so for any order that never asked
+                    // for a code — and drawing it as a number would tell a
+                    // courier on a contactless drop that they were out of
+                    // chances. Zero says its own thing in the message above,
+                    // which is that the photo is now the way through.
+                    if app.courierAttemptsLeft > 0 {
+                        Text("\(app.courierAttemptsLeft) "
+                             + (app.courierAttemptsLeft == 1 ? "try" : "tries") + " left")
+                            .font(.ggMono(11, .semibold))
+                            .foregroundStyle(GGColor.textTertiary)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(GGColor.ink(0.10)))
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity)
+        .glass(cornerRadius: 24, tint: Color.black.opacity(0.3), floating: true)
+        .animation(.ggSnappy, value: app.courierHandoffNotice)
+        .animation(.ggSnappy, value: job.isCollected)
+        // The picked bytes go up as they came off the picker; re-encoding to the
+        // format the server signed for is `courierHandOverWithPhoto`'s job, and
+        // it belongs there rather than here because it is a fact about the
+        // upload, not about the button that started it.
+        .modifier(ProofPhotoPickers(showLibrary: $showLibrary, showCamera: $showCamera,
+                                    libraryItem: $libraryItem,
+                                    onPicked: { app.courierHandOverWithPhoto($0) }))
+    }
+
+    // MARK: Collect
+
+    /// The code the counter reads out. Typing is the primary path and the only
+    /// one built: a scanner needs a camera the Simulator does not have, and a
+    /// number somebody can say out loud works through a hatch, in the dark, and
+    /// on a phone with a cracked lens.
+    private var collect: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CourierCodeField(
+                title: "Pickup code",
+                caption: "Ask \(job.merchantName) for it",
+                code: $pickupCode)
+
+            Button {
+                Keyboard.dismiss()
+                app.courierPickedUp(code: pickupCode)
+            } label: {
+                primaryLabel("I've collected the order")
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(busy)
+            .opacity(busy ? 0.55 : 1)
+        }
+    }
+
+    // MARK: Hand over
+
+    /// One screen for all three doors: the PIN field and the camera are always
+    /// both on it, and the server decides which one actually completes the
+    /// handoff.
+    ///
+    /// That is the right shape rather than a concession. A courier at a door is
+    /// not classifying an order; they are doing whichever of two things the
+    /// person in front of them makes possible. Typing the six digits works on a
+    /// PIN order. Tapping "Delivered" with the field empty completes a
+    /// contactless or no-code one *and* is the deliberate way to spend an
+    /// attempt at a door nobody is answering. The photo completes a
+    /// leave-at-door order, and after three failed attempts it completes a PIN
+    /// one too — which is the whole reason the fallback exists. Nothing is ever
+    /// hidden, so a mode this screen has misread still cannot dead-end a
+    /// delivery.
+    ///
+    /// What moves is the **emphasis**, for the two reasons in
+    /// `courierPhotoIsTheWayOut`: the customer asked for contactless, or the
+    /// PIN has run out and the camera is the only thing left. The first is the
+    /// app relaying an instruction rather than making a guess — `handoffMode`
+    /// is on the job precisely because "leave it at the door" is something the
+    /// customer said and a courier should not have to discover from a refusal.
+    @ViewBuilder
+    private var handOver: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if app.courierPhotoIsTheWayOut {
+                photoAction(primary: true)
+                pinField
+                pinSubmit(primary: false)
+            } else {
+                pinField
+                pinSubmit(primary: true)
+                photoAction(primary: false)
+            }
+        }
+    }
+
+    private var pinField: some View {
+        CourierCodeField(
+            title: "Delivery PIN",
+            caption: "If they have one on their order screen",
+            code: $deliveryPin)
+    }
+
+    /// Live on an empty field, deliberately, and the one rule on this screen
+    /// that looks like a bug until you have stood outside a flat where nobody
+    /// is answering. There is no PIN to type at that door and there never will
+    /// be; submitting nothing is how the courier spends their three attempts
+    /// and reaches the photo fallback that exists for exactly this — and on an
+    /// order that never wanted a code, it is simply the delivery. A button
+    /// greyed out until six digits arrive would be the app refusing to let
+    /// somebody finish.
+    private func pinSubmit(primary: Bool) -> some View {
+        Button {
+            Keyboard.dismiss()
+            app.courierDelivered(pin: deliveryPin)
+        } label: {
+            primary ? AnyView(primaryLabel("Delivered"))
+                    : AnyView(secondaryLabel("Delivered with a PIN"))
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(busy)
+        .opacity(busy ? 0.55 : 1)
+    }
+
+    /// Contactless, and the way out of a PIN nobody can produce. When it is the
+    /// second of those it says so — the courier did not choose this door and
+    /// should know why they are standing in it.
+    @ViewBuilder
+    private func photoAction(primary: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if primary {
+                Text("Photograph where you left it and we'll complete the delivery. "
+                     + "The customer sees the photo.")
+                    .explanatory(12)
+                    .foregroundStyle(GGColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Menu {
+                // The camera is absent in the Simulator and on a device without
+                // a usable one, where offering it presents an empty controller.
+                if CameraCaptureView.isAvailable {
+                    Button { showCamera = true } label: {
+                        Label("Take a photo", systemImage: "camera.fill")
+                    }
+                }
+                Button { showLibrary = true } label: {
+                    Label("Choose from library", systemImage: "photo.on.rectangle")
+                }
+            } label: {
+                if app.courierProofUploading {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small).tint(GGColor.onAccent)
+                        Text("Sending the photo…")
+                    }
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(GGColor.onAccent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(Capsule().fill(GGColor.white))
+                } else if primary {
+                    primaryLabel("Take a photo instead")
+                } else {
+                    secondaryLabel("Left it at the door — take a photo")
+                }
+            }
+            .disabled(busy)
+            .opacity(busy ? 0.55 : 1)
+        }
+    }
+
+    // MARK: Pieces
+
+    private func primaryLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(GGColor.onAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .background(Capsule().fill(GGColor.white))
+    }
+
+    private func secondaryLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(GGColor.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(Capsule().fill(GGColor.ink(0.08)))
+    }
+
+    private func courierLeg(icon: String, title: String, detail: String,
+                            dim: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(dim ? GGColor.textTertiary : GGColor.textPrimary)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(GGColor.ink(0.08)))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(dim ? GGColor.textSecondary : GGColor.textPrimary)
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textTertiary)
+            }
+            Spacer(minLength: 4)
+        }
+    }
+}
+
+// MARK: - Six digits, read at arm's length
+
+/// The one input on the courier's screen, and the whole reason it looks like
+/// this: it is filled in one-handed, standing up, often in the sun, by somebody
+/// who has just been told six digits across a counter. So the field is a single
+/// tap target the width of the card, the digits are mono and large enough to
+/// check against what they were told without leaning in, and the number pad is
+/// the only keyboard that ever appears.
+///
+/// It clamps to digits and to six of them rather than validating: a length rule
+/// enforced by refusing the seventh keystroke is a rule nobody has to read.
+private struct CourierCodeField: View {
+    let title: String
+    let caption: String
+    @Binding var code: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title.uppercased())
+                    .font(.ggMono(10, .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(GGColor.textTertiary)
+                Text(caption)
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textSecondary)
+            }
+
+            TextField("", text: $code, prompt: Text("······")
+                .foregroundColor(GGColor.textTertiary))
+                .font(.ggMono(30, .bold))
+                .tracking(10)
+                .multilineTextAlignment(.center)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
+                .focused($focused)
+                .foregroundStyle(GGColor.textPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(GGColor.ink(0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(focused ? GGColor.ink(0.30) : GGColor.ink(0.12),
+                                  lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .onTapGesture { focused = true }
+                .onChange(of: code) { _, typed in
+                    let digits = String(typed.filter(\.isNumber).prefix(6))
+                    if digits != typed { code = digits }
+                }
+        }
+    }
+}
+
+// MARK: - Camera or library, for the drop-off photo
+
+/// The same two sources the partner flow's document tiles offer, and the same
+/// reason the *choice* is a menu on the button rather than a dialog on the page:
+/// a dialog is anchored to the view that presents it, so one presented from the
+/// card would open wherever the card happens to have scrolled to.
+private struct ProofPhotoPickers: ViewModifier {
+    @Binding var showLibrary: Bool
+    @Binding var showCamera: Bool
+    @Binding var libraryItem: PhotosPickerItem?
+    let onPicked: (Data) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .photosPicker(isPresented: $showLibrary, selection: $libraryItem, matching: .images)
+            .onChange(of: libraryItem) { _, item in
+                guard let item else { return }
+                libraryItem = nil
+                Task {
+                    guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+                    onPicked(data)
+                }
+            }
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraCaptureView(
+                    onCapture: { capture in
+                        showCamera = false
+                        guard case .photo(let data) = capture else { return }
+                        onPicked(data)
+                    },
+                    onCancel: { showCamera = false },
+                    photosOnly: true)
+                .ignoresSafeArea()
+            }
+    }
+}
+
+// MARK: - What the work paid (Phase 4 M2)
+
+/// The worker's earnings and the way out to a bank — one card for Driver Mode
+/// and Courier Mode both, because the surface is `dispatch`'s and a person who
+/// does both jobs has one balance.
+///
+/// Modelled on the restaurant's earnings card, down to the Stripe sentence,
+/// with one thing that card does not need: **a cap, said out loud.** A worker is
+/// paid into the same AVAILABLE bucket a card top-up lands in, so the server
+/// bounds a withdrawal by what the work actually earned. Without the sentence,
+/// somebody with $40 on screen and $12 of it earned would tap "Pay out" and be
+/// refused by a number they had no way to predict.
+private struct WorkerWalletCard: View {
+    @EnvironmentObject var app: AppState
+
+    /// Round amounts rather than a keypad, capped at what can actually leave —
+    /// the same call the wallet's top-up made, for the same reason: this is
+    /// tapped by somebody who has just parked, and four taps beats a number pad.
+    private static let steps = [1_000, 2_500, 5_000]
+
+    private var wallet: WorkerWalletDTO? { app.workerWallet }
+    private var currency: String { wallet?.currency ?? "USD" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("EARNINGS")
+                        .font(.ggMono(10, .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(GGColor.textTertiary)
+                    Text(WalletStore.money(wallet?.availableMinor ?? 0, currency: currency))
+                        .font(.ggMono(26, .bold))
+                        .foregroundStyle(GGColor.textPrimary)
+                }
+                Spacer()
+                if let earned = wallet?.lifetimeEarnedMinor, earned > 0 {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("EARNED")
+                            .font(.ggMono(9, .semibold))
+                            .tracking(0.6)
+                            .foregroundStyle(GGColor.textTertiary)
+                        Text(WalletStore.money(earned, currency: currency))
+                            .font(.ggMono(13, .semibold))
+                            .foregroundStyle(GGColor.textSecondary)
+                    }
+                }
+            }
+
+            if let wallet {
+                if !wallet.payoutsConfigured {
+                    Button { app.startWorkerPayoutOnboarding() } label: {
+                        payoutCapsule("Set up payouts")
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(app.workerMoneyBusy)
+                    Text("Payouts go through Stripe, which asks for your bank details directly.")
+                        .explanatory(11)
+                        .foregroundStyle(GGColor.textTertiary)
+                } else if !wallet.payoutsReady {
+                    Text(wallet.payoutsNeedSentence)
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button { app.startWorkerPayoutOnboarding() } label: {
+                        payoutCapsule("Finish setting up payouts")
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(app.workerMoneyBusy)
+                } else {
+                    withdrawal(wallet)
+                }
+
+                if !wallet.recent.isEmpty {
+                    Divider().background(GGColor.ink(0.1))
+                    ForEach(wallet.recent.prefix(4)) { line in
+                        HStack {
+                            Text(line.memo.isEmpty ? line.kind.capitalized : line.memo)
+                                .font(.system(size: 12))
+                                .foregroundStyle(GGColor.textSecondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(WalletStore.money(line.amountMinor, currency: currency))
+                                .font(.ggMono(12, .medium))
+                                .foregroundStyle(GGColor.textPrimary)
+                        }
+                    }
+                }
+            } else {
+                Text("Reading what you've earned…")
+                    .explanatory(11)
+                    .foregroundStyle(GGColor.textTertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .glass(cornerRadius: 18, tint: GGColor.ink(0.05))
+        .task { await app.refreshWorkerWallet() }
+    }
+
+    /// The amounts, the cap and the one honest sentence about it.
+    @ViewBuilder
+    private func withdrawal(_ wallet: WorkerWalletDTO) -> some View {
+        let ceiling = wallet.payoutCeilingMinor
+
+        if ceiling < wallet.payoutMinMinor {
+            Text("Payouts start at \(WalletStore.money(wallet.payoutMinMinor, currency: currency)).")
+                .explanatory(11)
+                .foregroundStyle(GGColor.textTertiary)
+        } else {
+            // At most three: two round amounts and the whole thing. A row of
+            // five capsules on a phone card is five tap targets too small to
+            // hit with a thumb, which is the only way this is ever tapped.
+            HStack(spacing: 8) {
+                ForEach(Self.steps.filter { $0 >= wallet.payoutMinMinor && $0 < ceiling }.suffix(2),
+                        id: \.self) { amount in
+                    amountButton(WalletStore.money(amount, currency: currency), amount)
+                }
+                amountButton("All · " + WalletStore.money(ceiling, currency: currency), ceiling)
+            }
+        }
+
+        // Said whenever the two numbers differ, and only then. The wallet on
+        // this screen can hold money that arrived some other way — a top-up, a
+        // refund — and this surface will not send that to a bank.
+        if wallet.cappedBelowBalance {
+            Text("You can withdraw \(WalletStore.money(wallet.withdrawableMinor, currency: currency)) "
+                 + "— withdrawals are limited to what you've earned working.")
+                .explanatory(11)
+                .foregroundStyle(GGColor.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func amountButton(_ title: String, _ amountMinor: Int) -> some View {
+        Button {
+            app.requestWorkerPayout(amountMinor)
+        } label: {
+            Text(title)
+                .font(.ggMono(12, .semibold))
+                .foregroundStyle(GGColor.onAccent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .background(Capsule().fill(GGColor.white))
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(app.workerMoneyBusy)
+        .opacity(app.workerMoneyBusy ? 0.5 : 1)
+    }
+
+    private func payoutCapsule(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(GGColor.onAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(Capsule().fill(GGColor.white))
     }
 }
 

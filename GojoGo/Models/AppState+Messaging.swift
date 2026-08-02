@@ -362,6 +362,34 @@ extension AppState {
         }
     }
 
+    // MARK: A thread the server opened for a job (Phase 4 M2)
+
+    /// Lands in the 1:1 a *vertical* opened — an order's courier↔customer
+    /// thread — and does it exactly the way "Message seller" already does,
+    /// because there is one way into a conversation in this app and a second
+    /// one would drift.
+    ///
+    /// Three things it must do and one it must not. It pulls the conversation
+    /// list first, since the thread was opened server-side at assignment and
+    /// may never have been in this device's list. It parks behind the My World
+    /// setup gate rather than opening nothing, so an unverified phone finishes
+    /// verifying and *then* lands where it was going. And it leaves whatever
+    /// full-screen cover was up, via that cover's own close, so nothing is left
+    /// presenting over the thread. What it must not do is post anything: the
+    /// courier and the customer are two people who have not spoken yet, and an
+    /// opener written by the app is a message somebody has to answer.
+    func openJobConversation(_ id: UUID) {
+        Task {
+            await refreshWorldConversations()
+            enterMyWorld()
+            guard !needsWorldSetup else {
+                pendingSellerConversation = (id, "")
+                return
+            }
+            openWorldConversation(id)
+        }
+    }
+
     /// Live threads become the source of truth for the Messages list; SampleData
     /// threads (no server id) stay below so the demo/composer still works.
     ///

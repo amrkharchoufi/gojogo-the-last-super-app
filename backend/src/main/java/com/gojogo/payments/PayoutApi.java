@@ -48,6 +48,26 @@ public interface PayoutApi {
     PayoutResult payOut(OwnerKind ownerKind, UUID ownerId, UUID requestedBy, long amountMinor);
 
     /**
+     * Everything this payee has already had sent out of the platform, in minor
+     * units. For a caller that has to bound the next withdrawal by the last
+     * ones.
+     *
+     * <p>Read from the payout rows rather than by summing {@code PAYOUT} ledger
+     * entries, and the difference matters exactly once: a payout the provider
+     * refuses leaves its debit entry standing and reverses it with an
+     * {@code ADJUSTMENT}, because the ledger is append-only and a mistake there
+     * is another entry rather than an edit. Summing the kind would count that
+     * failed payout as money that left, and a caller using the total as a cap
+     * would then hold it against somebody forever — for a transfer that never
+     * happened. The rows know the difference; the kinds do not.
+     *
+     * <p>Counts everything not FAILED. A row still {@code REQUESTED} has been
+     * debited and may yet land, and a cap that ignored one would let a second
+     * request go out while the first was in flight.
+     */
+    long lifetimePaidOutMinor(OwnerKind ownerKind, UUID ownerId);
+
+    /**
      * @param stripeAccountId  null until the payee has started onboarding
      * @param requirementsNote Stripe's own words about what is still missing —
      *                         shown to the payee, since only they can fix it

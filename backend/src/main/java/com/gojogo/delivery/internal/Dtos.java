@@ -141,6 +141,16 @@ record SaveAddressRequest(@Size(max = 40) String label,
  * estimate in this vertical's history that a person gave. {@code cancelReason}
  * is why it ended, because "cancelled" alone leaves a customer wondering whether
  * they did it.
+ *
+ * <p>Four more arrived with handoff integrity (Phase 4 M2), and between them
+ * they are the customer's whole half of it. {@code deliveryPin} is the number
+ * they read out at the door — <b>returned here and nowhere else</b>, and blank
+ * once the order is finished or the mode is not PIN, because a PIN that outlives
+ * its handoff is a PIN sitting in a screenshot. {@code proofPhotoUrl} is a
+ * short-lived signed GET minted per read rather than a stored link; the object
+ * key behind it never leaves the server. {@code handoffMode} is what the control
+ * on their tracking card is currently set to, and {@code conversationId} is the
+ * thread with whoever is carrying the food.
  */
 record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinutes,
                 double courierProgress, CourierDto courier,
@@ -151,7 +161,16 @@ record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinute
                 String paymentStatus,
                 String currency, String addressLabel, OrderAddressDto address, String note,
                 Integer rating,
+                String handoffMode, String deliveryPin, String proofPhotoUrl,
+                UUID conversationId,
                 OffsetDateTime placedAt, OffsetDateTime statusChangedAt, OffsetDateTime etaAt) {
+}
+
+/** How the customer wants the food handed over — {@code PIN}, {@code PHOTO} or
+ *  {@code CONFIRM}. An unrecognised word is the configured default rather than a
+ *  400: this is a one-tap control, and a 400 on it is a control that looks
+ *  broken. */
+record HandoffModeRequest(@Size(max = 16) String mode) {
 }
 
 // MARK: The kitchen's queue (OrderFulfilmentService)
@@ -168,12 +187,17 @@ record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinute
  * @param courierSearch whether anybody is coming for it — a kitchen with food
  *                      ready and no courier needs to know that before the food
  *                      does
+ * @param pickupCode    the six digits the courier has to type to collect it,
+ *                      which this screen exists to display. It is on the
+ *                      kitchen's DTO and on no other, and the delivery PIN is on
+ *                      neither: a restaurant has no business knowing the number
+ *                      that confirms the food reached somebody's door
  */
 record MerchantOrderDto(UUID id, String status, List<OrderLineDto> lines,
                         int subtotalCents, int discountCents, String currency,
                         long earningsMinor, String note, String addressLabel,
                         String courierName, String courierSearch, int prepMinutes,
-                        String cancelReason,
+                        String cancelReason, String pickupCode,
                         OffsetDateTime placedAt, OffsetDateTime acceptedAt,
                         OffsetDateTime readyAt, OffsetDateTime statusChangedAt) {
 }
@@ -194,22 +218,92 @@ record RejectOrderRequest(@Size(max = 240) String reason) {
  * pays — and deliberately nothing else about the customer: a courier needs to
  * find a door, not to know who lives behind it.
  *
+ * <p><b>Neither code is on it, and that is the whole design.</b> The pickup code
+ * is on the kitchen's screen and the delivery PIN on the customer's; a courier
+ * who could read either from their own job could collect food they are not
+ * standing in front of and confirm a delivery they have not made.
+ *
+ * <p><b>The handoff <em>mode</em> is a different thing and is on it, deliberately.</b>
+ * The line above is about the two secrets, and it is easy to over-apply — the
+ * first build of the courier screen withheld the mode as well, which made a
+ * contactless order dead-end: the app offered a PIN field for a PIN nobody was
+ * ever going to read out, and the only way through was a refusal message. That
+ * is the smaller half of the problem. The larger half is that "leave it at the
+ * door" is <em>an instruction the customer gave</em>, in the same category as
+ * {@code note}, and an app that does not relay it has a courier knocking on the
+ * door of somebody who asked them not to. Knowing the mode discloses nothing:
+ * it is the shape of the check, not the answer to it.
+ *
  * @param payMinor the delivery fee plus whatever was tipped at checkout. The
  *                 number a courier decides by, and as of this milestone a number
  *                 that actually reaches them
+ * @param handoffMode PIN | PHOTO | CONFIRM — how this customer wants it handed
+ *                 over, so the courier's screen can lead with the right thing
+ *                 and the doorstep is not a surprise
+ * @param conversationId the customer's thread, or null when messaging was having
+ *                 a moment at assignment — the client draws no button rather
+ *                 than one that cannot work
  */
 record CourierJobDto(UUID id, String status, String merchantName,
                      Double merchantLatitude, Double merchantLongitude,
                      String addressLabel, String addressLine, String addressNote,
                      Double addressLatitude, Double addressLongitude,
-                     int itemCount, String note,
-                     long payMinor, String currency,
+                     int itemCount, String note, String handoffMode,
+                     long payMinor, String currency, UUID conversationId,
                      OffsetDateTime readyAt, OffsetDateTime pickedUpAt,
                      OffsetDateTime statusChangedAt) {
 }
 
 /** Wrapper so "not carrying anything" is a 200 with {@code job: null}. */
 record CourierJobResponse(CourierJobDto job) {
+}
+
+/**
+ * The answer to a handoff attempt — and it is an <b>answer</b>, which is why
+ * both verbs return it with a 200 whether or not the code was right.
+ *
+ * <p>A courier at a door who typed a 7 for a 1 has not made a bad request, and
+ * dressing that up as a 4xx would put an error banner in front of somebody
+ * holding a bag of food. The client shows {@code message} in place and leaves
+ * what they typed alone. Written for a person standing outside, so it never
+ * says how wrong the code was: "one digit off" is a hint, and a hint is a
+ * shorter guess list.
+ *
+ * @param attemptsLeft how many wrong PINs remain before the photo fallback
+ *                     opens, or <b>-1</b> where attempts are not counted at all
+ *                     — which is what the pickup endpoint always returns
+ * @param supportUnlocked the fallback is open: this delivery may now be completed
+ *                     with a photo instead of a PIN
+ * @param job          the courier's job as it now stands, present on a refusal
+ *                     too. A wrong code should not blank the screen that is
+ *                     telling them where they are
+ */
+record HandoffResultDto(boolean accepted, String message, int attemptsLeft,
+                        boolean supportUnlocked, CourierJobDto job) {
+}
+
+/** The pickup code, as typed. Optional, because "I typed nothing" is one of the
+ *  outcomes this endpoint has an answer for rather than a validation failure. */
+record PickupHandoffRequest(@Size(max = 16) String pickupCode) {
+}
+
+/** The delivery PIN, as typed. Absent for a photo or contactless handoff. */
+record DeliveryHandoffRequest(@Size(max = 16) String pin) {
+}
+
+/**
+ * A presigned PUT for the drop-off photo. Shaped like the partner document
+ * upload because it is the same mechanism — {@code MediaDocumentApi}'s private
+ * prefix, no public URL, a short expiry.
+ *
+ * <p>The difference is that nothing is sent back: the server has already stamped
+ * the key it minted onto the order, so there is no "attach" call and no request
+ * anywhere that accepts a client-supplied key. {@code objectKey} is returned for
+ * the client's own logging and is not a credential — it grants nothing without a
+ * signature.
+ */
+record ProofUploadDto(String uploadUrl, String objectKey, String contentType,
+                      long expiresSeconds) {
 }
 
 /**
@@ -298,7 +392,12 @@ record PlaceOrderRequest(@NotNull UUID merchantId,
                          /* A code, never an amount: what a discount is worth is
                           * read server-side from the promotion it names. */
                          @Size(max = 32) String promotionCode,
-                         @Min(0) @Max(100_000) int tipCents) {
+                         @Min(0) @Max(100_000) int tipCents,
+                         /* PIN | PHOTO | CONFIRM, optional. Null, blank or a
+                          * word this build has never heard of all mean the
+                          * configured default — a checkout must not fail on a
+                          * word, and it can be changed later anyway. */
+                         @Size(max = 16) String handoffMode) {
 }
 
 record RateOrderRequest(@Min(1) @Max(5) int rating) {

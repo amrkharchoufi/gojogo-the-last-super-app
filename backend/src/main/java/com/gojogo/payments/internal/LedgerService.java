@@ -241,6 +241,26 @@ class LedgerService implements WalletApi {
             .toList();
     }
 
+    /**
+     * The one aggregate. See {@link WalletApi#totalByKind} for why it exists and
+     * why it counts only the side where money arrived.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public long totalByKind(OwnerKind ownerKind, UUID ownerId, Set<LedgerKind> kinds) {
+        if (kinds == null || kinds.isEmpty()) return 0;
+        List<UUID> owned = accounts
+            .findByOwnerKindAndOwnerIdAndCurrency(ownerKind, ownerId, currency()).stream()
+            .map(Account::getId)
+            .toList();
+        // Somebody with no accounts has never been paid anything, and answering
+        // here rather than in SQL is not just an optimisation: an empty list
+        // inside an `in (…)` is not valid SQL, so the alternative is a syntax
+        // error at the far end of the first wallet screen a new courier opens.
+        if (owned.isEmpty()) return 0;
+        return entries.totalCredited(owned, kinds);
+    }
+
     // MARK: The one write
 
     /**

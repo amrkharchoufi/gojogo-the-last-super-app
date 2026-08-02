@@ -104,6 +104,76 @@ struct MyDispatchDTO: Decodable, Equatable {
     let positionIntervalSeconds: Int
 }
 
+// MARK: - What the work paid, and the way out to a bank (Phase 4 M2)
+//
+// One surface for a driver and a courier both, because a person who does both
+// has one balance — and it is `dispatch`'s because dispatch owns the registry,
+// which is the only thing that can prove this caller is somebody the platform
+// pays for work.
+//
+// The number that matters here is `withdrawableMinor`, and it is not the
+// balance. A worker is paid into their own AVAILABLE bucket — the same bucket a
+// card top-up lands in — so a payout surface with no cap would turn the
+// platform into a card→bank pipe. The server caps it at lifetime earned minus
+// lifetime paid out; the app never computes that, it reads it, and says so out
+// loud when it is less than what is on screen.
+
+struct WorkerWalletDTO: Decodable, Equatable {
+    let availableMinor: Int
+    let currency: String
+    /// Everything this person has ever earned working — fees, tips, fares,
+    /// rewards. Not a balance: money earned and then spent on lunch is still
+    /// counted here, which is exactly what makes the cap fair.
+    let lifetimeEarnedMinor: Int
+    /// Earned minus already paid out. The ceiling on a withdrawal, before the
+    /// balance is even considered.
+    let withdrawableMinor: Int
+    let payoutsConfigured: Bool
+    let payoutsReady: Bool
+    /// Stripe's own `requirements.currently_due`, comma-separated and in
+    /// Stripe's vocabulary. Never rendered as-is — see `payoutsNeedSentence`.
+    let payoutsRequirement: String
+    let payoutMinMinor: Int
+    let recent: [WorkerTransactionDTO]
+
+    /// The most that can leave today: the balance, or what the work is worth,
+    /// whichever is smaller. Computed here only to *disable a button* — the
+    /// server refuses anything above it with a 409 that names the number, and
+    /// that refusal is the authority.
+    var payoutCeilingMinor: Int { max(0, min(availableMinor, withdrawableMinor)) }
+
+    /// True when the balance holds money this surface will not pay out — money
+    /// that arrived some way other than working. Worth one honest sentence,
+    /// because a button that silently pays out less than the number above it is
+    /// how somebody decides the app is broken.
+    var cappedBelowBalance: Bool { withdrawableMinor < availableMinor }
+
+    var payoutsNeedSentence: String { StripePayoutNeeds.sentence(payoutsRequirement) }
+}
+
+/// One line of the worker's statement, signed from their point of view.
+struct WorkerTransactionDTO: Decodable, Equatable, Identifiable {
+    let id: UUID
+    let amountMinor: Int
+    let kind: String
+    let memo: String
+    let createdAt: String
+}
+
+struct WorkerPayoutDTO: Decodable {
+    let id: UUID
+    let amountMinor: Int
+    let currency: String
+    /// REQUESTED / SENT / FAILED — a failure is reported, not hidden. The money
+    /// is already back in the balance by the time this is read.
+    let status: String
+    let failureReason: String
+}
+
+struct WorkerPayoutBody: Encodable {
+    let amountMinor: Int
+}
+
 struct DispatchAvailabilityBody: Encodable {
     let kind: String
     let available: Bool

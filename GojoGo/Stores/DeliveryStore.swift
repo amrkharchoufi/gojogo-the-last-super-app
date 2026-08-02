@@ -151,12 +151,32 @@ final class DeliveryStore {
         try await APIClient.shared.get("/v1/delivery/courier/deliveries?limit=\(limit)")
     }
 
-    func courierPickedUp(_ orderId: UUID) async throws -> CourierJobDTO {
-        try await APIClient.shared.post("/v1/delivery/courier/orders/\(orderId)/picked-up")
+    /// "I have the food", with the code the counter read out (Phase 4 M2).
+    ///
+    /// Answers 200 whether or not the code was right, which is why this returns
+    /// a result rather than a job: the refusal is data the screen renders under
+    /// the field, not an error it apologises for. Pickup attempts are never
+    /// counted — `attemptsLeft` comes back `-1` — because the merchant is
+    /// standing right there and a courier who can fail permanently at a counter
+    /// is a courier stranded with somebody's dinner.
+    func courierPickedUp(_ orderId: UUID, code: String) async throws -> HandoffResultDTO {
+        try await APIClient.shared.post("/v1/delivery/courier/orders/\(orderId)/picked-up",
+                                        body: PickupCodeBody(pickupCode: code))
     }
 
-    func courierDelivered(_ orderId: UUID) async throws -> CourierJobDTO {
-        try await APIClient.shared.post("/v1/delivery/courier/orders/\(orderId)/delivered")
+    /// Handed over. The pin is nil for a CONFIRM order and for the photo path,
+    /// which is a different thing from an empty one: an empty string is an
+    /// answer, and on a PIN order a wrong answer costs an attempt.
+    func courierDelivered(_ orderId: UUID, pin: String?) async throws -> HandoffResultDTO {
+        try await APIClient.shared.post("/v1/delivery/courier/orders/\(orderId)/delivered",
+                                        body: DeliveryPinBody(pin: pin))
+    }
+
+    /// A presigned PUT for the drop-off photo. The server stamps the key it
+    /// just minted onto the order in the same transaction, so there is nothing
+    /// to send back afterwards and no client-supplied key to be believed.
+    func courierProofUpload(_ orderId: UUID) async throws -> ProofUploadDTO {
+        try await APIClient.shared.post("/v1/delivery/courier/orders/\(orderId)/proof-photo")
     }
 
     // MARK: Saved addresses
@@ -208,6 +228,14 @@ final class DeliveryStore {
 
     func cancel(_ orderId: UUID) async throws -> OrderDTO {
         try await APIClient.shared.post("/v1/delivery/orders/\(orderId)/cancel")
+    }
+
+    /// Hand to me / leave at the door / no code at all (Phase 4 M2). Allowed
+    /// right up until the food arrives, because contactless is a decision
+    /// people make once the courier is already close.
+    func setHandoffMode(_ orderId: UUID, mode: String) async throws -> OrderDTO {
+        try await APIClient.shared.post("/v1/delivery/orders/\(orderId)/handoff-mode",
+                                        body: HandoffModeBody(mode: mode))
     }
 
     func rate(_ orderId: UUID, stars: Int) async throws -> OrderDTO {

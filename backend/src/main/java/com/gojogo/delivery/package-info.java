@@ -27,6 +27,21 @@
  * hands over is what moves the order the rest of the way — and is paid the
  * delivery fee and the tip that 2e M3 parked with the platform under their own
  * ledger kinds for exactly this milestone.
+ *
+ * <p><b>Phase 4 M2 makes the two courier taps provable</b>, and it does so by
+ * composing two more platform modules rather than growing anything of its own. A
+ * pickup code and a delivery PIN are minted when the restaurant accepts; a
+ * contactless drop-off is photographed into {@code media}'s private prefix
+ * ({@link com.gojogo.media.MediaDocumentApi}, the same mechanism a driving
+ * licence uses, and for the same reason — no public URL, a signature per read);
+ * and the courier and the customer get a thread through
+ * {@link com.gojogo.messaging.MessagingApi} with a
+ * {@link com.gojogo.messaging.ConversationContext} card back to the order. That
+ * context is the seam 2b M3 built for a listing and 3 M3 reused for a ride, and
+ * this is its third consumer with no change to {@code messaging} at all — which
+ * is what a generic reference was for. Neither new dependency runs in the other
+ * direction: {@code media} and {@code messaging} still know nothing about an
+ * order. The six order statuses are, once again, unchanged.
  */
 @org.springframework.modulith.ApplicationModule(displayName = "Delivery")
 package com.gojogo.delivery;

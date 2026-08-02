@@ -70,6 +70,35 @@ class DeliveryPolicy {
         return Math.max(1, config.number("delivery.dropoff.minutes", 15));
     }
 
+    // MARK: Handoff integrity (Phase 4 M2)
+
+    /**
+     * How a delivery is handed over when the customer expresses no preference.
+     * PIN rather than CONFIRM because a default should be the option that proves
+     * something, and rather than PHOTO because most people are at the door.
+     */
+    HandoffMode defaultHandoffMode() {
+        return HandoffMode.parse(config.string("delivery.handoff.mode.default", ""),
+            HandoffMode.PIN);
+    }
+
+    /**
+     * Wrong delivery PINs before the photo fallback opens.
+     *
+     * <p>Floored at 1, because a zero here would open the fallback before the
+     * courier had typed anything — a knob that turns a check off is a knob
+     * somebody will eventually turn by accident, and this one would do it
+     * silently.
+     */
+    int handoffMaxAttempts() {
+        return (int) Math.clamp(config.number("delivery.handoff.max.attempts", 3), 1, 10);
+    }
+
+    /** Digits in the pickup code and the delivery PIN. */
+    int handoffCodeLength() {
+        return (int) Math.clamp(config.number("delivery.handoff.code.length", 6), 4, 8);
+    }
+
     /**
      * Which vehicles may be offered a delivery. A set rather than one value: a
      * basket that fits on a bike also fits in a car, and a city with no bikes

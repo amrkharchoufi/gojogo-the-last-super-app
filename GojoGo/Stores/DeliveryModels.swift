@@ -146,6 +146,28 @@ struct OrderDTO: Decodable {
     let placedAt: String
     let statusChangedAt: String
     let etaAt: String
+    /// PIN / PHOTO / CONFIRM — how this order gets handed over (Phase 4 M2).
+    /// The customer's choice, changeable right up until it arrives, because
+    /// "leave it at the door" is a decision people make when the courier is
+    /// already close.
+    let handoffMode: String?
+    /// The six digits the courier has to be told. Server-side this is blank
+    /// unless the order is live *and* in PIN mode, so the screen can render it
+    /// whenever it is non-empty and never has to work out whether it should.
+    let deliveryPin: String?
+    /// A short-lived signed URL, minted per read and non-nil only once a PHOTO
+    /// handoff has actually completed. The object key behind it never reaches
+    /// this app — a key is a thing you can ask for again, and a URL expires.
+    let proofPhotoUrl: String?
+    /// The 1:1 thread with whoever is bringing it, opened by the server at
+    /// assignment. Nil until then, and nil forever if opening it failed —
+    /// which is deliberate on that side, so it must be survivable on this one.
+    let conversationId: UUID?
+
+    /// What the handoff control starts on. A backend that predates M2 sends
+    /// nothing, and the honest reading of that is CONFIRM: it is what those
+    /// orders actually do.
+    var handoff: String { handoffMode ?? "CONFIRM" }
 }
 
 /// "Nothing in flight" is a 200 with a null order, not a 404.
@@ -171,6 +193,13 @@ struct PlaceOrderBody: Encodable {
 
 struct RateOrderBody: Encodable {
     let rating: Int
+}
+
+/// PIN / PHOTO / CONFIRM. A word rather than an enum because the server owns
+/// the list — a build that has never heard of a fourth mode should show the
+/// order it can't render a mode for, not fail to decode it.
+struct HandoffModeBody: Encodable {
+    let mode: String
 }
 
 struct TipBody: Encodable {
@@ -235,60 +264,9 @@ struct MerchantWalletDTO: Decodable {
 
 extension MerchantWalletDTO {
     /// What is still missing, said in the language of the person reading it.
-    ///
-    /// The server passes Stripe's field keys through verbatim — `business_type`,
-    /// `tos_acceptance.ip`, `external_account`. Printed straight onto the
-    /// earnings card they read as a stack trace that leaked into the product,
-    /// and a restaurant owner can't act on `tos_acceptance.date` anyway: the
-    /// only thing to do about any of them is the button underneath. So each key
-    /// becomes the thing it actually asks for, the two halves of a terms
-    /// acceptance collapse into one phrase, and anything this app doesn't
-    /// recognise turns into "a few more details" rather than being shown raw.
-    var payoutsNeedSentence: String {
-        let needs = Self.humanNeeds(payoutsRequirement)
-        guard !needs.isEmpty else { return "Stripe is still reviewing your details." }
-        return "Stripe still needs \(Self.sentenceList(needs))."
-    }
-
-    private static func humanNeeds(_ raw: String) -> [String] {
-        var seen: Set<String> = []
-        return raw.split(separator: ",")
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .map { Self.phrase(for: $0) }
-            .filter { seen.insert($0).inserted }
-    }
-
-    /// Matched on the key's shape rather than the whole string: Stripe indexes
-    /// the owner fields (`owners.0.address.line1`) and adds new leaves to the
-    /// same branches, so the tail is what carries the meaning.
-    private static func phrase(for key: String) -> String {
-        let k = key.lowercased()
-        if k.hasPrefix("tos_acceptance")         { return "you to accept Stripe's terms" }
-        if k == "external_account"               { return "your bank account" }
-        if k == "business_type"                  { return "whether you're a person or a company" }
-        if k.hasPrefix("business_profile.url")   { return "a link to your website or page" }
-        if k.hasPrefix("business_profile")       { return "a little about your business" }
-        if k.contains("verification.document")   { return "a photo of your ID" }
-        if k.contains("verification.additional_document") { return "one more document" }
-        if k.contains("dob")                     { return "your date of birth" }
-        if k.contains("id_number") || k.contains("ssn_last_4") { return "your ID number" }
-        if k.contains("tax_id")                  { return "your tax ID" }
-        if k.contains("address")                 { return "your address" }
-        if k.contains("phone")                   { return "your phone number" }
-        if k.contains("email")                   { return "your email" }
-        if k.contains("first_name") || k.contains("last_name") || k.contains("name") {
-            return "your legal name"
-        }
-        return "a few more details"
-    }
-
-    /// "a, b and c" — the list is read out loud in a sentence, not bulleted.
-    private static func sentenceList(_ items: [String]) -> String {
-        guard let last = items.last else { return "" }
-        guard items.count > 1 else { return last }
-        return items.dropLast().joined(separator: ", ") + " and " + last
-    }
+    /// See `StripePayoutNeeds` — since Phase 4 M2 a courier has the same card
+    /// and gets the same sentence, so the vocabulary lives in one place.
+    var payoutsNeedSentence: String { StripePayoutNeeds.sentence(payoutsRequirement) }
 }
 
 struct MerchantTransactionDTO: Decodable, Identifiable {
@@ -340,10 +318,24 @@ struct MerchantOrderDTO: Decodable, Identifiable {
     let acceptedAt: String?
     let readyAt: String?
     let statusChangedAt: String
+    /// The six digits the counter reads out to the courier (Phase 4 M2).
+    /// Minted when this restaurant accepted, and returned **only here** — a
+    /// code the courier can read off their own screen proves nothing about
+    /// where they are standing.
+    let pickupCode: String?
 
     var itemCount: Int { lines.reduce(0) { $0 + $1.qty } }
     var needsAnswer: Bool { status == "CONFIRMED" }
     var noCourier: Bool { courierSearch == "FAILED" }
+
+    /// Show the code once somebody is actually coming for the food, and stop
+    /// showing it the moment they have it. A code on a delivered order is a
+    /// number on a screen with nobody left to read it to.
+    var readableCode: String? {
+        guard let code = pickupCode, !code.isEmpty else { return nil }
+        guard status == "PREPARING" || status == "COURIER_TO_RESTAURANT" else { return nil }
+        return courierName == nil ? nil : code
+    }
 }
 
 /// A prep estimate, or nil for the server's default. Not required, because an
@@ -382,13 +374,95 @@ struct CourierJobDTO: Decodable, Identifiable {
     let readyAt: String?
     let pickedUpAt: String?
     let statusChangedAt: String
+    /// The thread with the person waiting for this (Phase 4 M2). Nil until the
+    /// server has opened it, and nil for good if opening it failed — a chat
+    /// that didn't open must never have cost somebody the assignment.
+    let conversationId: UUID?
+    /// How this customer wants it handed over: `PIN`, `PHOTO` or `CONFIRM`.
+    ///
+    /// Neither *code* is here and neither ever will be — the pickup code is on
+    /// the kitchen's DTO and the delivery PIN on the customer's, because a
+    /// courier who could read either could collect food they are not standing
+    /// in front of or confirm a delivery they never made. The mode is not one
+    /// of those secrets. It is an instruction, in the same category as `note`:
+    /// "leave it at the door" is something the person inside said, and an app
+    /// that withholds it has a courier knocking on the door of somebody who
+    /// asked them not to. It is optional here for the usual forward-compat
+    /// reason — an older backend simply doesn't send it.
+    let handoffMode: String?
 
     var isCollected: Bool { status == "DELIVERING" }
+
+    /// Whether this door asked for a photograph. Absent means no — an app that
+    /// guessed "contactless" from a missing field would leave food on a step
+    /// for somebody who was standing behind the door waiting for it.
+    var wantsPhoto: Bool { handoffMode == "PHOTO" }
 }
 
 /// "Not carrying anything" is a 200 with a null job.
 struct CourierJobResponseDTO: Decodable {
     let job: CourierJobDTO?
+}
+
+// MARK: Handoff integrity (Phase 4 M2)
+
+/// The answer to "I have the food" / "I handed it over".
+///
+/// A 200 in both outcomes, and that is the design rather than a shortcut: a
+/// courier at a door who typed a 7 for a 1 has not made a bad request, and a
+/// screen that renders a refusal as an error renders it as *the app's* fault.
+/// So a wrong code comes back here, with the server's own sentence and the
+/// number of tries left, and the app puts it under the field.
+struct HandoffResultDTO: Decodable {
+    let accepted: Bool
+    /// Always shown as written. Only the server knows whether the last attempt
+    /// was the last one, and it says so in the message.
+    let message: String
+    /// Tries remaining before the photo fallback opens.
+    ///
+    /// **`-1` means "not counted", which is not the same as none left.** It is
+    /// always `-1` on `picked-up` — the pickup code is never counted, because
+    /// the merchant is standing right there and a courier who cannot get past
+    /// the counter is a courier holding food nobody will take back — and it is
+    /// `-1` on `delivered` for any order that is not in PIN mode, which has no
+    /// budget to spend. Anything drawn from this must read it as "no count to
+    /// show" rather than as zero, or a contactless drop renders as a courier
+    /// out of chances.
+    let attemptsLeft: Int
+    /// Set once the delivery PIN has been failed to the limit: the photo path
+    /// is now open on an order that asked for a code.
+    let supportUnlocked: Bool
+    /// The job as it now stands. Nil on the delivery that completed it — there
+    /// is nothing left to carry.
+    let job: CourierJobDTO?
+
+    /// True only where a count is actually being kept.
+    var isCounted: Bool { attemptsLeft >= 0 }
+}
+
+struct PickupCodeBody: Encodable {
+    let pickupCode: String
+}
+
+/// Optional on purpose: a CONFIRM order and a PHOTO one both hand over without
+/// one, and a body that insisted on an empty string would be the app inventing
+/// a wrong answer rather than sending no answer.
+struct DeliveryPinBody: Encodable {
+    let pin: String?
+}
+
+/// A presigned PUT for the drop-off photo. The same four fields as
+/// `DocumentUploadDTO` and deliberately a separate type: that one is `partner`'s
+/// papers, this is `delivery`'s proof, and the day one of them grows a field is
+/// not the day the other should.
+///
+/// The app never sends the key anywhere. The server minted it, so the server
+/// already knows it — it is stamped onto the order inside the presign.
+struct ProofUploadDTO: Decodable {
+    let uploadUrl: String
+    let objectKey: String
+    let contentType: String
+    let expiresSeconds: Int
 }
 
 struct SavePromotionBody: Encodable {

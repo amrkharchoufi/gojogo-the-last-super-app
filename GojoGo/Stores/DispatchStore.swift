@@ -43,6 +43,38 @@ final class DispatchStore {
         try await APIClient.shared.post("/v1/dispatch/offers/\(offerID)/decline")
     }
 
+    // MARK: The work's money (Phase 4 M2)
+
+    /// What the driving and the deliveries paid, and what of it can leave.
+    ///
+    /// One surface for both roles because a person who does both has one
+    /// balance — and it is dispatch's, not payments', because the registry is
+    /// the only thing that can prove this caller is somebody the platform pays
+    /// for work. Anybody with no registration at all gets a 404 rather than an
+    /// empty wallet: a payout screen for a job you were never approved for is a
+    /// screen that raises a question the app can't answer.
+    func workerWallet() async throws -> WorkerWalletDTO {
+        try await APIClient.shared.get("/v1/dispatch/me/wallet")
+    }
+
+    /// A fresh Stripe onboarding link. Minted on demand and never stored — the
+    /// link authenticates whoever opens it, which is a thing to hand straight
+    /// to a system sheet and forget.
+    func workerPayoutOnboarding() async throws -> String {
+        struct LinkResponse: Decodable { let url: String }
+        let response: LinkResponse =
+            try await APIClient.shared.post("/v1/dispatch/me/payouts/onboarding")
+        return response.url
+    }
+
+    /// Above the ceiling is a **409 naming the number**, not a silent clamp —
+    /// so the app shows the server's sentence rather than quietly paying out
+    /// less than was asked for.
+    func workerPayout(amountMinor: Int) async throws -> WorkerPayoutDTO {
+        try await APIClient.shared.post("/v1/dispatch/me/payouts",
+                                        body: WorkerPayoutBody(amountMinor: amountMinor))
+    }
+
     // MARK: Onboarding — the application
 
     func application(kind: String) async throws -> DriverApplicationDTO? {

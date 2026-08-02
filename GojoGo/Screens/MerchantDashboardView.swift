@@ -678,6 +678,38 @@ private struct MerchantOrderCard: View {
                         .fill(GGColor.ink(0.10)))
             }
 
+            // The one thing on this screen a person reads out loud (Phase 4 M2),
+            // so it is the one thing drawn to be read out loud: big, mono,
+            // spaced, and with the instruction above it rather than beside it.
+            //
+            // The direction is deliberate and it is the opposite of what SPECS
+            // §5 described. The kitchen shows the code and the *courier* types
+            // it, because the party who must act is the party with the
+            // incentive: a merchant who forgets to tap leaves a courier holding
+            // food they cannot mark collected, whereas a courier cannot get paid
+            // until they complete the step — and can only learn this number by
+            // standing at this counter, which is the fact the code exists to
+            // prove.
+            if let code = order.readableCode {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("READ THIS TO THE COURIER")
+                        .font(.ggMono(10, .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(GGColor.textTertiary)
+                    Text(code)
+                        .font(.ggMono(34, .bold))
+                        .tracking(8)
+                        .foregroundStyle(GGColor.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(GGColor.ink(0.10)))
+            }
+
             if order.needsAnswer {
                 Picker("Ready in", selection: $prep) {
                     ForEach(Self.choices, id: \.self) { Text("\($0) min").tag($0) }

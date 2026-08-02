@@ -1434,11 +1434,44 @@ private struct DeliveryTrackingView: View {
                     }
                     Spacer()
                     courierAction("phone.fill")
-                    courierAction("message.fill")
+                    // Live since Phase 4 M2: the thread the server opened when
+                    // this courier was assigned. A no-op when there isn't one,
+                    // which is what this button already was.
+                    courierAction("message.fill") { app.messageDeliveryCourier() }
                 }
                 .padding(12)
                 .glass(cornerRadius: 16)
             }
+
+            // The customer's half of the handoff (Phase 4 M2). Six digits they
+            // read out at the door, minted when the restaurant accepted so they
+            // are there well before anybody knocks.
+            //
+            // Rendered on "is there one" rather than on a status, because the
+            // server already answers that question: the PIN is blank unless the
+            // order is live *and* in PIN mode, since a PIN that outlives its
+            // handoff is a number sitting in a history screen for a year.
+            // Re-deriving that rule here would give it a second definition to
+            // drift from.
+            if !app.deliveryPin.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("GIVE THIS TO YOUR COURIER")
+                        .font(.ggMono(10, .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(GGColor.textTertiary)
+                    Text(app.deliveryPin)
+                        .font(.ggMono(32, .bold))
+                        .tracking(8)
+                        .foregroundStyle(GGColor.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .glass(cornerRadius: 16, tint: GGColor.ink(0.10))
+            }
+
+            handoffModeControl
 
             // The one thing the six order statuses cannot say (Phase 4 M1): the
             // kitchen is cooking and nobody has taken the delivery. Silence here
@@ -1500,9 +1533,61 @@ private struct DeliveryTrackingView: View {
         }
     }
 
-    private func courierAction(_ icon: String) -> some View {
+    // MARK: How it gets handed over (Phase 4 M2)
+
+    /// Hand it to me · leave it at the door · no code.
+    ///
+    /// On the tracking sheet rather than at checkout, and changeable right up
+    /// until the food arrives, because this is not a decision anybody makes
+    /// while choosing a starter. It is made when the courier is four minutes
+    /// away and you realise you are in the shower.
+    ///
+    /// Live orders only: the on-device demo has no courier to hand anything to.
+    @ViewBuilder
+    private var handoffModeControl: some View {
+        if app.deliveryLiveOrderID != nil, app.deliveryStatus != .delivered {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AT THE DOOR")
+                    .font(.ggMono(10, .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(GGColor.textTertiary)
+                HStack(spacing: 8) {
+                    handoffOption("PIN", "Hand to me", "hand.raised.fill")
+                    handoffOption("PHOTO", "Leave at door", "photo.fill")
+                    handoffOption("CONFIRM", "No code", "checkmark")
+                }
+            }
+        }
+    }
+
+    private func handoffOption(_ mode: String, _ title: String, _ icon: String) -> some View {
+        let selected = app.deliveryHandoffMode == mode
+        return Button {
+            app.setDeliveryHandoffMode(mode)
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .foregroundStyle(selected ? GGColor.onAccent : GGColor.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(selected ? GGColor.white : GGColor.ink(0.06)))
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(app.deliveryHandoffBusy)
+    }
+
+    private func courierAction(_ icon: String,
+                               action: @escaping () -> Void = {}) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
         } label: {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
@@ -1527,6 +1612,21 @@ private struct DeliveryTrackingView: View {
                 Text("\(r.name) · \(app.deliveryOrderTotalLabel)")
                     .explanatory(14)
                     .foregroundStyle(GGColor.textSecondary)
+            }
+
+            // Where they left it (Phase 4 M2). Only ever present on an order
+            // that was actually handed over by photo, and always a fresh signed
+            // URL — the object key never reaches this app, so there is nothing
+            // here that outlives the screen.
+            if let proof = app.deliveryProofPhotoURL {
+                VStack(spacing: 6) {
+                    MediaImage(url: proof, cornerRadius: 16, contentMode: .fill)
+                        .frame(height: 170)
+                    Text("Left at your door")
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+                .frame(maxWidth: .infinity)
             }
 
             Text("How was your order?")

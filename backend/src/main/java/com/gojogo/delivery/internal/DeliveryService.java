@@ -3,7 +3,10 @@ package com.gojogo.delivery.internal;
 import com.gojogo.delivery.OrderPlaced;
 import com.gojogo.dispatch.DispatchApi;
 import com.gojogo.dispatch.WorkerPosition;
+import com.gojogo.media.MediaDocumentApi;
 import com.gojogo.storefront.StorefrontDocument;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
@@ -26,6 +29,8 @@ import java.util.stream.Collectors;
 @Service
 class DeliveryService {
 
+    private static final Logger log = LoggerFactory.getLogger(DeliveryService.class);
+
     /** Orders in these states are done — they never move again. */
     private static final Set<OrderStatus> TERMINAL =
         EnumSet.of(OrderStatus.DELIVERED, OrderStatus.CANCELLED);
@@ -44,6 +49,8 @@ class DeliveryService {
     private final MerchantStorefrontService storefronts;
     private final OrderFulfilmentService fulfilment;
     private final DispatchApi dispatch;
+    private final DeliveryPolicy policy;
+    private final MediaDocumentApi privateMedia;
     private final int serviceFeeCents;
 
     DeliveryService(MerchantRepository merchants, MenuItemRepository menuItems,
@@ -52,6 +59,7 @@ class DeliveryService {
                     OrderPayments payments, PromotionService promotions,
                     MerchantStorefrontService storefronts,
                     OrderFulfilmentService fulfilment, DispatchApi dispatch,
+                    DeliveryPolicy policy, MediaDocumentApi privateMedia,
                     @Value("${gojogo.delivery.service-fee-cents:99}") int serviceFeeCents) {
         this.merchants = merchants;
         this.menuItems = menuItems;
@@ -63,6 +71,8 @@ class DeliveryService {
         this.storefronts = storefronts;
         this.fulfilment = fulfilment;
         this.dispatch = dispatch;
+        this.policy = policy;
+        this.privateMedia = privateMedia;
         this.serviceFeeCents = serviceFeeCents;
     }
 
@@ -234,6 +244,12 @@ class DeliveryService {
         OffsetDateTime now = OffsetDateTime.now();
         CustomerOrder order = new CustomerOrder(me, merchant.getId(), payments.currency(),
             request.note(), now.plusMinutes(merchant.getEtaMinutes()));
+        // How they want it handed over, if they said. A word this build doesn't
+        // recognise is the configured default rather than a 400 — checkout is
+        // the worst place in the product to fail on a string, and the choice is
+        // changeable right up until the courier is at the door anyway.
+        order.chooseHandoffMode(HandoffMode.parse(request.handoffMode(),
+            policy.defaultHandoffMode()));
         applyAddress(me, request, order);
         qtyByItem.forEach((itemId, qty) -> {
             MenuItem item = found.get(itemId);
@@ -355,6 +371,35 @@ class DeliveryService {
         return toOrderDto(order);
     }
 
+    /**
+     * How they want the food handed over, changed in flight.
+     *
+     * <p>Changeable until the moment it happens, and that is the product
+     * decision rather than a technical one: "leave it at the door" is what
+     * somebody types when the courier is four minutes away and the baby has just
+     * gone down, and a choice locked in at checkout would be a choice made
+     * before the reason for it existed. Refused once the order is finished —
+     * there is nothing left to hand over, and quietly accepting a change that
+     * can no longer mean anything is worse than saying so.
+     *
+     * <p>Switching an order that predates {@code V38} to PIN does not conjure a
+     * PIN: there is no code on that row, and the handoff falls back to a plain
+     * confirm. Minting one here would be minting a number the customer has never
+     * been shown.
+     */
+    @Transactional
+    OrderDto setHandoffMode(UUID me, UUID orderId, String mode) {
+        CustomerOrder order = require(me, orderId);
+        if (order.getStatus().isTerminal()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                order.getStatus() == OrderStatus.DELIVERED
+                    ? "That order has already been delivered"
+                    : "That order was cancelled");
+        }
+        order.chooseHandoffMode(HandoffMode.parse(mode, policy.defaultHandoffMode()));
+        return toOrderDto(order);
+    }
+
     @Transactional
     OrderDto rate(UUID me, UUID orderId, int stars) {
         CustomerOrder order = require(me, orderId);
@@ -457,9 +502,55 @@ class DeliveryService {
                 order.getAddressLatitude(), order.getAddressLongitude()),
             order.getNote(),
             order.getRating(),
+            order.getHandoffMode().name(),
+            visiblePin(order),
+            proofPhotoUrl(order),
+            order.getConversationId(),
             order.getPlacedAt(),
             order.getStatusChangedAt(),
             order.getEtaAt());
+    }
+
+    /**
+     * The PIN, and only while it is the thing that opens the door.
+     *
+     * <p>Blank once the order is finished or the mode is not PIN, because a PIN
+     * that outlives its handoff is a number sitting in a screenshot and in a
+     * history screen for a year — and the one place it could ever be read from
+     * is the customer's own order, since it is on no other DTO in the system.
+     * There is nothing to hide it from except time.
+     */
+    private static String visiblePin(CustomerOrder order) {
+        return order.getStatus().isTerminal() || order.getHandoffMode() != HandoffMode.PIN
+            ? ""
+            : order.getDeliveryPin();
+    }
+
+    /**
+     * A signed link to the drop-off photo, minted for this one read.
+     *
+     * <p>Never the object key: the key is the handle the server keeps, and a
+     * link that has expired is a link that cannot leak — the same posture
+     * {@code MediaDocumentApi} takes with a driving licence, for a photograph of
+     * somebody's front door with their dinner on it. Only once the order is
+     * DELIVERED, because before that a photo on the row is a courier's failed
+     * attempt rather than proof of anything.
+     *
+     * <p>Signing failures fall back to null rather than failing the read: the
+     * order screen is how a customer finds out what happened to their food, and
+     * it must not go blank because S3 was slow.
+     */
+    private String proofPhotoUrl(CustomerOrder order) {
+        if (order.getStatus() != OrderStatus.DELIVERED || order.getProofPhotoKey() == null) {
+            return null;
+        }
+        try {
+            return privateMedia.presignDocumentRead(order.getProofPhotoKey());
+        } catch (RuntimeException mediaIsHavingAMoment) {
+            log.warn("Couldn't sign the proof photo for order {}: {}",
+                order.getId(), mediaIsHavingAMoment.toString());
+            return null;
+        }
     }
 
     private String merchantName(UUID merchantId) {

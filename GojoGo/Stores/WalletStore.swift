@@ -156,6 +156,71 @@ final class WalletStore {
     }
 }
 
+// MARK: - What Stripe is still waiting for, in English
+
+/// Stripe's `requirements.currently_due` list, turned into a sentence.
+///
+/// The server passes Stripe's field keys through verbatim — `business_type`,
+/// `tos_acceptance.ip`, `external_account`. Printed straight onto an earnings
+/// card they read as a stack trace that leaked into the product, and nobody can
+/// act on `tos_acceptance.date` anyway: the only thing to do about any of them
+/// is the button underneath. So each key becomes the thing it actually asks
+/// for, the two halves of a terms acceptance collapse into one phrase, and
+/// anything this app doesn't recognise turns into "a few more details" rather
+/// than being shown raw.
+///
+/// It lives here rather than beside the merchant wallet it was written for
+/// because Phase 4 M2 gave a courier the same card: two modules' payouts, one
+/// Stripe account shape, and one set of words for it.
+enum StripePayoutNeeds {
+
+    static func sentence(_ raw: String) -> String {
+        let needs = humanNeeds(raw)
+        guard !needs.isEmpty else { return "Stripe is still reviewing your details." }
+        return "Stripe still needs \(sentenceList(needs))."
+    }
+
+    private static func humanNeeds(_ raw: String) -> [String] {
+        var seen: Set<String> = []
+        return raw.split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .map { phrase(for: $0) }
+            .filter { seen.insert($0).inserted }
+    }
+
+    /// Matched on the key's shape rather than the whole string: Stripe indexes
+    /// the owner fields (`owners.0.address.line1`) and adds new leaves to the
+    /// same branches, so the tail is what carries the meaning.
+    private static func phrase(for key: String) -> String {
+        let k = key.lowercased()
+        if k.hasPrefix("tos_acceptance")         { return "you to accept Stripe's terms" }
+        if k == "external_account"               { return "your bank account" }
+        if k == "business_type"                  { return "whether you're a person or a company" }
+        if k.hasPrefix("business_profile.url")   { return "a link to your website or page" }
+        if k.hasPrefix("business_profile")       { return "a little about your business" }
+        if k.contains("verification.document")   { return "a photo of your ID" }
+        if k.contains("verification.additional_document") { return "one more document" }
+        if k.contains("dob")                     { return "your date of birth" }
+        if k.contains("id_number") || k.contains("ssn_last_4") { return "your ID number" }
+        if k.contains("tax_id")                  { return "your tax ID" }
+        if k.contains("address")                 { return "your address" }
+        if k.contains("phone")                   { return "your phone number" }
+        if k.contains("email")                   { return "your email" }
+        if k.contains("first_name") || k.contains("last_name") || k.contains("name") {
+            return "your legal name"
+        }
+        return "a few more details"
+    }
+
+    /// "a, b and c" — the list is read out loud in a sentence, not bulleted.
+    private static func sentenceList(_ items: [String]) -> String {
+        guard let last = items.last else { return "" }
+        guard items.count > 1 else { return last }
+        return items.dropLast().joined(separator: ", ") + " and " + last
+    }
+}
+
 // MARK: - Wire shapes
 
 struct WalletDTO: Decodable {

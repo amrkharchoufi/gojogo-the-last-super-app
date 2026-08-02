@@ -21,6 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.EnumSet;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -118,6 +119,20 @@ class PayoutService implements PayoutApi {
 
         Payout payout = txn.execute(status -> debit(ownerKind, ownerId, requestedBy, amountMinor));
         return txn.execute(status -> send(payout.getId(), account.getStripeAccountId()));
+    }
+
+    /**
+     * What has already gone out. Counted off the payout rows rather than the
+     * {@code PAYOUT} ledger kind, for the reason {@link PayoutApi} states: a
+     * refused transfer leaves its debit entry in place and reverses it with an
+     * {@code ADJUSTMENT}, so a sum over the kind would remember a payout that
+     * never happened.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public long lifetimePaidOutMinor(OwnerKind ownerKind, UUID ownerId) {
+        return payouts.totalMinor(ownerKind, ownerId,
+            EnumSet.of(Payout.Status.REQUESTED, Payout.Status.SENT));
     }
 
     private void checkLimits(OwnerKind ownerKind, UUID ownerId, long amountMinor) {

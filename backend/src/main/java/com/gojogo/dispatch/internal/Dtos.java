@@ -2,6 +2,7 @@ package com.gojogo.dispatch.internal;
 
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -78,4 +79,48 @@ record AvailabilityRequest(@NotBlank @Size(max = 16) String kind, boolean availa
 
 record PositionRequest(@NotNull @DecimalMin("-90") @DecimalMax("90") Double latitude,
                        @NotNull @DecimalMin("-180") @DecimalMax("180") Double longitude) {
+}
+
+// MARK: A worker's money (Phase 4 M2)
+
+/**
+ * What a driver or courier has earned, and what of it they can take out.
+ *
+ * <p>One payload for both registries, because a dual-mode person is two rows in
+ * the worker table and one human with one wallet — a screen that showed
+ * "driving earnings" and "delivery earnings" separately would be inventing a
+ * distinction the ledger does not make.
+ *
+ * @param availableMinor      the whole spendable balance, earnings and card
+ *                            top-ups together — it is one pocket
+ * @param lifetimeEarnedMinor everything work has ever paid them, gross of what
+ *                            they have since spent or withdrawn
+ * @param withdrawableMinor   what a payout may be for: lifetime earned less
+ *                            lifetime paid out. Reported next to
+ *                            {@code availableMinor} rather than instead of it,
+ *                            because when the two differ the app owes the person
+ *                            a sentence, and it cannot write one from a single
+ *                            number. See {@code WorkerMoneyService} for why the
+ *                            cap exists at all
+ */
+record WorkerWalletDto(long availableMinor, String currency, long lifetimeEarnedMinor,
+                       long withdrawableMinor,
+                       boolean payoutsConfigured, boolean payoutsReady,
+                       String payoutsRequirement, long payoutMinMinor,
+                       List<WorkerTransactionDto> recent) {
+}
+
+/** One line of the statement, signed from the worker's point of view: negative
+ *  when money left them. */
+record WorkerTransactionDto(UUID id, long amountMinor, String kind, String memo,
+                            OffsetDateTime createdAt) {
+}
+
+/** {@code status} is REQUESTED / SENT / FAILED — a payout that failed at the
+ *  provider is reported, not hidden, and its debit has already been reversed. */
+record WorkerPayoutDto(UUID id, long amountMinor, String currency, String status,
+                       String failureReason) {
+}
+
+record WorkerPayoutRequest(@Min(1) long amountMinor) {
 }

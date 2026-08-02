@@ -467,6 +467,14 @@ extension AppState {
         // stage of an order — it is a problem with one, which is why it rides
         // beside the status rather than inside it.
         deliveryCourierSearch = order.courierSearch
+        // The handoff half (Phase 4 M2). All four are the server's answer and
+        // none is computed here — in particular the PIN, which is blank unless
+        // the order is live *and* in PIN mode, so the card can render it
+        // whenever it is non-empty rather than re-deriving that rule.
+        deliveryHandoffMode = order.handoff
+        deliveryPin = order.deliveryPin ?? ""
+        deliveryProofPhotoURL = order.proofPhotoUrl
+        deliveryConversationID = order.conversationId
         if let rating = order.rating { deliveryRating = rating }
         // The tracking map reads the restaurant's coordinates out of the
         // catalog; an order placed before this session's browse may not be in it.
@@ -535,7 +543,47 @@ extension AppState {
         deliveryCourierProgress = 0
         deliveryCourierSearch = nil
         deliveryOrderRestaurantID = nil
+        deliveryHandoffMode = "CONFIRM"
+        deliveryPin = ""
+        deliveryProofPhotoURL = nil
+        deliveryConversationID = nil
         deliveryRating = 0
         withAnimation(.easeInOut(duration: 0.3)) { deliveryStatus = nil }
+    }
+
+    // MARK: How it gets handed over (Phase 4 M2)
+
+    /// Hand it to me · leave it at the door · no code at all.
+    ///
+    /// Changeable right up until the food arrives, which is the point: nobody
+    /// decides at checkout that they will be in the shower when the courier
+    /// gets there. Optimistic, because the control *is* the feedback and a
+    /// segmented picker that snaps back half a second later reads as a bug —
+    /// and the server's answer replaces it either way.
+    func setDeliveryHandoffMode(_ mode: String) {
+        guard let orderID = deliveryLiveOrderID, mode != deliveryHandoffMode,
+              !deliveryHandoffBusy else { return }
+        let previous = deliveryHandoffMode
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.ggSnappy) { deliveryHandoffMode = mode }
+        deliveryHandoffBusy = true
+        Task {
+            defer { deliveryHandoffBusy = false }
+            do {
+                applyLiveOrder(try await DeliveryStore.shared.setHandoffMode(orderID, mode: mode))
+            } catch {
+                withAnimation(.ggSnappy) { deliveryHandoffMode = previous }
+                showDeliveryNotice(Self.message(from: error,
+                                                fallback: "Couldn't change how this is handed over."))
+            }
+        }
+    }
+
+    /// Opens the thread with whoever is bringing it — the same navigation the
+    /// courier's own "Message customer" uses, from the other end of it.
+    func messageDeliveryCourier() {
+        guard let id = deliveryConversationID else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        openJobConversation(id)
     }
 }
