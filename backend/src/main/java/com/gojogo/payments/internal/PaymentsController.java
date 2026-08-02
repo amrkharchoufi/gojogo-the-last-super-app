@@ -29,10 +29,34 @@ class PaymentsController {
 
     private final PaymentsService payments;
     private final PaymentsCurrentProfile current;
+    private final ExchangeRateService rates;
 
-    PaymentsController(PaymentsService payments, PaymentsCurrentProfile current) {
+    PaymentsController(PaymentsService payments, PaymentsCurrentProfile current,
+                       ExchangeRateService rates) {
         this.payments = payments;
         this.current = current;
+        this.rates = rates;
+    }
+
+    /**
+     * What the platform's money is worth where the caller lives, so a price can
+     * be shown in a currency they think in.
+     *
+     * <p>Identical for every caller, because it is a rate table and not an
+     * account: a per-user rate would suggest the conversion has something to do
+     * with them, and the next question after that is why their dollar is worth
+     * less than somebody else's. It stays behind the same authentication as
+     * everything else on this surface — every screen that shows money is signed
+     * in already, so there is nothing to gain from opening a new public path.
+     * Which rate to use is the app's decision, from the device's own region.
+     *
+     * <p>Nothing here changes what anybody is charged. Every amount that moves
+     * moves in {@code base}; these numbers exist so a driver in Casablanca knows
+     * whether a $30 stake is a lot.
+     */
+    @GetMapping("/v1/payments/rates")
+    Dtos.RatesDto rates() {
+        return rates.snapshot();
     }
 
     @GetMapping("/v1/payments/wallet")

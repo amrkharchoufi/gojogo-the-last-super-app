@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Positive;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -37,6 +38,28 @@ final class Dtos {
     }
 
     record TopUpRequest(@Positive(message = "Choose an amount") long amountMinor) {
+    }
+
+    /**
+     * What one unit of the platform currency is worth elsewhere, so the app can
+     * show a price in money the reader thinks in.
+     *
+     * <p>Rates are decimal strings rather than JSON numbers: a client parsing
+     * 16300 into a float and multiplying is a client that renders 16 299,999 IDR
+     * to somebody, and there is no upside to letting binary floating point
+     * anywhere near a figure with a currency symbol on it.
+     *
+     * <p>{@code base} is never a key in {@code rates} — one dollar is one
+     * dollar, and a client that found it there is one refactor away from
+     * "converting" the platform currency into itself.
+     *
+     * @param asOf when a provider last answered, or null when these are the
+     *             shipped and hand-set numbers. The app shows every converted
+     *             figure as approximate either way, which is what they are
+     * @param live whether anything checked today, so an operator reading the
+     *             response can tell a configured feed from a quiet one
+     */
+    record RatesDto(String base, Map<String, String> rates, String asOf, boolean live) {
     }
 
     /** {@code checkoutUrl} is Stripe-hosted: the card never touches this

@@ -48,10 +48,19 @@ final class WalletStore {
                                         body: TokenPurchaseBody(packId: packId))
     }
 
+    /// The exact amount, formatted for whoever is reading it.
+    ///
+    /// Kept as the name three dozen call sites already use; the work moved to
+    /// `Money`. What it used to do was `"$" + String(format: "%.2f", …)`, which
+    /// is correct in one locale and one currency: it put the symbol on the wrong
+    /// side for half of Europe, used a full stop where a comma belongs, grouped
+    /// nothing, and rendered ¥1,500 as "JPY 15.00" because it assumed two
+    /// decimal places everywhere. Yen has none; the Kuwaiti dinar has three.
+    ///
+    /// For a second line reading "≈ 298,50 MAD", ask `Money.approx` — but read
+    /// what it says about when a converted figure may be shown first.
     static func money(_ minor: Int, currency: String = "USD") -> String {
-        let symbol = currency == "USD" ? "$" : "\(currency) "
-        let sign = minor < 0 ? "−" : ""
-        return "\(sign)\(symbol)\(String(format: "%.2f", Double(abs(minor)) / 100))"
+        Money.exact(minor, currency: currency)
     }
 
     /// A line on the statement, in words. The ledger's kinds are precise; a

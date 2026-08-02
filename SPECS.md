@@ -323,5 +323,6 @@ All **CONFIG** knobs above live in one place: environment for infra-ish values, 
 | Healthcare-specific compliance | Providers onboard as service providers; no medical records, no claims |
 | Real estate (ownership transfer) | Vision marks it future |
 | PDF receipts/invoices | Order record is the receipt (§1) |
-| Multi-currency | Single `PLATFORM_CURRENCY` until a second market exists |
+| Multi-currency **settlement** | Still deferred: single `PLATFORM_CURRENCY` until a second market exists. Real multi-currency means a rate recorded on every entry, FX gain/loss as its own account, Stripe settlement currencies and refunds at the original rate — half of that is how money goes missing. |
+| Multi-currency **display** | **Done (2026-08-02)** — `GET /v1/payments/rates` serves rates against `PLATFORM_CURRENCY`; the app shows every price in the device's currency marked `≈`, alongside the exact amount wherever money moves. Rates come from a shipped table, overridable per-currency via `payments.fx.rate.<CCY>` (ten-thousandths), refreshed from `payments.fx.url` if one is set (off by default). Charges are unaffected. |
 | KYC vendor integration | **Done (2026-07-30)** — Sumsub behind `IdentityVerificationApi` in the `kyc` module; sandbox credentials, production is a Secrets Manager swap. Manual document review remains the fallback when unconfigured. |
