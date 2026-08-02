@@ -196,8 +196,15 @@ final class MessagingStore {
         // A rename wins over every server-supplied name for a 1:1. A group title
         // names the thread rather than a person, so it is left alone.
         let renamed = dto.isGroup ? nil : other.flatMap { aliasByContact[$0.id] }
+        // `dto.title` is one string every participant reads, so it can only ever
+        // name a *group*. A 1:1 is named after the person you're talking to, and
+        // each side resolves that for itself: honouring a stored title here would
+        // show whoever the creator named the thread after — on a thread somebody
+        // else started, that is your own name. Older threads still carry such a
+        // title, so it is ignored rather than trusted as a fallback.
+        let storedTitle: String? = dto.isGroup ? dto.title : nil
         let title = renamed
-            ?? dto.title
+            ?? storedTitle
             ?? other?.displayName
             ?? other.map { "@\($0.handle ?? "user")" }
             ?? "Conversation"

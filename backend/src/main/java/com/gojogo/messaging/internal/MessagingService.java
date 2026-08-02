@@ -119,7 +119,11 @@ class MessagingService {
         ConversationMeta meta = new ConversationMeta(
             UUID.randomUUID(),
             isDirect ? "DIRECT" : "GROUP",
-            req.title(),
+            // A title is one string every participant reads, so it can only name
+            // a group. Dropping it for a 1:1 keeps a creator from stamping the
+            // thread with the name *they* know the other person by — which the
+            // other person would then read as their own name.
+            isDirect ? null : req.title(),
             ordered,
             req.circleId(),
             req.background(),

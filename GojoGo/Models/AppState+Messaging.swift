@@ -345,8 +345,12 @@ extension AppState {
               user.profileId != SocialStore.shared.myProfileId else { return false }
         _ = await addWorldGraphContact(phone: raw)
         do {
+            // No title: a 1:1 is named after the other participant, and each side
+            // resolves that for itself. Sending one would store *this* viewer's
+            // idea of the name on a row both sides read, and the other person
+            // would open the thread to find their own name on it.
             let convo = try await MessagingStore.shared.createConversation(
-                participantIds: [user.profileId], title: user.displayName,
+                participantIds: [user.profileId], title: nil,
                 background: worldDefaultBackground)
             if worldConversations.firstIndex(where: { $0.id == convo.id }) == nil {
                 worldConversations.insert(convo, at: 0)
