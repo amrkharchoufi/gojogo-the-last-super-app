@@ -11,17 +11,18 @@ name: Schema check
 # the modules don't reach into each other, and says nothing whatsoever about
 # whether the application can start. This job is the missing half.
 #
-# It deliberately runs on pull requests and on every push to main, *before* the
-# deploy workflow gets there — a migration that fails here is a migration that
-# would have failed in production.
-
+# It runs on pull requests, and as the deploy workflow's first job — a migration
+# that fails here is a migration that would have failed in production, so
+# nothing should reach ECS until it has passed.
+#
+# It used to also run on its own `push: branches: [main]` trigger, in parallel
+# with the deploy. That is why it did not save 9fc9394 on 2026-08-02: it caught
+# the missing `partner.partner_account.reward_paid_at` column 28 minutes before
+# the rollout, and had no way to say so to anything. A check nothing waits for
+# is a notification, not a gate. `workflow_call` is what makes it a gate; the
+# push trigger is gone because deploy-backend.yml now covers main.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'backend/src/main/resources/db/migration/**'
-      - 'backend/src/main/java/**'
-      - '.github/workflows/schema-check.yml'
+  workflow_call:
   pull_request:
     paths:
       - 'backend/src/main/resources/db/migration/**'

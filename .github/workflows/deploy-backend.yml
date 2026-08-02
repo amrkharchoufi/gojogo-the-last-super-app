@@ -20,6 +20,8 @@ on:
       - 'backend/**'
       - 'scripts/deploy-backend.sh'
       - '.github/workflows/deploy-backend.yml'
+      # Changing the gate is a reason to run the gate.
+      - '.github/workflows/schema-check.yml'
   workflow_dispatch:
 
 # One deploy at a time. Two overlapping runs would race on the ECS service and
@@ -30,7 +32,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The gate. `mvn test` proves the code compiles and the modules respect each
+  # other's boundaries; it cannot prove the application starts, because there is
+  # no Postgres on the machine this is built from. This job runs every migration
+  # against a real one and boots the app against the result, and deploy waits
+  # for it — on 2026-08-02 it ran anyway, in parallel, and a task definition
+  # that could not survive `ddl-auto: validate` went to ECS while the check that
+  # knew it was failing.
+  #
+  # It is a separate workflow file rather than a job spelled out here because
+  # pull requests need it too, and `needs:` cannot reach across files.
+  schema-check:
+    uses: ./.github/workflows/schema-check.yml
+
   deploy:
+    needs: schema-check
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
