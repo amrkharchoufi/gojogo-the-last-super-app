@@ -70,7 +70,7 @@ class VehicleLifecycleTests {
         Vehicle vehicle = approvedCar();
 
         vehicle.apply(VehicleCategory.CAR.name(), "Dacia", "Logan", 2019, "White",
-            "77777-B-9", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
+            "77777-B-9", "MA", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
 
         assertThat(vehicle.getState()).isEqualTo(VehicleState.SUBMITTED);
     }
@@ -82,7 +82,7 @@ class VehicleLifecycleTests {
         Vehicle vehicle = approvedCar();
 
         vehicle.apply(VehicleCategory.XL.name(), "Dacia", "Logan", 2019, "White",
-            "12345-A-6", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
+            "12345-A-6", "MA", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
 
         assertThat(vehicle.getState()).isEqualTo(VehicleState.SUBMITTED);
     }
@@ -94,7 +94,7 @@ class VehicleLifecycleTests {
         Vehicle vehicle = approvedCar();
 
         vehicle.apply(VehicleCategory.CAR.name(), "Dacia", "Logan", 2019, "Blue",
-            "12345-A-6", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
+            "12345-A-6", "MA", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
 
         assertThat(vehicle.getState()).isEqualTo(VehicleState.APPROVED);
     }
@@ -145,7 +145,7 @@ class VehicleLifecycleTests {
     void papersExpireOnTheEarlierDate() {
         Vehicle vehicle = approvedCar();
         vehicle.apply(VehicleCategory.CAR.name(), "Dacia", "Logan", 2019, "White",
-            "12345-A-6", "Casablanca", LocalDate.of(2027, 1, 1), LocalDate.of(2026, 3, 1));
+            "12345-A-6", "MA", "Casablanca", LocalDate.of(2027, 1, 1), LocalDate.of(2026, 3, 1));
 
         // A car with insurance and a lapsed registration is as illegal as the
         // reverse, so the earlier one is the answer.
@@ -200,7 +200,7 @@ class VehicleLifecycleTests {
     void datesAreRequiredSeparately() {
         Vehicle vehicle = activeCar();
         vehicle.apply(VehicleCategory.CAR.name(), "Dacia", "Logan", 2019, "White",
-            "12345-A-6", "Casablanca", null, null);
+            "12345-A-6", "MA", "Casablanca", null, null);
         when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.of(vehicle));
         when(documents.findByVehicleIdOrderByKindAsc(vehicle.getId())).thenReturn(bothPapers(vehicle));
 
@@ -231,6 +231,90 @@ class VehicleLifecycleTests {
         assertThat(service.whatBlocksSubmission(account)).isEmpty();
     }
 
+    // MARK: Trottinettes, which have no paperwork to have
+
+    @Test
+    @DisplayName("a trottinette needs no plate, no carte grise and no insurance — "
+        + "demanding them is a submission nobody riding one can finish")
+    void trottinettesCarryNoPapers() {
+        Vehicle trottinette = activeTrottinette();
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.of(trottinette));
+        when(documents.findByVehicleIdOrderByKindAsc(trottinette.getId())).thenReturn(List.of());
+
+        assertThat(service.whatBlocksSubmission(account)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("nor a driving licence, which is why the requirement asks the "
+        + "vehicle rather than the kind")
+    void trottinettesNeedNoLicence() {
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT))
+            .thenReturn(Optional.of(activeTrottinette()));
+
+        assertThat(service.isDriverLicenseRequired(account)).isFalse();
+    }
+
+    @Test
+    @DisplayName("a car does, and so does an application with no vehicle on file "
+        + "yet — the common case, and the safe way to be wrong")
+    void carsAndUnknownsNeedALicence() {
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.of(activeCar()));
+        assertThat(service.isDriverLicenseRequired(account)).isTrue();
+
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.empty());
+        assertThat(service.isDriverLicenseRequired(account)).isTrue();
+    }
+
+    @Test
+    @DisplayName("a courier needs no driving licence from us — they may be walking")
+    void couriersNeedNoLicence() {
+        PartnerAccount courier = new PartnerAccount(OWNER, PartnerKind.COURIER, "Amina delivers");
+
+        assertThat(service.isDriverLicenseRequired(courier)).isFalse();
+    }
+
+    // MARK: Where the plate was issued
+
+    @Test
+    @DisplayName("a plate with no country is not an identifier, and blocks the "
+        + "submission until it has one")
+    void aPlateNeedsTheCountryThatIssuedIt() {
+        Vehicle vehicle = activeCar();
+        vehicle.apply(VehicleCategory.CAR.name(), "Dacia", "Logan", 2019, "White",
+            "12345-A-6", "", "", TODAY.plusYears(1), TODAY.plusYears(1));
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.of(vehicle));
+        when(documents.findByVehicleIdOrderByKindAsc(vehicle.getId())).thenReturn(bothPapers(vehicle));
+
+        assertThat(service.whatBlocksSubmission(account))
+            .hasValueSatisfying(blocker -> assertThat(blocker).contains("registered"));
+    }
+
+    @Test
+    @DisplayName("moving the same plate to another country describes a different "
+        + "car, so the old approval cannot follow it")
+    void changingTheCountryResetsTheVerdict() {
+        Vehicle vehicle = approvedCar();
+
+        vehicle.apply(VehicleCategory.CAR.name(), "Dacia", "Logan", 2019, "White",
+            "12345-A-6", "FR", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
+
+        assertThat(vehicle.getState()).isEqualTo(VehicleState.SUBMITTED);
+    }
+
+    @Test
+    @DisplayName("the country is stored upper-case whatever case it arrived in — "
+        + "the uniqueness index compares it exactly")
+    void theCountryIsNormalised() {
+        Vehicle vehicle = approvedCar();
+
+        vehicle.apply(VehicleCategory.CAR.name(), "Dacia", "Logan", 2019, "White",
+            "12345-A-6", "ma", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
+
+        assertThat(vehicle.getCountry()).isEqualTo("MA");
+        // …and the same country in another case is not a different car.
+        assertThat(vehicle.getState()).isEqualTo(VehicleState.APPROVED);
+    }
+
     // MARK: What dispatch is told
 
     @Test
@@ -238,7 +322,7 @@ class VehicleLifecycleTests {
     void activeCategoryIsWhatDispatchGets() {
         Vehicle vehicle = activeCar();
         vehicle.apply(VehicleCategory.XL.name(), "Mercedes", "Vito", 2021, "Black",
-            "12345-A-6", "Casablanca", TODAY.plusYears(1), TODAY.plusYears(1));
+            "12345-A-6", "MA", "Casablanca", TODAY.plusYears(1), TODAY.plusYears(1));
         when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.of(vehicle));
 
         assertThat(service.activeCategory(ACCOUNT)).contains(VehicleCategory.XL);
@@ -262,13 +346,22 @@ class VehicleLifecycleTests {
         Vehicle vehicle = new Vehicle(ACCOUNT, OWNER, VehicleCategory.CAR.name());
         setField(vehicle, "id", UUID.randomUUID());
         vehicle.apply(VehicleCategory.CAR.name(), "Dacia", "Logan", 2019, "White",
-            "12345-A-6", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
+            "12345-A-6", "MA", "Casablanca", TODAY.plusYears(1), TODAY.plusMonths(6));
         vehicle.approve(null);
         return vehicle;
     }
 
     private Vehicle activeCar() {
         Vehicle vehicle = approvedCar();
+        vehicle.setActive(true);
+        return vehicle;
+    }
+
+    /** BIKE under a driver account is the app's "trottinette" — no plate, no
+     *  papers, and nothing to expire. */
+    private Vehicle activeTrottinette() {
+        Vehicle vehicle = new Vehicle(ACCOUNT, OWNER, VehicleCategory.BIKE.name());
+        setField(vehicle, "id", UUID.randomUUID());
         vehicle.setActive(true);
         return vehicle;
     }

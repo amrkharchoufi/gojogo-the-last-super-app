@@ -46,6 +46,14 @@ class PartnerController {
         return partners.save(current.require(jwt).id(), request);
     }
 
+    /** The one part of a driving licence that is typed rather than photographed. */
+    @PutMapping("/v1/partner/applications/{accountId}/driver-licence")
+    PartnerAccountDto saveDriverLicence(@AuthenticationPrincipal Jwt jwt,
+                                        @PathVariable UUID accountId,
+                                        @Valid @RequestBody SaveDriverLicenseRequest request) {
+        return partners.saveDriverLicense(current.require(jwt).id(), accountId, request);
+    }
+
     /** A private place to PUT one document. The bytes never pass through here. */
     @PostMapping("/v1/partner/applications/{accountId}/documents/presign")
     DocumentUploadResponse presignDocument(@AuthenticationPrincipal Jwt jwt,

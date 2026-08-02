@@ -198,8 +198,13 @@ private struct PartnerRulesPage: View {
                  detail: "Never work impaired. Follow all local traffic and safety laws at all times."),
         ]
         if role == .driver {
-            base.insert(Rule(icon: "car.fill", title: "Valid car & papers",
-                             detail: "A roadworthy vehicle, a valid licence, and up-to-date registration (carte grise)."),
+            // "(carte grise)" used to be in here, which is what the document is
+            // called in Morocco and in France and nowhere else. The rule is the
+            // same everywhere; the name on the paper is not, so the name is left
+            // to the form — where the country is known — and the rule says what
+            // it means.
+            base.insert(Rule(icon: "car.fill", title: "Valid vehicle & papers",
+                             detail: "A roadworthy vehicle, a valid driving licence, and current registration and insurance."),
                         at: 1)
         }
         return base
@@ -227,6 +232,18 @@ private struct PartnerRulesPage: View {
         .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
     }
 
+    /// The stake in the currency the server actually charges it in.
+    ///
+    /// This page hardcoded "$30" twice while the page after it read the amount
+    /// and the currency off the application — so a driver in a market billed in
+    /// dirhams or naira agreed to one number on the rules screen and was asked
+    /// for a different one on the next. The constant survives only as the value
+    /// to show before the application has loaded.
+    private var stakeLabel: String {
+        guard let stake = app.driverStake else { return "$\(Int(PartnerRole.stakeAmount))" }
+        return WalletStore.money(stake.requiredMinor, currency: stake.currency)
+    }
+
     private var stakeNote: some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: "lock.shield.fill")
@@ -235,7 +252,7 @@ private struct PartnerRulesPage: View {
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(GGColor.white))
             VStack(alignment: .leading, spacing: 3) {
-                Text("A $\(Int(PartnerRole.stakeAmount)) refundable stake")
+                Text("A \(stakeLabel) refundable stake")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(GGColor.textPrimary)
                 Text("Held as a good-conduct deposit. If a \(role.earner.dropLast()) is wronged, it can be released to them as compensation. You get it back when you leave in good standing.")
@@ -258,7 +275,7 @@ private struct PartnerRulesPage: View {
                 Image(systemName: app.partnerAgreedToTerms ? "checkmark.square.fill" : "square")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(app.partnerAgreedToTerms ? GGColor.white : GGColor.textTertiary)
-                Text("I've read and agree to the Partner Terms, the community rules, and the $\(Int(PartnerRole.stakeAmount)) stake policy.")
+                Text("I've read and agree to the Partner Terms, the community rules, and the \(stakeLabel) stake policy.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(GGColor.textPrimary)
                     .multilineTextAlignment(.leading)
@@ -458,6 +475,17 @@ private struct PartnerKYCPage: View {
     let role: PartnerRole
     /// Which paper is in flight, so the tile can say so rather than looking dead.
     @State private var uploadingDocument: String?
+    /// Which paper the picker on screen is for. One set of pickers serves every
+    /// tile — presenting a camera and a library per tile would be six sheets
+    /// racing each other for the same screen.
+    @State private var pendingDocument: String?
+    @State private var choosingSource = false
+    @State private var showLibrary = false
+    @State private var showCamera = false
+    @State private var libraryItem: PhotosPickerItem?
+    /// Where the vehicle is registered, and which expiry date is being set.
+    @State private var choosingCountry = false
+    @State private var editingDate: DateField?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -478,6 +506,21 @@ private struct PartnerKYCPage: View {
         // The verdict can land while this page is open — a check that was
         // "in review" when they got here may be done by the time they look.
         .task { await app.refreshIdentity() }
+        .modifier(DocumentSourcePickers(
+            choosingSource: $choosingSource, showLibrary: $showLibrary,
+            showCamera: $showCamera, libraryItem: $libraryItem,
+            onCancel: { pendingDocument = nil },
+            onPicked: { data in
+                guard let kind = pendingDocument else { return }
+                pendingDocument = nil
+                Task { await upload(data, kind: kind) }
+            }))
+        .sheet(isPresented: $choosingCountry) {
+            CountryPickerSheet(selected: $app.partnerApplication.vehicleCountry)
+        }
+        .sheet(item: $editingDate) { field in
+            ExpiryDateSheet(title: field.title, iso: binding(for: field))
+        }
     }
 
     private var intro: some View {
@@ -671,7 +714,7 @@ private struct PartnerKYCPage: View {
                 Text("You're all set")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(GGColor.textPrimary)
-                Text("Trottinettes don't need a driver's licence or vehicle registration — just your verified ID.")
+                Text("E-scooters don't need a driving licence or vehicle papers anywhere we operate — just your verified ID.")
                     .font(.system(size: 13))
                     .foregroundStyle(GGColor.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -687,9 +730,21 @@ private struct PartnerKYCPage: View {
             formCard(title: "Driver's licence", icon: "creditcard.fill") {
                 fieldRow(title: "Licence number", placeholder: "Licence number",
                          text: $app.partnerApplication.licenseNumber, autocaps: .characters)
-                captureTile(title: "Licence photo", subtitle: "Both sides",
-                            icon: "creditcard.fill",
-                            captured: $app.partnerApplication.licenseCaptured)
+                // Both hang off the application rather than off the car: the
+                // licence is the driver's, and it outlives the Yaris. Two tiles
+                // rather than one "both sides" because one upload is one image,
+                // and the back is a different document — it carries what you're
+                // entitled to drive and when that runs out.
+                uploadTile(kind: PartnerDocumentKind.driverLicenseFront,
+                           title: "Licence — front", subtitle: "The photo side",
+                           icon: "creditcard.fill",
+                           uploaded: app.driverLicenseUploaded(
+                               PartnerDocumentKind.driverLicenseFront))
+                uploadTile(kind: PartnerDocumentKind.driverLicenseBack,
+                           title: "Licence — back", subtitle: "Categories and expiry",
+                           icon: "creditcard.and.123",
+                           uploaded: app.driverLicenseUploaded(
+                               PartnerDocumentKind.driverLicenseBack))
             }
             formCard(title: "Your vehicle", icon: "car.fill") {
                 HStack(spacing: 10) {
@@ -704,31 +759,88 @@ private struct PartnerKYCPage: View {
                     fieldRow(title: "Colour", placeholder: "White",
                              text: $app.partnerApplication.vehicleColor)
                 }
-                fieldRow(title: "Licence plate", placeholder: "12345 - أ - 6",
+                // Country first, because it decides what the two fields under it
+                // are called and whether the second one exists at all.
+                countryRow
+                fieldRow(title: "Licence plate", placeholder: plateRules.plateExample,
                          text: $app.partnerApplication.plate, autocaps: .characters)
-                // Plates are unique per *region*, never globally — the same
-                // string is a different car in another country, which is why
-                // the server refuses a duplicate only within one.
-                fieldRow(title: "Registered in", placeholder: "Casablanca",
-                         text: $app.partnerApplication.vehicleRegion)
+                // Asked only where a plate is issued by a state or a province.
+                // Everywhere else plates are national, and a city here would be
+                // an address pretending to be part of an identifier — two
+                // spellings of one town landing in two uniqueness scopes.
+                if let subdivision = plateRules.subdivisionLabel {
+                    fieldRow(title: subdivision,
+                             placeholder: plateRules.subdivisionExample ?? subdivision,
+                             text: $app.partnerApplication.vehicleRegion)
+                }
                 HStack(spacing: 10) {
-                    fieldRow(title: "Registration expires", placeholder: "2027-04-30",
-                             text: $app.partnerApplication.registrationExpiresOn)
-                    fieldRow(title: "Insurance expires", placeholder: "2027-01-15",
-                             text: $app.partnerApplication.insuranceExpiresOn)
+                    dateRow(title: "Registration expires", field: .registration)
+                    dateRow(title: "Insurance expires", field: .insurance)
                 }
                 // These two are real uploads into the private prefix — the same
                 // place an ID card goes, and never a public URL. A driver has to
                 // have saved the vehicle first, because a document belongs to a
                 // car rather than to an application.
-                documentTile(kind: "REGISTRATION", title: "Vehicle registration",
-                             subtitle: "Carte grise — matching the plate above",
+                documentTile(kind: VehicleDocumentKind.registration,
+                             title: "Vehicle registration",
+                             subtitle: registrationHint,
                              icon: "doc.text.fill")
-                documentTile(kind: "INSURANCE", title: "Insurance certificate",
+                documentTile(kind: VehicleDocumentKind.insurance,
+                             title: "Insurance certificate",
                              subtitle: "Current, and expiring after today",
                              icon: "shield.lefthalf.filled")
             }
         }
+    }
+
+    private var plateRules: VehicleRegistry.Rules {
+        VehicleRegistry.rules(for: app.partnerApplication.vehicleCountry)
+    }
+
+    /// "Carte grise — matching the plate above" where that is what the document
+    /// is called, and just the plain instruction where the local name for it is
+    /// the plain one. Repeating "vehicle registration" under a tile titled
+    /// "Vehicle registration" says nothing.
+    private var registrationHint: String {
+        let local = plateRules.registrationName
+        guard local != "vehicle registration" else { return "Matching the plate above" }
+        return "\(local.prefix(1).uppercased())\(local.dropFirst()) — matching the plate above"
+    }
+
+    private var countryRow: some View {
+        let code = app.partnerApplication.vehicleCountry
+        return VStack(alignment: .leading, spacing: 5) {
+            Text("REGISTERED IN")
+                .font(.ggMono(9, .semibold))
+                .tracking(0.4)
+                .foregroundStyle(GGColor.textTertiary)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                choosingCountry = true
+            } label: {
+                HStack(spacing: 8) {
+                    Text(code.isEmpty ? "Choose a country"
+                         : "\(VehicleRegistry.flag(code))  \(VehicleRegistry.name(of: code))")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(code.isEmpty ? GGColor.textTertiary : GGColor.textPrimary)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(GGColor.ink(0.06)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(GGColor.ink(0.08), lineWidth: 0.5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // Courier — vehicle type
@@ -821,22 +933,122 @@ private struct PartnerKYCPage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// A vehicle paper, uploaded for real.
+    /// A date on a document, picked rather than typed.
     ///
-    /// The tile it replaces toggled a Bool and checked nothing — the same
-    /// pattern the identity half lost when Sumsub arrived, for the same reason:
-    /// a checkbox that claims a photo was taken is worse than no photo, because
-    /// it looks like evidence.
+    /// These two were text fields asking for `2027-04-30`, which is a format
+    /// almost nobody writes by hand: most of the world types 30/04/2027 and much
+    /// of the Americas types 04/30/2027. Both were refused, and the refusal
+    /// arrived at submit — long after the mistake, with no clue which of the two
+    /// fields was wrong.
     ///
-    /// It saves the vehicle first when there isn't one yet. A document belongs
-    /// to a car, and asking somebody to press "add vehicle" before they can
-    /// attach its registration is a step whose only product is confusion.
-    @ViewBuilder
+    /// A picker cannot produce an invalid date and shows it in the reader's own
+    /// calendar and language, while what travels stays the ISO string the API
+    /// speaks. It reads "Select a date" until one is actually chosen, because
+    /// this whole screen's original sin was controls that looked answered
+    /// before anybody had answered them.
+    private func dateRow(title: String, field: DateField) -> some View {
+        let iso = binding(for: field).wrappedValue
+        return VStack(alignment: .leading, spacing: 5) {
+            Text(title.uppercased())
+                .font(.ggMono(9, .semibold))
+                .tracking(0.4)
+                .foregroundStyle(GGColor.textTertiary)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                editingDate = field
+            } label: {
+                HStack(spacing: 6) {
+                    Text(iso.isEmpty ? "Select a date" : Self.readable(iso))
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(iso.isEmpty ? GGColor.textTertiary : GGColor.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 0)
+                    Image(systemName: "calendar")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(GGColor.ink(0.06)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(GGColor.ink(0.08), lineWidth: 0.5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Which of the two expiry dates a sheet is editing. An enum rather than the
+    /// binding itself because `sheet(item:)` needs something identifiable, and
+    /// two dates is not enough to justify anything cleverer.
+    enum DateField: String, Identifiable {
+        case registration, insurance
+        var id: String { rawValue }
+        var title: String {
+            self == .registration ? "Registration expires" : "Insurance expires"
+        }
+    }
+
+    private func binding(for field: DateField) -> Binding<String> {
+        switch field {
+        case .registration: return $app.partnerApplication.registrationExpiresOn
+        case .insurance:    return $app.partnerApplication.insuranceExpiresOn
+        }
+    }
+
+    /// The stored `yyyy-MM-dd` as the reader would write it — their calendar,
+    /// their month names, their order.
+    private static func readable(_ iso: String) -> String {
+        guard let date = isoFormatter.date(from: iso) else { return iso }
+        return date.formatted(.dateTime.day().month(.abbreviated).year())
+    }
+
+    /// Fixed POSIX locale, Gregorian, UTC — never the device's. The wire format
+    /// is a Gregorian ISO date, and formatting one through a Persian, Buddhist
+    /// or Japanese-era calendar would send the server a year it cannot read.
+    static let isoFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    /// A vehicle paper — a claim about the car, so whether it has arrived is
+    /// read off the car.
     private func documentTile(kind: String, title: String, subtitle: String,
                               icon: String) -> some View {
-        let uploaded = !(app.driverApplication?.activeVehicle?
-            .missingDocuments?.contains(kind) ?? true)
-        PhotosPicker(selection: binding(for: kind), matching: .images) {
+        uploadTile(kind: kind, title: title, subtitle: subtitle, icon: icon,
+                   uploaded: !(app.driverApplication?.activeVehicle?
+                       .missingDocuments?.contains(kind) ?? true))
+    }
+
+    /// One upload, whatever it hangs off — a car's papers or the driver's own
+    /// licence.
+    ///
+    /// The tiles this replaces toggled a Bool and checked nothing — the same
+    /// pattern the identity half lost when Sumsub arrived, for the same reason:
+    /// a checkbox that claims a photo was taken is worse than no photo, because
+    /// it looks like evidence. So `uploaded` is always somebody else's answer —
+    /// the server's `missingDocuments` — and never a flag this screen sets on
+    /// itself the moment it is tapped.
+    ///
+    /// Tapping asks camera or library rather than assuming. Most of these papers
+    /// are in somebody's hand while they fill this in, and a tile that only ever
+    /// opened the library asked them to go and photograph it somewhere else first.
+    private func uploadTile(kind: String, title: String, subtitle: String,
+                            icon: String, uploaded: Bool) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            pendingDocument = kind
+            choosingSource = true
+        } label: {
             HStack(spacing: 12) {
                 Image(systemName: uploaded ? "checkmark.circle.fill" : icon)
                     .font(.system(size: 15, weight: .semibold))
@@ -871,82 +1083,238 @@ private struct PartnerKYCPage: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // One upload at a time. Two in flight would race each other to replace
+        // `driverApplication`, and the loser's tile would go back to un-uploaded.
+        .disabled(uploadingDocument != nil)
     }
 
-    private func binding(for kind: String) -> Binding<PhotosPickerItem?> {
-        Binding(get: { nil }, set: { item in
-            guard let item else { return }
-            Task { await upload(item, kind: kind) }
-        })
-    }
-
-    private func upload(_ item: PhotosPickerItem, kind: String) async {
-        guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+    private func upload(_ data: Data, kind: String) async {
         uploadingDocument = kind
         defer { uploadingDocument = nil }
-        // The vehicle has to exist before its papers can hang off it.
-        if app.driverApplication?.activeVehicle == nil,
-           !(await app.saveDriverVehicle()) { return }
+        guard !PartnerDocumentKind.driverLicense.contains(kind) else {
+            // The licence belongs to the applicant, so it needs no vehicle —
+            // and asking for one first would be a car standing between somebody
+            // and photographing their own licence.
+            await app.uploadDriverLicense(kind: kind, image: data)
+            return
+        }
+        // A car's papers do: the vehicle has to exist before they can hang off
+        // it. The licence number goes with that save — the server wants it
+        // before it will call the application complete, and this is the first
+        // moment the app has anything to send.
+        if app.driverApplication?.activeVehicle == nil {
+            await app.saveDriverLicenseNumber()
+            guard await app.saveDriverVehicle() else { return }
+        }
         await app.uploadVehicleDocument(kind: kind, image: data)
     }
 
-    private func captureTile(title: String, subtitle: String, icon: String,
-                             captured: Binding<Bool>) -> some View {
-        Button {
-            UIImpactFeedbackGenerator(style: captured.wrappedValue ? .light : .medium).impactOccurred()
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                captured.wrappedValue.toggle()
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: captured.wrappedValue ? "checkmark" : icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(captured.wrappedValue ? GGColor.onAccent : GGColor.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(captured.wrappedValue ? GGColor.white : GGColor.ink(0.08)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
-                    Text(captured.wrappedValue ? "Captured" : subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(captured.wrappedValue ? GGColor.textSecondary : GGColor.textTertiary)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: captured.wrappedValue ? "arrow.counterclockwise" : "camera.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(GGColor.textTertiary)
-            }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(GGColor.ink(0.05)))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(captured.wrappedValue ? GGColor.ink(0.2) : GGColor.ink(0.08),
-                                  lineWidth: captured.wrappedValue ? 1 : 0.5))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     private var submitButton: some View {
-        Button {
-            app.submitDriverApplication()
-        } label: {
-            Text("Submit for review")
+        VStack(spacing: 8) {
+            // A greyed-out button that won't say why is the thing people report
+            // as broken, so the server's own sentence goes underneath it.
+            if let hint = app.partnerSubmitHint, !app.partnerKYCComplete {
+                Text(hint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
+                    .transition(.opacity)
+            }
+            Button {
+                app.submitDriverApplication()
+            } label: {
+                HStack(spacing: 8) {
+                    if app.partnerSubmitting {
+                        ProgressView().tint(GGColor.onAccent)
+                    }
+                    Text(app.partnerSubmitting ? "Submitting…" : "Submit for review")
+                }
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(GGColor.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
                 .background(Capsule().fill(GGColor.white))
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(!app.partnerKYCComplete || app.partnerSubmitting)
+            .opacity(app.partnerKYCComplete && !app.partnerSubmitting ? 1 : 0.4)
         }
-        .buttonStyle(PressableStyle())
-        .disabled(!app.partnerKYCComplete || app.partnerSubmitting)
-        .opacity(app.partnerKYCComplete && !app.partnerSubmitting ? 1 : 0.4)
+        .animation(.easeInOut(duration: 0.2), value: app.partnerSubmitHint)
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+}
+
+// MARK: - Where the car is registered
+
+/// Every country, searchable, in the reader's own language and sort order.
+///
+/// A full list rather than the handful the platform launched in: a driver whose
+/// country isn't on a list can't correct it, and "we only know about these
+/// eleven places" is precisely the assumption this screen was carrying.
+private struct CountryPickerSheet: View {
+    @Binding var selected: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var matches: [VehicleRegistry.Country] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return VehicleRegistry.countries }
+        return VehicleRegistry.countries.filter {
+            $0.name.localizedCaseInsensitiveContains(trimmed)
+                || $0.code.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(matches) { country in
+                Button {
+                    selected = country.code
+                    dismiss()
+                } label: {
+                    HStack(spacing: 12) {
+                        Text(VehicleRegistry.flag(country.code))
+                        Text(country.name)
+                            .foregroundStyle(GGColor.textPrimary)
+                        Spacer(minLength: 0)
+                        if country.code == selected {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(GGColor.textPrimary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .listRowBackground(Color.clear)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(GGColor.sheetBG.ignoresSafeArea())
+            .searchable(text: $query, prompt: "Search countries")
+            .navigationTitle("Registered in")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// One expiry date, on a wheel that cannot produce an invalid one.
+///
+/// The range starts today: a registration that expired last month is not an
+/// expiry date somebody is entering on purpose, and the server refuses it
+/// anyway — better to make it unreachable than to reject it two screens later.
+private struct ExpiryDateSheet: View {
+    let title: String
+    @Binding var iso: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var date = Date()
+
+    var body: some View {
+        NavigationStack {
+            DatePicker(title, selection: $date, in: Date()...,
+                       displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .tint(GGColor.white)
+                .labelsHidden()
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(GGColor.sheetBG.ignoresSafeArea())
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            iso = PartnerKYCPage.isoFormatter.string(from: date)
+                            dismiss()
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+        .onAppear {
+            // Opens on what's already recorded, or a year out — roughly when
+            // papers renewed today would lapse, so the first spin is a short one.
+            // Clamped forward, because a date already recorded may have expired
+            // since, and starting the wheel outside its own range is undefined.
+            let stored = PartnerKYCPage.isoFormatter.date(from: iso)
+                ?? Calendar(identifier: .gregorian)
+                    .date(byAdding: .year, value: 1, to: Date()) ?? Date()
+            date = max(stored, Date())
+        }
+    }
+}
+
+// MARK: - Camera or library, for a paper you're holding
+
+/// The three presentations every document tile shares: the choice, the library
+/// and the camera.
+///
+/// One set for the whole page rather than one per tile. SwiftUI presents at most
+/// one sheet per view, so six tiles carrying their own pickers would mean six
+/// modifiers competing for the same slot — and a photo landing on whichever tile
+/// won. The page holds the pickers; the tile only says which paper it is for.
+private struct DocumentSourcePickers: ViewModifier {
+    @Binding var choosingSource: Bool
+    @Binding var showLibrary: Bool
+    @Binding var showCamera: Bool
+    @Binding var libraryItem: PhotosPickerItem?
+    let onCancel: () -> Void
+    let onPicked: (Data) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog("Add this document", isPresented: $choosingSource,
+                                titleVisibility: .visible) {
+                // Absent in the Simulator and on a device with no usable camera,
+                // where offering it would present an empty controller.
+                if CameraCaptureView.isAvailable {
+                    Button("Take a photo") { showCamera = true }
+                }
+                Button("Choose from library") { showLibrary = true }
+                Button("Cancel", role: .cancel) { onCancel() }
+            }
+            .photosPicker(isPresented: $showLibrary, selection: $libraryItem,
+                          matching: .images)
+            .onChange(of: libraryItem) { _, item in
+                guard let item else { return }
+                libraryItem = nil
+                Task {
+                    guard let data = try? await item.loadTransferable(type: Data.self) else {
+                        onCancel()
+                        return
+                    }
+                    onPicked(data)
+                }
+            }
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraCaptureView(
+                    onCapture: { capture in
+                        showCamera = false
+                        guard case .photo(let data) = capture else {
+                            onCancel()
+                            return
+                        }
+                        onPicked(data)
+                    },
+                    onCancel: {
+                        showCamera = false
+                        onCancel()
+                    },
+                    photosOnly: true)
+                .ignoresSafeArea()
+            }
     }
 }
 

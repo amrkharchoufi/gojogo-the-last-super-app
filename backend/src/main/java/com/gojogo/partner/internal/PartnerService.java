@@ -131,6 +131,22 @@ class PartnerService {
         return toDto(account);
     }
 
+    /**
+     * Records the number printed on a driving licence.
+     *
+     * <p>Separate from {@link #save} because that is a whole-object upsert and
+     * this is one field: an app calling save to record a number would blank the
+     * address an operator typed. It is also the only part of the licence the
+     * applicant types rather than photographs, which is why it can be written
+     * before either photo arrives.
+     */
+    @Transactional
+    PartnerAccountDto saveDriverLicense(UUID me, UUID accountId, SaveDriverLicenseRequest request) {
+        PartnerAccount account = requireEditable(me, accountId);
+        account.applyDriverLicenseNumber(request.number());
+        return toDto(account);
+    }
+
     /** Somewhere private to put one paper. Nothing is recorded until the client
      *  comes back with the key, so an abandoned upload leaves no row. */
     @Transactional(readOnly = true)
@@ -279,11 +295,23 @@ class PartnerService {
                 + "verify in the app, and nobody can do it for them");
     }
 
-    /** What this application still needs on paper — which depends on whether an
-     *  IDV vendor is answering the identity half (see
-     *  {@link PartnerKind#requiredDocuments(boolean)}). */
+    /**
+     * What this application still needs on paper — which depends on whether an
+     * IDV vendor is answering the identity half (see
+     * {@link PartnerKind#requiredDocuments(boolean)}) and, for a driver, on what
+     * they drive.
+     *
+     * <p>The licence is added here rather than in the kind's own list because
+     * the kind cannot answer it: {@code DRIVER} covers a car, a motorcycle and a
+     * trottinette, and only the first two are something you need a licence for.
+     */
     private Set<DocumentKind> requiredDocuments(PartnerAccount account) {
-        return account.getKind().requiredDocuments(identity.isConfigured());
+        Set<DocumentKind> required = account.getKind().requiredDocuments(identity.isConfigured());
+        if (vehicles.isDriverLicenseRequired(account)) {
+            required.add(DocumentKind.DRIVER_LICENSE_FRONT);
+            required.add(DocumentKind.DRIVER_LICENSE_BACK);
+        }
+        return required;
     }
 
     // MARK: The stake and the vehicles
@@ -668,14 +696,37 @@ class PartnerService {
             : "An approved partner's details are managed from your dashboard";
     }
 
-    /** The business facts a reviewer can't work without. Documents are checked
-     *  separately so the two failures read differently to the applicant. */
-    private static List<String> missingFields(PartnerAccount account) {
+    /**
+     * The facts a reviewer can't work without. Documents are checked separately
+     * so the two failures read differently to the applicant.
+     *
+     * <p>Only a business is asked for the business half, and this is the second
+     * half of why the driver app's Submit button never worked. A driver has no
+     * cuisine category, no trading address and no shop phone — they are a person
+     * with a licence and a car, checked elsewhere — but every one of those was
+     * demanded of them anyway, and the flow has no field for a single one. An
+     * application that cannot be completed by any sequence of taps is not a
+     * stricter check; it is a wall.
+     *
+     * <p>What is left for a driver is their name, which the app fills in from
+     * the account, and the number off their licence — the one thing on that card
+     * they type rather than photograph, and the thing a reviewer reads the
+     * photograph against. Everything else weighed about them — the identity
+     * verdict, the licence photos, the vehicle and its papers — is checked
+     * further down {@code submitAccount}, and reaching them by phone is what the
+     * account itself is for.
+     */
+    private List<String> missingFields(PartnerAccount account) {
         List<String> missing = new ArrayList<>();
         if (account.getBusinessName().isBlank()) missing.add("business name");
-        if (account.getCategory().isBlank()) missing.add("category");
         if (account.getContactName().isBlank()) missing.add("contact name");
+        if (vehicles.isDriverLicenseRequired(account)
+            && account.getDriverLicenseNumber().isBlank()) {
+            missing.add("licence number");
+        }
+        if (account.getKind() != PartnerKind.RESTAURANT) return missing;
         if (account.getContactPhone().isBlank()) missing.add("contact phone");
+        if (account.getCategory().isBlank()) missing.add("category");
         if (account.getAddressLine().isBlank()) missing.add("address");
         if (account.getCity().isBlank()) missing.add("city");
         return missing;
@@ -716,8 +767,14 @@ class PartnerService {
 
     /** "ID_FRONT" → "ID front", for a message the applicant reads. */
     private static String label(DocumentKind kind) {
-        String words = kind.name().replace('_', ' ').toLowerCase();
-        return kind.name().startsWith("ID") ? "ID" + words.substring(2) : words;
+        return switch (kind) {
+            case DRIVER_LICENSE_FRONT -> "driving licence (front)";
+            case DRIVER_LICENSE_BACK -> "driving licence (back)";
+            default -> {
+                String words = kind.name().replace('_', ' ').toLowerCase();
+                yield kind.name().startsWith("ID") ? "ID" + words.substring(2) : words;
+            }
+        };
     }
 
     // MARK: Mapping
@@ -742,10 +799,10 @@ class PartnerService {
             .map(PartnerDocument::getKind)
             .collect(Collectors.toCollection(() -> EnumSet.noneOf(DocumentKind.class)));
         Set<DocumentKind> requiredKinds = requiredDocuments(account);
+        List<DocumentKind> missingKinds = requiredKinds.stream()
+            .filter(kind -> !have.contains(kind)).toList();
         List<String> required = requiredKinds.stream().map(Enum::name).toList();
-        List<String> missing = requiredKinds.stream()
-            .filter(kind -> !have.contains(kind))
-            .map(Enum::name).toList();
+        List<String> missing = missingKinds.stream().map(Enum::name).toList();
         boolean editable = account.getStatus().isEditable();
         // The identity check belongs to the person, so it is read per account
         // rather than stored on one: the same verdict decorates every
@@ -760,7 +817,17 @@ class PartnerService {
         boolean stakeRequired = stakes.isStakeRequired(account.getKind());
         boolean stakeDone = !stakeRequired || account.hasLiveStake();
         String vehicleBlocker = vehicles.whatBlocksSubmission(account).orElse(null);
-        String blocker = !stakeDone ? "pay your stake" : vehicleBlocker;
+        // One sentence, in the order the applicant meets these: the stake page,
+        // then the form, then the papers, then the car. Documents and fields
+        // used to be left out of it entirely — so a driver whose only problem
+        // was an unuploaded licence got a dead Submit button and no reason for
+        // it, which is exactly how a checklist turns into a bug report.
+        List<String> missingHere = missingFields(account);
+        String blocker = !stakeDone ? "pay your stake"
+            : !missingHere.isEmpty() ? "add your " + String.join(", ", missingHere)
+            : !missingKinds.isEmpty() ? "upload your " + missingKinds.stream()
+                .map(PartnerService::label).collect(Collectors.joining(", "))
+            : vehicleBlocker;
         return new PartnerAccountDto(
             account.getId(), account.getKind().name(), account.getStatus().name(),
             account.getBusinessName(), account.getBusinessProfileId(),
@@ -768,6 +835,7 @@ class PartnerService {
             account.getLogoUrl(), account.getContactName(), account.getContactPhone(),
             account.getContactEmail(), account.getCountry(), account.getCity(),
             account.getAddressLine(), account.getLatitude(), account.getLongitude(),
+            account.getDriverLicenseNumber(),
             account.getReviewNote(), account.getProvisionedRefId(),
             uploaded.stream()
                 .map(d -> new PartnerDocumentDto(d.getId(), d.getKind().name(),
@@ -778,8 +846,7 @@ class PartnerService {
             stakes.statusOf(account), vehicles.forAccount(account.getId()),
             vehicles.isVehicleRequired(account.getKind()), blocker,
             editable,
-            editable && missing.isEmpty() && identityDone && stakeDone && blocker == null
-                && missingFields(account).isEmpty(),
+            editable && identityDone && blocker == null,
             account.getSubmittedAt(), account.getReviewedAt(), account.getCreatedAt());
     }
 }

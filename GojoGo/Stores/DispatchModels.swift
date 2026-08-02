@@ -148,6 +148,10 @@ struct PartnerVehicleDTO: Decodable, Equatable, Identifiable {
     let year: Int?
     let color: String
     let plate: String
+    /// ISO 3166-1 alpha-2 — where the plate was issued, which is what makes it
+    /// unique. Optional so an application written before the field existed still
+    /// decodes.
+    let country: String?
     let region: String
     /// SUBMITTED | APPROVED | COMMUNITY_VERIFIED | FLAGGED | RETIRED
     let state: String
@@ -172,6 +176,7 @@ struct SaveVehicleBody: Encodable {
     var year: Int?
     var color: String
     var plate: String
+    var country: String
     var region: String
     /// `yyyy-MM-dd`, because a certificate expires on a day.
     var registrationExpiresOn: String?
@@ -189,12 +194,20 @@ struct DriverApplicationDTO: Decodable, Equatable {
     let businessName: String
     let reviewNote: String?
     let refId: UUID?
+    /// What the driver typed off their licence, echoed back so re-entering the
+    /// flow doesn't ask for it again.
+    let driverLicenseNumber: String?
     let identityRequired: Bool?
     let identityStatus: String?
     let identityReason: String?
     let stake: PartnerStakeDTO?
     let vehicles: [PartnerVehicleDTO]?
     let vehicleRequired: Bool?
+    /// The papers this application still owes — a driving licence, for a driver
+    /// of anything that needs one. Computed by the server, because which kinds
+    /// are required depends on the vehicle and on whether an IDV vendor is
+    /// answering the identity half, and neither is the app's rule to re-implement.
+    let missingDocuments: [String]?
     /// The one sentence the server would refuse a submission with, answered in
     /// advance — so the app renders a checklist rather than discovering the
     /// rules one 400 at a time.
@@ -206,6 +219,10 @@ struct DriverApplicationDTO: Decodable, Equatable {
     var submittedAtDate: Date? { submittedAt.flatMap { BackendDate.parse($0) } }
 
     var activeVehicle: PartnerVehicleDTO? { (vehicles ?? []).first(where: \.active) }
+
+    func needsDocument(_ kind: String) -> Bool {
+        (missingDocuments ?? []).contains(kind)
+    }
 }
 
 struct MyDriverApplicationDTO: Decodable {

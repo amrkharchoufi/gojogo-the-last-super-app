@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -46,6 +47,8 @@ class VehicleService {
 
     private static final Set<VehicleState> ROADWORTHY =
         EnumSet.of(VehicleState.APPROVED, VehicleState.COMMUNITY_VERIFIED);
+
+    private static final Set<String> ISO_COUNTRIES = Set.of(Locale.getISOCountries());
 
     private final VehicleRepository vehicles;
     private final VehicleDocumentRepository documents;
@@ -108,8 +111,18 @@ class VehicleService {
             return Optional.of("your vehicle is flagged"
                 + (active.getReviewNote() == null ? "" : " — " + active.getReviewNote()));
         }
+        // A trottinette has no plate, no carte grise and no insurance
+        // certificate to show. Asking for them is not a stricter check, it is a
+        // submission nobody riding one can ever complete.
+        if (!requiresPapers(active)) return Optional.empty();
         if (active.getPlate().isBlank()) {
             return Optional.of("add your number plate");
+        }
+        // A plate without the country that issued it is not an identifier: the
+        // uniqueness index is scoped by country, so a blank one would let the
+        // same car be registered twice under two different countries of nothing.
+        if (active.getCountry().isBlank()) {
+            return Optional.of("say where your vehicle is registered");
         }
         Set<VehicleDocumentKind> have = documents
             .findByVehicleIdOrderByKindAsc(active.getId()).stream()
@@ -142,6 +155,36 @@ class VehicleService {
      */
     boolean isVehicleRequired(PartnerKind kind) {
         return kind == PartnerKind.DRIVER && config.flag("partner.vehicle.required.driver", true);
+    }
+
+    /**
+     * Whether this applicant has to show a driving licence.
+     *
+     * <p>The question the vehicle answers rather than the kind: a driver in a car
+     * or on a motorcycle needs one, a driver on a trottinette does not, and
+     * {@link PartnerKind} cannot tell those apart. With no vehicle on file yet
+     * the answer is yes — the common case, and the vehicle blocker is refusing
+     * the submission anyway.
+     */
+    boolean isDriverLicenseRequired(PartnerAccount account) {
+        if (!isVehicleRequired(account.getKind())) return false;
+        return activeVehicle(account.getId()).map(VehicleService::requiresPapers).orElse(true);
+    }
+
+    /**
+     * Whether a vehicle is the sort that comes with paperwork.
+     *
+     * <p>{@code BIKE} under a driver account is a trottinette (the app's own
+     * word for it), which is licensed, registered and insured by nobody. Under a
+     * courier account the same category is a bicycle — same answer, and couriers
+     * are excluded a step earlier regardless. A category this build doesn't
+     * recognise counts as needing papers: a row can outlive the enum that wrote
+     * it, and guessing "no papers needed" is the dangerous direction to guess in.
+     */
+    private static boolean requiresPapers(Vehicle vehicle) {
+        return parseCategoryQuietly(vehicle.getCategory())
+            .map(category -> category != VehicleCategory.BIKE)
+            .orElse(true);
     }
 
     /** What dispatch should match this worker on: the active vehicle's category,
@@ -200,7 +243,7 @@ class VehicleService {
                 "That vehicle has been retired");
         }
         vehicle.apply(category.name(), request.make(), request.model(), request.year(),
-            request.color(), request.plate(), request.region(),
+            request.color(), request.plate(), parseCountry(request.country()), request.region(),
             parseDate(request.registrationExpiresOn(), "registration"),
             parseDate(request.insuranceExpiresOn(), "insurance"));
         // The first vehicle somebody adds is the one they're driving. Making
@@ -395,6 +438,26 @@ class VehicleService {
         return Optional.empty();
     }
 
+    /**
+     * The country a plate was issued in, ISO 3166-1 alpha-2.
+     *
+     * <p>Checked against the JDK's own list rather than a hand-written one: the
+     * point of this field is that the platform works everywhere, and a hardcoded
+     * set of countries somebody thought of on a Tuesday is exactly the shape of
+     * the assumption being removed. Blank is allowed — a trottinette has no
+     * plate to have issued anywhere, and {@link #whatBlocksSubmission} is where
+     * a car without one is refused.
+     */
+    private static String parseCountry(String code) {
+        if (code == null || code.isBlank()) return "";
+        String wanted = code.trim().toUpperCase();
+        if (!ISO_COUNTRIES.contains(wanted)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "That isn't a country code — use two letters, like MA or FR");
+        }
+        return wanted;
+    }
+
     private static VehicleDocumentKind parseDocumentKind(String name) {
         try {
             return VehicleDocumentKind.valueOf(name.trim().toUpperCase());
@@ -421,11 +484,18 @@ class VehicleService {
         List<VehicleDocument> papers = documents.findByVehicleIdOrderByKindAsc(vehicle.getId());
         Set<VehicleDocumentKind> have = papers.stream().map(VehicleDocument::getKind)
             .collect(Collectors.toCollection(() -> EnumSet.noneOf(VehicleDocumentKind.class)));
-        Set<VehicleDocumentKind> missing = EnumSet.allOf(VehicleDocumentKind.class);
+        // Nothing is missing from a trottinette, which is why this asks the
+        // vehicle rather than listing every kind unconditionally — the app
+        // renders this list as its checklist, and a checklist with two
+        // impossible items on it is a dead end drawn as a to-do.
+        Set<VehicleDocumentKind> missing = requiresPapers(vehicle)
+            ? EnumSet.allOf(VehicleDocumentKind.class)
+            : EnumSet.noneOf(VehicleDocumentKind.class);
         missing.removeAll(have);
         return new VehicleDto(vehicle.getId(), vehicle.getCategory(), vehicle.getMake(),
             vehicle.getModel(), vehicle.getYear(), vehicle.getColor(), vehicle.getPlate(),
-            vehicle.getRegion(), vehicle.getState().name(), vehicle.isActive(),
+            vehicle.getCountry(), vehicle.getRegion(),
+            vehicle.getState().name(), vehicle.isActive(),
             vehicle.getRegistrationExpiresOn() == null ? null
                 : vehicle.getRegistrationExpiresOn().toString(),
             vehicle.getInsuranceExpiresOn() == null ? null

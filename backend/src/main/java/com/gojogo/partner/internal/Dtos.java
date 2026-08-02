@@ -38,6 +38,8 @@ record PartnerDocumentDto(UUID id, String kind, String contentType, OffsetDateTi
  *                         offers a button that is going to 400
  * @param refId            the restaurant an approval created, so the app can go
  *                         straight to the menu editor
+ * @param driverLicenseNumber what is printed on the licence, for a reviewer to
+ *                         read against the photograph of it
  */
 record PartnerAccountDto(UUID id, String kind, String status,
                          String businessName, UUID businessProfileId,
@@ -45,6 +47,7 @@ record PartnerAccountDto(UUID id, String kind, String status,
                          String contactName, String contactPhone, String contactEmail,
                          String country, String city, String addressLine,
                          Double latitude, Double longitude,
+                         String driverLicenseNumber,
                          String reviewNote, UUID refId,
                          List<PartnerDocumentDto> documents,
                          List<String> requiredDocuments, List<String> missingDocuments,
@@ -73,7 +76,7 @@ record MyPartnerResponse(PartnerAccountDto account) {
  *                      server's rule rendered rather than a second copy of it
  */
 record VehicleDto(UUID id, String category, String make, String model, Integer year,
-                  String color, String plate, String region,
+                  String color, String plate, String country, String region,
                   String state, boolean active,
                   String registrationExpiresOn, String insuranceExpiresOn,
                   boolean papersExpired, String reviewNote,
@@ -89,6 +92,8 @@ record SaveVehicleRequest(@NotBlank @Size(max = 16) String category,
                           Integer year,
                           @Size(max = 30) String color,
                           @Size(max = 20) String plate,
+                          /** ISO 3166-1 alpha-2, where the plate was issued. */
+                          @Size(max = 2) String country,
                           @Size(max = 60) String region,
                           @Size(max = 10) String registrationExpiresOn,
                           @Size(max = 10) String insuranceExpiresOn,
@@ -122,6 +127,17 @@ record SavePartnerApplicationRequest(@NotBlank @Size(max = 16) String kind,
                                      @Size(max = 80) String city,
                                      @Size(max = 200) String addressLine,
                                      Double latitude, Double longitude) {
+}
+
+/**
+ * The number off a driving licence, written on its own.
+ *
+ * <p>Its own endpoint rather than a field on
+ * {@link SavePartnerApplicationRequest} because that one is a whole-object
+ * upsert: an app sending it to record one number would blank every field it
+ * doesn't know about. This records the number and nothing else.
+ */
+record SaveDriverLicenseRequest(@Size(max = 40) String number) {
 }
 
 /**

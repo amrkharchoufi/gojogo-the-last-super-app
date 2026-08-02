@@ -77,6 +77,19 @@ class PartnerAccount {
     @Column(name = "longitude")
     private Double longitude;
 
+    /**
+     * The number printed on a driver's licence, next to the contact details
+     * rather than on the vehicle — a licence is the person's, and it outlives
+     * the car.
+     *
+     * <p>Unvalidated beyond its length, deliberately. Licence formats differ by
+     * country and by decade, and a pattern that encoded Morocco's would reject a
+     * Senegalese driver holding a perfectly good one. What makes the number
+     * trustworthy is the photograph beside it and the human who reads both.
+     */
+    @Column(name = "driver_license_number", nullable = false)
+    private String driverLicenseNumber = "";
+
     /** Written for the applicant to read, not as an internal note. */
     @Column(name = "review_note")
     private String reviewNote;
@@ -157,6 +170,13 @@ class PartnerAccount {
         this.addressLine = orEmpty(addressLine);
         this.latitude = latitude;
         this.longitude = longitude;
+        touch();
+    }
+
+    /** Written on its own rather than through {@link #apply}, so recording it
+     *  can never blank the fields an operator filled in elsewhere. */
+    void applyDriverLicenseNumber(String number) {
+        this.driverLicenseNumber = orEmpty(number).trim();
         touch();
     }
 
@@ -274,6 +294,7 @@ class PartnerAccount {
     String getAddressLine() { return addressLine; }
     Double getLatitude() { return latitude; }
     Double getLongitude() { return longitude; }
+    String getDriverLicenseNumber() { return driverLicenseNumber; }
     String getReviewNote() { return reviewNote; }
     UUID getProvisionedRefId() { return provisionedRefId; }
     OffsetDateTime getSubmittedAt() { return submittedAt; }

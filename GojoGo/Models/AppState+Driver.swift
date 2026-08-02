@@ -34,6 +34,12 @@ extension AppState {
         do {
             if let existing = try await DispatchStore.shared.application(kind: role.partnerKind) {
                 driverApplication = existing
+                // Somebody coming back to an application they started should
+                // find their licence and their car where they left them. The
+                // form is local state that `startPartnerOnboarding` blanks on
+                // every entry, so without this a returning driver sees an empty
+                // card over details the server already has — and re-types them.
+                hydrateDriverForm(from: existing)
                 return
             }
             // A name and a phone are all `partner` needs to open one. The
@@ -69,6 +75,32 @@ extension AppState {
             print("Driver application refresh failed: \(error)")
             #endif
         }
+    }
+
+    /// Fills the local form in from what the server is already holding.
+    ///
+    /// Only ever called when the flow opens — a refresh mid-typing must not
+    /// reach in and rewrite the field somebody is halfway through.
+    private func hydrateDriverForm(from application: DriverApplicationDTO) {
+        partnerApplication.licenseNumber = application.driverLicenseNumber ?? ""
+        guard let vehicle = application.activeVehicle else { return }
+        partnerApplication.driverVehicle =
+            DriverVehicle.allCases.first { $0.dispatchCategory == vehicle.category }
+            ?? partnerApplication.driverVehicle
+        partnerApplication.vehicleMake = vehicle.make
+        partnerApplication.vehicleModel = vehicle.model
+        partnerApplication.vehicleYear = vehicle.year.map { String($0) } ?? ""
+        partnerApplication.vehicleColor = vehicle.color
+        partnerApplication.plate = vehicle.plate
+        // Falls back to the device rather than to blank: a vehicle saved before
+        // the country field existed is one the old app could only have meant
+        // locally, and an empty picker is a step backwards from a good guess.
+        partnerApplication.vehicleCountry = vehicle.country.flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? partnerApplication.vehicleCountry
+        partnerApplication.vehicleRegion = vehicle.region
+        partnerApplication.registrationExpiresOn = vehicle.registrationExpiresOn ?? ""
+        partnerApplication.insuranceExpiresOn = vehicle.insuranceExpiresOn ?? ""
     }
 
     // MARK: The stake
@@ -151,7 +183,14 @@ extension AppState {
             year: Int(form.vehicleYear.trimmingCharacters(in: .whitespaces)),
             color: form.vehicleColor.trimmingCharacters(in: .whitespaces),
             plate: form.plate.trimmingCharacters(in: .whitespaces),
-            region: form.vehicleRegion.trimmingCharacters(in: .whitespaces),
+            country: form.vehicleCountry,
+            // Sent only where it is part of the plate. Everywhere else it stays
+            // empty on purpose — the server scopes plate uniqueness by country
+            // and subdivision, so a city typed into it would put two spellings
+            // of the same town into two different scopes and let one car be
+            // registered twice.
+            region: VehicleRegistry.rules(for: form.vehicleCountry).asksForSubdivision
+                ? form.vehicleRegion.trimmingCharacters(in: .whitespaces) : "",
             registrationExpiresOn: Self.trimmedOrNil(form.registrationExpiresOn),
             insuranceExpiresOn: Self.trimmedOrNil(form.insuranceExpiresOn),
             photoUrls: nil)
@@ -166,6 +205,58 @@ extension AppState {
             return true
         } catch {
             showPartnerNotice(Self.message(from: error, fallback: "Couldn't save your vehicle."))
+            return false
+        }
+    }
+
+    /// One side of the driving licence, uploaded against the *application*
+    /// rather than against a car — it is a fact about the person holding it, and
+    /// it stays theirs when they sell the Yaris.
+    ///
+    /// This tile spent a milestone as a boolean somebody tapped: it turned
+    /// "Captured" on the first press, uploaded nothing, and put a tick where a
+    /// reviewer expected a licence. The vehicle papers stopped doing that when
+    /// `documentTile` arrived; this is the same correction for the same reason.
+    func uploadDriverLicense(kind: String, image: Data) async {
+        guard let application = driverApplication else {
+            showPartnerNotice("Your application isn't open yet.")
+            return
+        }
+        do {
+            driverApplication = try await DispatchStore.shared.uploadApplicationDocument(
+                application.id, kind: kind, data: image,
+                contentType: APIClient.imageContentType(for: image))
+        } catch {
+            showPartnerNotice(Self.message(from: error, fallback: "That upload didn't stick."))
+        }
+    }
+
+    /// Whether one side of the licence is on file — asked of the server, which
+    /// is the only thing that knows, and which also decides whether a licence is
+    /// needed at all (a trottinette needs none).
+    func driverLicenseUploaded(_ kind: String) -> Bool {
+        guard let application = driverApplication else { return false }
+        return !application.needsDocument(kind)
+    }
+
+    /// Sends the number off the licence. Called before the submit rather than on
+    /// every keystroke: this is one short field on a form somebody fills in once,
+    /// and a PUT per character would be a lot of requests for it.
+    ///
+    /// It used to be sent nowhere at all — a field that looked collected, wasn't,
+    /// and reached no reviewer.
+    @discardableResult
+    func saveDriverLicenseNumber() async -> Bool {
+        guard let application = driverApplication else { return false }
+        let number = partnerApplication.licenseNumber.trimmingCharacters(in: .whitespaces)
+        guard number != (application.driverLicenseNumber ?? "") else { return true }
+        do {
+            driverApplication = try await DispatchStore.shared
+                .saveDriverLicenseNumber(application.id, number)
+            return true
+        } catch {
+            showPartnerNotice(Self.message(from: error,
+                fallback: "Couldn't save your licence number."))
             return false
         }
     }
@@ -205,7 +296,9 @@ extension AppState {
         partnerSubmitting = true
         Task {
             defer { partnerSubmitting = false }
-            if role == .driver, !(await saveDriverVehicle()) { return }
+            if role == .driver {
+                guard await saveDriverLicenseNumber(), await saveDriverVehicle() else { return }
+            }
             guard let application = driverApplication else { return }
             do {
                 driverApplication = try await DispatchStore.shared.submit(application.id)

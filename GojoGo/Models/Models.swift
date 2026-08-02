@@ -1483,7 +1483,11 @@ enum CourierVehicle: String, CaseIterable, Identifiable {
 enum DriverVehicle: String, CaseIterable, Identifiable {
     case car = "Car"
     case motorcycle = "Motorcycle"
-    case trottinette = "Trottinette"
+    /// Called a trottinette in the country this app was written in, and a
+    /// kickscooter, e-scooter or patinete elsewhere. "E-scooter" is the label
+    /// most riders will recognise wherever they are; the case keeps its original
+    /// name because renaming it would say nothing new about the vehicle.
+    case trottinette = "E-scooter"
 
     var id: String { rawValue }
     var icon: String {
@@ -1493,7 +1497,7 @@ enum DriverVehicle: String, CaseIterable, Identifiable {
         case .trottinette: return "scooter"
         }
     }
-    /// Cars & motorcycles need a licence + registration; trottinettes don't.
+    /// Cars & motorcycles need a licence + registration; e-scooters don't.
     var requiresLicense: Bool { self != .trottinette }
 
     /// The same vehicle in `dispatch`'s vocabulary — what the server matches a
@@ -1526,39 +1530,57 @@ struct PartnerApplication: Equatable {
     // Driver — vehicle type + (for car/motorcycle) papers
     var driverVehicle: DriverVehicle = .car
     var licenseNumber: String = ""
-    var licenseCaptured: Bool = false
     var vehicleMake: String = ""
     var vehicleModel: String = ""
     var vehicleYear: String = ""
     var vehicleColor: String = ""
     var plate: String = ""
-    var registrationCaptured: Bool = false   // "carte grise" — vehicle registration
-    /// Plates are unique per region, never globally — the same string is a
-    /// different car in another country.
+    /// Where the plate was issued, ISO 3166-1 alpha-2. Defaulted from the device
+    /// and never assumed: somebody who moved still drives a car registered where
+    /// they came from, and a plate belongs to the car rather than to the phone.
+    var vehicleCountry: String = VehicleRegistry.deviceCountry
+    /// The state or province that issued it, where one did. Empty everywhere
+    /// plates are national — which is most of the world, and why the form only
+    /// asks for this in the countries whose plates carry one.
     var vehicleRegion: String = ""
     /// `yyyy-MM-dd`. Papers expire on a day, and the server flags a vehicle
     /// whose earlier date has passed (plus a grace period).
     var registrationExpiresOn: String = ""
     var insuranceExpiresOn: String = ""
-    var insuranceCaptured: Bool = false
 
     // Courier — vehicle type
     var vehicleType: CourierVehicle = .motorbike
 
-    /// Whether the vehicle half is filled in. The identity half is the vendor's
-    /// answer, not a field on this struct — `AppState.partnerKYCComplete`
-    /// combines the two.
+    /// Whether the fields somebody *types* on this form are filled in.
+    ///
+    /// Documents are deliberately not part of this. They used to be — three
+    /// `…Captured` booleans that a tile toggled and nothing ever set once the
+    /// tiles became real uploads, which left this property permanently false and
+    /// the Submit button permanently grey however carefully the form was filled
+    /// in. Whether a paper exists is the server's answer now (`missingDocuments`
+    /// on the application and on the vehicle), and `AppState.partnerKYCComplete`
+    /// is where the two halves meet.
     var vehicleDetailsComplete: Bool {
         switch role {
         case .driver:
             // Trottinettes are identity-only — no licence or vehicle papers.
             guard driverVehicle.requiresLicense else { return true }
             return !licenseNumber.trimmingCharacters(in: .whitespaces).isEmpty
-                && licenseCaptured
                 && !vehicleMake.trimmingCharacters(in: .whitespaces).isEmpty
                 && !vehicleModel.trimmingCharacters(in: .whitespaces).isEmpty
                 && !plate.trimmingCharacters(in: .whitespaces).isEmpty
-                && registrationCaptured
+                // A plate without the country that issued it isn't an
+                // identifier: the same string is a different car elsewhere.
+                && !vehicleCountry.isEmpty
+                // …and in the countries that issue plates by state, which state
+                // is part of the plate rather than an address.
+                && (!VehicleRegistry.rules(for: vehicleCountry).asksForSubdivision
+                    || !vehicleRegion.trimmingCharacters(in: .whitespaces).isEmpty)
+                // The server refuses a vehicle whose papers have no end date —
+                // it can't tell a current registration from a lapsed one — so
+                // the two date fields are as required as the plate is.
+                && !registrationExpiresOn.trimmingCharacters(in: .whitespaces).isEmpty
+                && !insuranceExpiresOn.trimmingCharacters(in: .whitespaces).isEmpty
         case .courier:
             return true
         }
