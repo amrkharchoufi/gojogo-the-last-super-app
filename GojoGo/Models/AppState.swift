@@ -137,6 +137,10 @@ final class AppState: ObservableObject {
     @Published var worldRichProfile = WorldRichProfile()
     @Published var worldFeedLoading: Bool = false
     @Published var worldFeedLoaded: Bool = false
+    /// Which tab the composer opens on. Set by whoever opens it — the "Your
+    /// story" bubble means a story, the `+` means a post — because a composer
+    /// that always opens on Post makes the story bubble open the wrong thing.
+    @Published var worldComposerKind: String = "post"
     /// The story ring currently open full-screen, if any.
     @Published var openWorldStory: WorldStoryRing?
 

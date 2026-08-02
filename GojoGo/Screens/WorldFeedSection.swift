@@ -30,11 +30,24 @@ struct WorldFeedSection: View {
 
     // MARK: Stories
 
+    /// Your own ring, pulled out of the row so it renders as "Your story"
+    /// rather than as one more contact. The server merges your own content into
+    /// your feed, so posting a story is visible to you immediately.
+    private var myRing: WorldStoryRing? {
+        guard let me = SocialStore.shared.myProfileId else { return nil }
+        return app.worldStories.first { $0.authorID == me }
+    }
+
+    private var otherRings: [WorldStoryRing] {
+        guard let me = SocialStore.shared.myProfileId else { return app.worldStories }
+        return app.worldStories.filter { $0.authorID != me }
+    }
+
     private var storiesRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 14) {
-                addStoryBubble
-                ForEach(app.worldStories) { ring in
+                yourStoryBubble
+                ForEach(otherRings) { ring in
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         app.openWorldStory = ring
@@ -49,28 +62,70 @@ struct WorldFeedSection: View {
         }
     }
 
-    private var addStoryBubble: some View {
-        Button {
-            app.worldSheet = .composer
-        } label: {
-            VStack(spacing: 6) {
-                ZStack(alignment: .bottomTrailing) {
-                    Circle()
-                        .fill(IMColor.chrome)
-                        .frame(width: 62, height: 62)
-                        .overlay(
-                            Image(systemName: "plus")
-                                .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(IMColor.secondary))
+    /// Tapping opens your own story when you have one, and the composer when you
+    /// don't. The `+` badge always composes, so posting a second frame stays one
+    /// tap away once the bubble has become a ring.
+    private var yourStoryBubble: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    if let myRing {
+                        app.openWorldStory = myRing
+                    } else {
+                        compose()
+                    }
+                } label: {
+                    if let myRing {
+                        ZStack {
+                            Circle()
+                                .strokeBorder(
+                                    myRing.allSeen
+                                        ? AnyShapeStyle(IMColor.separator)
+                                        : AnyShapeStyle(LinearGradient(
+                                            colors: [IMColor.blue, Color(hex: "AF52DE")],
+                                            startPoint: .topLeading, endPoint: .bottomTrailing)),
+                                    lineWidth: myRing.allSeen ? 1.5 : 2.5)
+                                .frame(width: 66, height: 66)
+                            MediaImage(url: myRing.authorAvatarURL, cornerRadius: 27)
+                                .frame(width: 54, height: 54)
+                                .clipShape(Circle())
+                        }
+                    } else {
+                        Circle()
+                            .fill(IMColor.chrome)
+                            .frame(width: 62, height: 62)
+                            .overlay(
+                                Image(systemName: "plus")
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .foregroundStyle(IMColor.secondary))
+                    }
                 }
-                Text("Your story")
-                    .font(.system(size: 12))
-                    .foregroundStyle(IMColor.secondary)
-                    .lineLimit(1)
+                .buttonStyle(.plain)
+
+                if myRing != nil {
+                    Button { compose() } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 20, height: 20)
+                            .background(Circle().fill(IMColor.blue))
+                            .overlay(Circle().strokeBorder(IMColor.bg, lineWidth: 2))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .frame(width: 70)
+            Text("Your story")
+                .font(.system(size: 12))
+                .foregroundStyle(IMColor.secondary)
+                .lineLimit(1)
         }
-        .buttonStyle(.plain)
+        .frame(width: 70)
+    }
+
+    private func compose() {
+        app.worldComposerKind = "story"
+        app.worldSheet = .composer
     }
 
     private func storyBubble(_ ring: WorldStoryRing) -> some View {

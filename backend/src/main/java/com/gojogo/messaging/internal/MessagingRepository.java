@@ -668,9 +668,18 @@ class MessagingRepository {
 
     record Circle(UUID id, String name, String colorHex, List<UUID> memberIds, Instant createdAt) {}
 
+    /**
+     * @param viewers who this was actually fanned out to, recorded on the
+     *                author's copy at publish time. Deleting re-reads this rather
+     *                than re-resolving the audience: a contact dropped or a
+     *                circle edited after publishing would make a re-resolved
+     *                audience miss the copies it needs to remove, leaving the
+     *                post alive in a feed the author can no longer reach.
+     *                Null on feed copies, which never carry it.
+     */
     record StoredContent(UUID id, UUID authorId, String kind, String text,
                          List<MediaItemDto> mediaItems, Instant createdAt, Instant expiresAt,
-                         String audience, List<UUID> circleIds) {
+                         String audience, List<UUID> circleIds, List<UUID> viewers) {
 
         boolean isStory() { return "story".equals(kind); }
     }
@@ -816,10 +825,13 @@ class MessagingRepository {
         }
         // The audience the author picked is theirs to know. It rides on the
         // author's copy so it can be shown back to them, and is left off every
-        // feed copy so a reader can't infer which circle they were put in.
+        // feed copy so a reader can't infer which circle they were put in. The
+        // fanned-out viewer list rides there too, so a delete can find exactly
+        // the copies this post created rather than guessing from today's graph.
         if (authorCopy) {
             putIfPresent(item, "audience", c.audience());
             putJson(item, "circleJson", c.circleIds());
+            putJson(item, "viewerJson", c.viewers());
         }
         return item;
     }
@@ -827,6 +839,7 @@ class MessagingRepository {
     private StoredContent readContent(Map<String, AttributeValue> it) {
         List<MediaItemDto> media = readJson(it, "mediaJson", new TypeReference<List<MediaItemDto>>() {});
         List<UUID> circles = readJson(it, "circleJson", new TypeReference<List<UUID>>() {});
+        List<UUID> viewers = readJson(it, "viewerJson", new TypeReference<List<UUID>>() {});
         return new StoredContent(
             UUID.fromString(it.get("contentId").s()),
             UUID.fromString(it.get("authorId").s()),
@@ -836,7 +849,8 @@ class MessagingRepository {
             Instant.parse(it.get("createdAt").s()),
             it.containsKey("expiresAt") ? Instant.parse(it.get("expiresAt").s()) : null,
             attr(it, "audience"),
-            circles == null ? List.of() : circles);
+            circles == null ? List.of() : circles,
+            viewers == null ? List.of() : viewers);
     }
 
     /** A reader's own feed partition. Nothing else is ever consulted. */
@@ -880,15 +894,38 @@ class MessagingRepository {
         return Optional.empty();
     }
 
-    /** Removes the author's copy and every fanned-out copy. */
-    void deleteContent(StoredContent content, List<UUID> viewers) {
+    /** Removes the author's copy and every copy it was actually fanned out to. */
+    void deleteContent(StoredContent content) {
         String sk = contentSk(content);
         db().deleteItem(r -> r.tableName(table).key(Map.of(
             "pk", s("WORLDPOST#" + content.authorId()), "sk", s(sk))));
-        for (UUID viewer : viewers) {
+        for (UUID viewer : content.viewers()) {
             db().deleteItem(r -> r.tableName(table).key(Map.of(
                 "pk", s("WORLDFEED#" + viewer), "sk", s(sk))));
         }
+    }
+
+    /**
+     * Everything one author sent this viewer. Pages the viewer's whole feed
+     * partition rather than taking the first N and filtering after — a limit
+     * applied before the author filter silently hides older posts behind a busy
+     * feed, which reads as "they never posted" rather than as truncation.
+     *
+     * <p>Still the viewer's own partition, so it can only ever return what they
+     * were actually sent.
+     */
+    List<StoredContent> feedByAuthor(UUID viewerId, UUID authorId, String kind, int limit) {
+        Instant now = Instant.now();
+        List<StoredContent> out = new ArrayList<>();
+        for (var it : queryPrefix("WORLDFEED#" + viewerId, contentPrefix(kind))) {
+            if (!authorId.toString().equals(attr(it, "authorId"))) continue;
+            StoredContent c = readContent(it);
+            if (c.expiresAt() != null && c.expiresAt().isBefore(now)) continue;
+            out.add(c);
+            if (out.size() >= limit) break;
+        }
+        out.sort(java.util.Comparator.comparing(StoredContent::createdAt).reversed());
+        return out;
     }
 
     // ---- story seen state -------------------------------------------------

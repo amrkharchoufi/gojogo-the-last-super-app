@@ -307,9 +307,13 @@ final class WorldContentStore {
         let media = imageURLs.map {
             WorldMediaItemDTO(imageUrl: $0, videoUrl: nil, isVideo: false, durationLabel: nil)
         }
+        // A post with more than one image *is* a carousel — the re-spec names all
+        // three kinds, and deriving it here is what stops `carousel` being a kind
+        // the server accepts and nothing ever sends. Stories stay stories.
+        let resolvedKind = (kind == "post" && imageURLs.count > 1) ? "carousel" : kind
         let dto: WorldContentDTO = try await APIClient.shared.post(
             "/v1/world/content",
-            body: PublishContentBody(kind: kind, text: text,
+            body: PublishContentBody(kind: resolvedKind, text: text,
                                      mediaItems: media.isEmpty ? nil : media,
                                      audience: audience.rawValue,
                                      circleIds: audience == .circles ? circleIDs : nil))

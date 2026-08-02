@@ -379,7 +379,13 @@ struct WorldContactView: View {
     private func loadTheirContent() async {
         guard let cid = contactID, loadedContentFor != cid else { return }
         loadedContentFor = cid
-        theirPosts = (try? await WorldContentStore.shared.content(by: cid)) ?? []
+        guard let posts = try? await WorldContentStore.shared.content(by: cid) else {
+            // Don't leave the tab permanently empty because one request failed —
+            // clearing the marker lets the next appearance retry.
+            loadedContentFor = nil
+            return
+        }
+        theirPosts = posts
         if let dto = try? await WorldContentStore.shared.contactProfile(cid), dto.isContact,
            let p = dto.profile {
             theirProfile = WorldRichProfile(

@@ -150,6 +150,23 @@ private struct WorldMessagesList: View {
 
             Spacer()
 
+            // Post / story composer. The primary way into publishing — the
+            // "Your story" bubble in the feed is the secondary one, and both
+            // land in the same sheet.
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                app.worldComposerKind = "post"
+                app.worldSheet = .composer
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(IMColor.label)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(IMColor.chrome))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New post or story")
+
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 withAnimation(.ggNav) {

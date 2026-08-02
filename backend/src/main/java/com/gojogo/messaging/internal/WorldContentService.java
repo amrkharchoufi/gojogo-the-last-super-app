@@ -58,21 +58,26 @@ class WorldContentService {
         String kind = normalizeKind(req.kind());
         requireSetup(authorId);
         Instant now = Instant.now();
-        StoredContent content = new StoredContent(
-            UUID.randomUUID(), authorId, kind, trimmed(req.text()),
-            req.mediaItems() == null ? List.of() : req.mediaItems(),
-            now,
-            "story".equals(kind) ? now.plus(STORY_TTL) : null,
-            req.audience().name(),
-            req.circleIds() == null ? List.of() : req.circleIds());
+        String text = trimmed(req.text());
+        List<MediaItemDto> media = req.mediaItems() == null ? List.of() : req.mediaItems();
 
-        if ((content.text() == null || content.text().isBlank()) && content.mediaItems().isEmpty()) {
+        if ((text == null || text.isBlank()) && media.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "A post needs words or something to look at");
         }
 
+        // Resolved before the record is built, because the viewer list is part of
+        // what gets stored — a post remembers who it went to.
         Set<UUID> viewers = graph.resolveAudience(authorId, req.audience(), req.circleIds());
-        repo.publishContent(content, new ArrayList<>(viewers));
+        List<UUID> fanout = new ArrayList<>(viewers);
+
+        StoredContent content = new StoredContent(
+            UUID.randomUUID(), authorId, kind, text, media, now,
+            "story".equals(kind) ? now.plus(STORY_TTL) : null,
+            req.audience().name(),
+            req.circleIds() == null ? List.of() : req.circleIds(),
+            fanout);
+        repo.publishContent(content, fanout);
         markMediaReferenced(content);
         return toDto(content, authorId, true, false);
     }
@@ -80,23 +85,43 @@ class WorldContentService {
     void delete(UUID authorId, UUID contentId) {
         StoredContent content = repo.getContent(authorId, contentId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such post"));
-        // Re-resolved rather than remembered: the fan-out list isn't stored, and
-        // a stale copy left in somebody's feed would outlive the delete.
-        Set<UUID> viewers = graph.resolveAudience(authorId,
-            WorldAudience.valueOf(content.audience()), content.circleIds());
-        repo.deleteContent(content, new ArrayList<>(viewers));
+        // Deleted against the list this post was actually fanned out to, which is
+        // stored on the author's copy. Re-resolving the audience instead would
+        // miss anybody dropped from a contact list or a circle since publishing,
+        // and leave the post alive in a feed the author can no longer reach.
+        repo.deleteContent(content);
     }
 
     // ---- reading ----------------------------------------------------------
 
-    /** The home screen in one round trip: a stories row, then posts. */
+    /**
+     * The home screen in one round trip: a stories row, then posts.
+     *
+     * <p>Merges the viewer's own content in. Fan-out deliberately skips the
+     * author — writing somebody a copy of their own post is pure duplication —
+     * but that left publishing looking like it had done nothing, because the one
+     * feed the author reads was the one feed they were never written into. Their
+     * own copies are read from their author partition instead, which also means
+     * they come back carrying the audience they chose.
+     */
     WorldFeedDto feed(UUID viewerId) {
         Set<UUID> seen = repo.seenStories(viewerId);
         List<WorldContentDto> posts = new ArrayList<>();
-        for (StoredContent c : repo.feed(viewerId, "post", PAGE)) {
-            posts.add(toDto(c, viewerId, false, false));
+        for (StoredContent c : newestFirst(repo.feed(viewerId, "post", PAGE),
+                                           repo.contentBy(viewerId, "post", PAGE))) {
+            posts.add(toDto(c, viewerId, c.authorId().equals(viewerId), false));
         }
-        return new WorldFeedDto(storyGroups(repo.feed(viewerId, "story", PAGE), viewerId, seen), posts);
+        List<StoredContent> stories = newestFirst(repo.feed(viewerId, "story", PAGE),
+                                                  repo.contentBy(viewerId, "story", PAGE));
+        return new WorldFeedDto(storyGroups(stories, viewerId, seen), posts);
+    }
+
+    private static List<StoredContent> newestFirst(List<StoredContent> received,
+                                                   List<StoredContent> own) {
+        List<StoredContent> all = new ArrayList<>(received);
+        all.addAll(own);
+        all.sort(java.util.Comparator.comparing(StoredContent::createdAt).reversed());
+        return all;
     }
 
     /** Your own posts, for your grid. Includes the audience — it's yours to see. */
@@ -119,8 +144,7 @@ class WorldContentService {
     List<WorldContentDto> byAuthorForViewer(UUID viewerId, UUID authorId, String kind) {
         if (viewerId.equals(authorId)) return mine(authorId, kind);
         List<WorldContentDto> out = new ArrayList<>();
-        for (StoredContent c : repo.feed(viewerId, normalizeKind(kind), PAGE)) {
-            if (!c.authorId().equals(authorId)) continue;
+        for (StoredContent c : repo.feedByAuthor(viewerId, authorId, normalizeKind(kind), PAGE)) {
             out.add(toDto(c, viewerId, false, false));
         }
         return out;

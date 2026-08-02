@@ -19,6 +19,11 @@ struct WorldComposerView: View {
     @State private var circleIDs: Set<UUID> = []
     @State private var busy = false
     @State private var error: String?
+    /// Circle creation is a *nested* sheet owned by this screen rather than a
+    /// swap of the shared `worldSheet` item — reassigning the binding that is
+    /// presenting you is how a sheet ends up dismissing itself and presenting
+    /// nothing.
+    @State private var showCircleEditor = false
 
     private var canPublish: Bool {
         let hasBody = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty
@@ -57,6 +62,11 @@ struct WorldComposerView: View {
             }
             .onChange(of: picked) { _, items in
                 Task { await load(items) }
+            }
+            .onAppear { kind = app.worldComposerKind }
+            .sheet(isPresented: $showCircleEditor) {
+                WorldCircleEditor(circle: nil)
+                    .environmentObject(app)
             }
         }
     }
@@ -157,7 +167,7 @@ struct WorldComposerView: View {
                 Text("You haven't made a circle yet.")
                     .font(.system(size: 13))
                     .foregroundStyle(IMColor.secondary)
-                Button("Create one") { app.worldSheet = .circles }
+                Button("Create one") { showCircleEditor = true }
                     .font(.system(size: 14, weight: .medium))
             }
             .padding(.leading, 4)
