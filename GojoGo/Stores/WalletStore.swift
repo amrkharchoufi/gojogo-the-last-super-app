@@ -48,10 +48,91 @@ final class WalletStore {
                                         body: TokenPurchaseBody(packId: packId))
     }
 
+    /// Minor units to something a person reads.
+    ///
+    /// What this replaced was `"$" + two decimal places`, which is right for
+    /// exactly one currency in exactly one place. Two things were wrong with it,
+    /// and only one of them is cosmetic.
+    ///
+    /// The cosmetic one: it hardcoded the symbol before the number with a full
+    /// stop and no grouping, so a French or German reader got the separator and
+    /// the symbol position their language doesn't use, and 1234567 read as
+    /// "$12345.67". The system knows how every locale writes money; we don't.
+    ///
+    /// The one that mattered: **it assumed every currency divides by a hundred.**
+    /// The yen doesn't divide at all — ¥1,500 is 1500 minor units, and the old
+    /// code showed it as "JPY 15.00", a hundredfold error. So do the West
+    /// African and Central African CFA francs, the Vietnamese dong, the Korean
+    /// won and the Chilean peso. In the other direction the Tunisian, Kuwaiti,
+    /// Bahraini, Jordanian, Omani, Iraqi and Libyan dinars divide by a thousand,
+    /// and 1500 of those is 1.500, not 15.00.
+    ///
+    /// Both exception lists are short and closed, so they are written down here
+    /// rather than guessed at. Nothing renders a non-USD amount today, which is
+    /// the only reason this was survivable; it stops being survivable the moment
+    /// `platform.currency` is set to anything else.
     static func money(_ minor: Int, currency: String = "USD") -> String {
-        let symbol = currency == "USD" ? "$" : "\(currency) "
-        let sign = minor < 0 ? "−" : ""
-        return "\(sign)\(symbol)\(String(format: "%.2f", Double(abs(minor)) / 100))"
+        let code = normalised(currency)
+        let digits = minorUnits(code)
+        let major = Decimal(minor) / powerOfTen(digits)
+        return formatter(for: code, digits: digits).string(from: major as NSDecimalNumber)
+            ?? "\(code) \(major)"
+    }
+
+    /// How far a currency divides — the ISO 4217 exponent.
+    ///
+    /// Deliberately not asked of `NumberFormatter`: left to itself it takes the
+    /// fraction digits from the *locale's* currency rather than the one it has
+    /// been told to render, so a phone set to Japan would drop the cents off a
+    /// dollar amount.
+    static func minorUnits(_ currency: String) -> Int {
+        let code = normalised(currency)
+        if zeroDecimalCurrencies.contains(code) { return 0 }
+        if threeDecimalCurrencies.contains(code) { return 3 }
+        return 2
+    }
+
+    private static let zeroDecimalCurrencies: Set<String> = [
+        "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG",
+        "RWF", "UGX", "UYI", "VND", "VUV", "XAF", "XOF", "XPF",
+    ]
+
+    private static let threeDecimalCurrencies: Set<String> = [
+        "BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND",
+    ]
+
+    private static func normalised(_ currency: String) -> String {
+        let trimmed = currency.trimmingCharacters(in: .whitespaces).uppercased()
+        return trimmed.isEmpty ? "USD" : trimmed
+    }
+
+    /// `Decimal`, not `Double`: this divides an amount that ends up next to a
+    /// currency symbol, and binary floating point is how 16300 becomes 162.99999.
+    private static func powerOfTen(_ exponent: Int) -> Decimal {
+        var result = Decimal(1)
+        for _ in 0..<max(0, exponent) { result *= 10 }
+        return result
+    }
+
+    /// One per currency, kept because building a `NumberFormatter` is not cheap
+    /// and a statement builds one line per row.
+    private static var formatters: [String: NumberFormatter] = [:]
+
+    private static func formatter(for code: String, digits: Int) -> NumberFormatter {
+        if let existing = formatters[code] { return existing }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = code
+        // The reader's locale decides the *shape* — separators, grouping, which
+        // side the symbol goes on — while the code decides the *symbol*. A
+        // French reader looking at a dollar price should see it written the
+        // French way and still see dollars, not be silently shown euros.
+        formatter.locale = Locale.current
+        formatter.usesGroupingSeparator = true
+        formatter.minimumFractionDigits = digits
+        formatter.maximumFractionDigits = digits
+        formatters[code] = formatter
+        return formatter
     }
 
     /// A line on the statement, in words. The ledger's kinds are precise; a
