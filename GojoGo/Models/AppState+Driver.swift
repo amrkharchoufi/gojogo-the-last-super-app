@@ -18,6 +18,12 @@ extension AppState {
     /// The live application for the role being onboarded, if one exists yet.
     var driverApplicationIsSubmitted: Bool { driverApplication?.status == "SUBMITTED" }
 
+    /// Whether the form is still the applicant's to change. False from the
+    /// moment it is submitted until a reviewer sends it back — the server
+    /// refuses every write in between, so anything this app offers in that
+    /// window is a button that ends in a 409.
+    var driverApplicationIsOpen: Bool { driverApplication?.canEdit ?? true }
+
     var driverStake: PartnerStakeDTO? { driverApplication?.stake }
 
     /// What the server would refuse a submission with — rendered as the
@@ -40,6 +46,7 @@ extension AppState {
                 // every entry, so without this a returning driver sees an empty
                 // card over details the server already has — and re-types them.
                 hydrateDriverForm(from: existing)
+                await resumePartnerStep(for: existing)
                 return
             }
             // A name and a phone are all `partner` needs to open one. The
@@ -75,6 +82,29 @@ extension AppState {
             print("Driver application refresh failed: \(error)")
             #endif
         }
+    }
+
+    /// Opens the flow where the application actually is, rather than always at
+    /// the first page.
+    ///
+    /// An application that has been submitted has no form left in it: the server
+    /// closes it to edits until a reviewer sends it back, and re-entering the
+    /// flow put people through the rules and the stake again only to end on a
+    /// Submit button their application had already passed — an invitation to
+    /// redo something nobody can redo. They see where it stands instead, which
+    /// is the one true thing there is to show and the only thing left to do
+    /// about it (wait).
+    ///
+    /// `REJECTED` deliberately does *not* land here: the server reopens that one
+    /// for editing, and the fix is a re-upload on the page they came for.
+    private func resumePartnerStep(for application: DriverApplicationDTO) async {
+        guard !application.canEdit else { return }
+        // An approval that landed while the app was closed makes them a driver,
+        // and the completion page reads that from the registry — so ask it
+        // before showing the page rather than telling somebody they are still
+        // in a queue they have already left.
+        if application.status == "APPROVED" { await refreshRoles() }
+        withAnimation(.easeInOut(duration: 0.32)) { partnerStep = .done }
     }
 
     /// Fills the local form in from what the server is already holding.

@@ -479,7 +479,6 @@ private struct PartnerKYCPage: View {
     /// tile — presenting a camera and a library per tile would be six sheets
     /// racing each other for the same screen.
     @State private var pendingDocument: String?
-    @State private var choosingSource = false
     @State private var showLibrary = false
     @State private var showCamera = false
     @State private var libraryItem: PhotosPickerItem?
@@ -507,7 +506,7 @@ private struct PartnerKYCPage: View {
         // "in review" when they got here may be done by the time they look.
         .task { await app.refreshIdentity() }
         .modifier(DocumentSourcePickers(
-            choosingSource: $choosingSource, showLibrary: $showLibrary,
+            showLibrary: $showLibrary,
             showCamera: $showCamera, libraryItem: $libraryItem,
             onCancel: { pendingDocument = nil },
             onPicked: { data in
@@ -1042,12 +1041,30 @@ private struct PartnerKYCPage: View {
     /// Tapping asks camera or library rather than assuming. Most of these papers
     /// are in somebody's hand while they fill this in, and a tile that only ever
     /// opened the library asked them to go and photograph it somewhere else first.
+    ///
+    /// The choice is a menu on the tile rather than a dialog on the page, because
+    /// a dialog is anchored to the view that presents it: one page-level dialog
+    /// serving six tiles opened at the top of the screen no matter which paper
+    /// was tapped, beside a card that had nothing to do with it. A menu opens on
+    /// its own label, so "front of your licence" is asked over the front of your
+    /// licence.
     private func uploadTile(kind: String, title: String, subtitle: String,
                             icon: String, uploaded: Bool) -> some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            pendingDocument = kind
-            choosingSource = true
+        Menu {
+            // The camera is absent in the Simulator and on a device with no
+            // usable one, where offering it would present an empty controller.
+            if CameraCaptureView.isAvailable {
+                Button {
+                    beginUpload(kind) { showCamera = true }
+                } label: {
+                    Label("Take a photo", systemImage: "camera.fill")
+                }
+            }
+            Button {
+                beginUpload(kind) { showLibrary = true }
+            } label: {
+                Label("Choose from library", systemImage: "photo.on.rectangle")
+            }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: uploaded ? "checkmark.circle.fill" : icon)
@@ -1073,6 +1090,10 @@ private struct PartnerKYCPage: View {
                 }
             }
             .padding(12)
+            // A menu sizes itself to its label, where the button this used to be
+            // was handed the card's width — without this the tile shrinks to
+            // its text and stops lining up with the fields above it.
+            .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(GGColor.ink(0.05)))
@@ -1082,10 +1103,22 @@ private struct PartnerKYCPage: View {
                                   lineWidth: uploaded ? 1 : 0.5))
             .contentShape(Rectangle())
         }
+        .menuOrder(.fixed)
         .buttonStyle(.plain)
         // One upload at a time. Two in flight would race each other to replace
         // `driverApplication`, and the loser's tile would go back to un-uploaded.
-        .disabled(uploadingDocument != nil)
+        // Nothing at all once the application has left the applicant's hands:
+        // the server refuses the write, so the tile must not offer it.
+        .disabled(uploadingDocument != nil || !app.driverApplicationIsOpen)
+    }
+
+    /// Marks which paper the picker about to open is for, then opens it.
+    /// Set here rather than when the tile is tapped so a menu somebody dismissed
+    /// without choosing leaves nothing behind to attach the next photo to.
+    private func beginUpload(_ kind: String, _ open: () -> Void) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        pendingDocument = kind
+        open()
     }
 
     private func upload(_ data: Data, kind: String) async {
@@ -1109,7 +1142,45 @@ private struct PartnerKYCPage: View {
         await app.uploadVehicleDocument(kind: kind, image: data)
     }
 
+    @ViewBuilder
     private var submitButton: some View {
+        // Already handed in. Re-entering the flow lands on the review page, so
+        // this is for the submission that lands while the page is open — a
+        // refresh, or a second device. Either way there is nothing to submit
+        // twice, and a live Submit button would be offering it.
+        if app.driverApplicationIsSubmitted {
+            reviewNotice
+        } else {
+            submitCTA
+        }
+    }
+
+    private var reviewNotice: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(GGColor.ink(0.08)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("In review")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Text("A person is checking your application. Nothing else to do — we'll let you know.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.08)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+    }
+
+    private var submitCTA: some View {
         VStack(spacing: 8) {
             // A greyed-out button that won't say why is the thing people report
             // as broken, so the server's own sentence goes underneath it.
@@ -1258,15 +1329,19 @@ private struct ExpiryDateSheet: View {
 
 // MARK: - Camera or library, for a paper you're holding
 
-/// The three presentations every document tile shares: the choice, the library
-/// and the camera.
+/// The two presentations every document tile shares: the library and the camera.
 ///
 /// One set for the whole page rather than one per tile. SwiftUI presents at most
 /// one sheet per view, so six tiles carrying their own pickers would mean six
 /// modifiers competing for the same slot — and a photo landing on whichever tile
 /// won. The page holds the pickers; the tile only says which paper it is for.
+///
+/// The *choice* between the two is not here, and that is the point: it is a menu
+/// on the tile itself (see `uploadTile`). A dialog presented from this modifier
+/// is anchored to the view carrying it — the whole page — so every tile, however
+/// far down the scroll, opened one panel pinned near the top of the screen,
+/// pointing at whatever card happened to be there.
 private struct DocumentSourcePickers: ViewModifier {
-    @Binding var choosingSource: Bool
     @Binding var showLibrary: Bool
     @Binding var showCamera: Bool
     @Binding var libraryItem: PhotosPickerItem?
@@ -1275,16 +1350,6 @@ private struct DocumentSourcePickers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .confirmationDialog("Add this document", isPresented: $choosingSource,
-                                titleVisibility: .visible) {
-                // Absent in the Simulator and on a device with no usable camera,
-                // where offering it would present an empty controller.
-                if CameraCaptureView.isAvailable {
-                    Button("Take a photo") { showCamera = true }
-                }
-                Button("Choose from library") { showLibrary = true }
-                Button("Cancel", role: .cancel) { onCancel() }
-            }
             .photosPicker(isPresented: $showLibrary, selection: $libraryItem,
                           matching: .images)
             .onChange(of: libraryItem) { _, item in
