@@ -2,6 +2,7 @@ package com.gojogo.partner.internal;
 
 import com.gojogo.config.ConfigApi;
 import com.gojogo.dispatch.VehicleCategory;
+import com.gojogo.dispatch.VehicleRef;
 import com.gojogo.media.MediaApi;
 import com.gojogo.media.MediaDocumentApi;
 import org.springframework.http.HttpStatus;
@@ -49,16 +50,18 @@ class VehicleService {
     private final VehicleRepository vehicles;
     private final VehicleDocumentRepository documents;
     private final VehiclePhotoRepository photos;
+    private final VehicleVerificationRepository verifications;
     private final MediaDocumentApi privateMedia;
     private final MediaApi media;
     private final ConfigApi config;
 
     VehicleService(VehicleRepository vehicles, VehicleDocumentRepository documents,
-                   VehiclePhotoRepository photos, MediaDocumentApi privateMedia,
-                   MediaApi media, ConfigApi config) {
+                   VehiclePhotoRepository photos, VehicleVerificationRepository verifications,
+                   MediaDocumentApi privateMedia, MediaApi media, ConfigApi config) {
         this.vehicles = vehicles;
         this.documents = documents;
         this.photos = photos;
+        this.verifications = verifications;
         this.privateMedia = privateMedia;
         this.media = media;
         this.config = config;
@@ -150,38 +153,38 @@ class VehicleService {
     }
 
     /**
-     * Everything dispatch is told about the car — the category it matches on and
-     * the two strings a rider on a kerb identifies it by.
+     * Everything dispatch is told about the car — its id, the category it matches
+     * on, the two strings a rider on a kerb identifies it by, and whether
+     * passengers have verified it.
      *
-     * <p>All empty for a courier with no vehicle, which is a legitimate state (a
-     * bicycle), and for a flagged one, which must not be described as though it
-     * were roadworthy.
+     * <p>{@link VehicleRef#none()} for a courier with no vehicle, which is a
+     * legitimate state (a bicycle), and for a flagged one, which must not be
+     * described as though it were roadworthy.
      */
     @Transactional(readOnly = true)
-    ActiveVehicle activeSnapshot(UUID accountId) {
+    VehicleRef activeSnapshot(UUID accountId) {
         return activeVehicle(accountId)
             .filter(v -> v.getState() != VehicleState.FLAGGED)
-            .map(v -> new ActiveVehicle(parseCategoryQuietly(v.getCategory()).orElse(null),
-                describe(v), v.getPlate()))
-            .orElse(ActiveVehicle.none());
+            .map(VehicleService::toRef)
+            .orElse(VehicleRef.none());
+    }
+
+    /** The same snapshot for one named vehicle, whether or not it is the active
+     *  one — what a verification verdict pushes down. */
+    static VehicleRef toRef(Vehicle vehicle) {
+        return new VehicleRef(vehicle.getId(),
+            parseCategoryQuietly(vehicle.getCategory()).orElse(null),
+            describe(vehicle), vehicle.getPlate(),
+            vehicle.getState() == VehicleState.COMMUNITY_VERIFIED);
     }
 
     /** "White Dacia Logan" — as much of it as was filled in. */
-    private static String describe(Vehicle vehicle) {
+    static String describe(Vehicle vehicle) {
         return java.util.stream.Stream
             .of(vehicle.getColor(), vehicle.getMake(), vehicle.getModel())
             .filter(part -> part != null && !part.isBlank())
             .map(String::trim)
             .collect(Collectors.joining(" "));
-    }
-
-    /** @param category null when there is no roadworthy vehicle, which lets
-     *                  dispatch fall back to the default for the kind */
-    record ActiveVehicle(VehicleCategory category, String label, String plate) {
-
-        static ActiveVehicle none() {
-            return new ActiveVehicle(null, "", "");
-        }
     }
 
     // MARK: Writes (the applicant's own, and the operator's — same path)
@@ -439,14 +442,34 @@ class VehicleService {
             vehicle.getCreatedAt());
     }
 
-    /** The reviewer's view: the same vehicle, plus links to its papers. */
+    /** The reviewer's view: the same vehicle, plus links to its papers and the
+     *  passenger verdicts that may be why they are looking at it. */
     @Transactional(readOnly = true)
     List<ReviewVehicleDto> forReview(UUID accountId) {
         return vehicles.findByAccountIdOrderByCreatedAtAsc(accountId).stream()
             .map(v -> new ReviewVehicleDto(toDto(v),
                 documents.findByVehicleIdOrderByKindAsc(v.getId()).stream()
                     .map(this::toReviewDocument)
-                    .toList()))
+                    .toList(),
+                verdictsOn(v.getId())))
+            .toList();
+    }
+
+    /**
+     * Every passenger verdict a vehicle has collected (Phase 3 M5).
+     *
+     * <p>Read straight from the repository rather than through
+     * {@code VehicleVerificationService}, on purpose: that service calls
+     * {@code PartnerService} to suspend a driver, and {@code PartnerService}
+     * calls this class — so injecting it here would close a constructor cycle.
+     * A read has no business creating one.
+     */
+    private List<VerificationAnswerDto> verdictsOn(UUID vehicleId) {
+        return verifications.findByVehicleIdOrderByCreatedAtDesc(vehicleId).stream()
+            .map(v -> new VerificationAnswerDto(v.getId(), v.getStatus().name(),
+                v.getPassengerId(), v.getDriverMatched(), v.getPhotosMatched(),
+                v.getPlateMatched(), v.getRoadworthy(), v.getNoFraud(), v.getComment(),
+                v.getRewardMinor(), v.getAnsweredAt(), v.getCreatedAt()))
             .toList();
     }
 

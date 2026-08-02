@@ -82,6 +82,26 @@ class Ride {
     @Column(name = "vehicle_plate", nullable = false, length = 20)
     private String vehiclePlate = "";
 
+    /** Which {@code partner.vehicle} actually did this trip — snapshotted for
+     *  the same reason the plate is, and the thing community verification hangs
+     *  off (Phase 3 M5). Opaque here: travel never looks it up. */
+    @Column(name = "vehicle_id")
+    private UUID vehicleId;
+
+    /** Whether passengers had verified that car at the moment it took this job.
+     *  A snapshot, so a receipt does not retroactively claim a badge the car did
+     *  not have. */
+    @Column(name = "vehicle_verified", nullable = false)
+    private boolean vehicleVerified;
+
+    @Column(name = "sos_at")
+    private OffsetDateTime sosAt;
+
+    /** Either party can raise one, so "who" is the first thing an operator
+     *  needs. */
+    @Column(name = "sos_by")
+    private UUID sosBy;
+
     @Column(name = "conversation_id")
     private UUID conversationId;
 
@@ -173,12 +193,14 @@ class Ride {
      * Matched. The fare freezes here and is never recomputed — a price that moves
      * after a handshake is not a handshake.
      */
-    void confirm(UUID workerId, UUID driverUserId, String vehicleLabel, String vehiclePlate,
+    void confirm(UUID workerId, UUID driverUserId, com.gojogo.dispatch.VehicleRef vehicle,
                  long agreedFareMinor) {
         this.driverWorkerId = workerId;
         this.driverUserId = driverUserId;
-        this.vehicleLabel = trim(vehicleLabel, 120);
-        this.vehiclePlate = trim(vehiclePlate, 20);
+        this.vehicleId = vehicle.id();
+        this.vehicleLabel = trim(vehicle.label(), 120);
+        this.vehiclePlate = trim(vehicle.plate(), 20);
+        this.vehicleVerified = vehicle.verified();
         this.agreedFareMinor = agreedFareMinor;
         this.confirmedAt = OffsetDateTime.now();
         moveTo(RideState.CONFIRMED);
@@ -220,6 +242,26 @@ class Ride {
 
     void expire() {
         moveTo(RideState.EXPIRED);
+    }
+
+    // MARK: Safety
+
+    /**
+     * Somebody pressed the button (Phase 3 M5, SPECS §10).
+     *
+     * <p>Recorded once and never cleared. An SOS that can be un-raised is a
+     * record somebody under pressure can be talked into deleting, and the flag
+     * is what puts the trip in front of an operator — the alarm going quiet
+     * should not take the trip out of the queue with it.
+     */
+    void raiseSos(UUID by) {
+        if (sosAt != null) return;
+        this.sosAt = OffsetDateTime.now();
+        this.sosBy = by;
+    }
+
+    boolean hasSos() {
+        return sosAt != null;
     }
 
     // MARK: Ratings
@@ -277,6 +319,10 @@ class Ride {
     UUID getDriverUserId() { return driverUserId; }
     String getVehicleLabel() { return vehicleLabel; }
     String getVehiclePlate() { return vehiclePlate; }
+    UUID getVehicleId() { return vehicleId; }
+    boolean isVehicleVerified() { return vehicleVerified; }
+    OffsetDateTime getSosAt() { return sosAt; }
+    UUID getSosBy() { return sosBy; }
     UUID getConversationId() { return conversationId; }
     OffsetDateTime getExpiresAt() { return expiresAt; }
     OffsetDateTime getRequestedAt() { return requestedAt; }

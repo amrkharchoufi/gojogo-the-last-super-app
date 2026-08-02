@@ -55,6 +55,7 @@ class VehicleLifecycleTests {
         when(photos.findByVehicleIdOrderBySortOrderAsc(any())).thenReturn(List.of());
         when(documents.findByVehicleIdOrderByKindAsc(any())).thenReturn(List.of());
         service = new VehicleService(vehicles, documents, photos,
+            mock(VehicleVerificationRepository.class),
             mock(MediaDocumentApi.class), mock(MediaApi.class), config);
         account = new PartnerAccount(OWNER, PartnerKind.DRIVER, "Amina drives");
         setField(account, "id", ACCOUNT);

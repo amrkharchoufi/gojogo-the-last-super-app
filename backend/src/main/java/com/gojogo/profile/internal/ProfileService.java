@@ -37,12 +37,14 @@ class ProfileService implements ProfileApi {
 
     private final UserProfileRepository repository;
     private final BusinessProfileRepository businesses;
+    private final EmergencyContactService emergencyContacts;
     private final ApplicationEventPublisher events;
 
     ProfileService(UserProfileRepository repository, BusinessProfileRepository businesses,
-                   ApplicationEventPublisher events) {
+                   EmergencyContactService emergencyContacts, ApplicationEventPublisher events) {
         this.repository = repository;
         this.businesses = businesses;
+        this.emergencyContacts = emergencyContacts;
         this.events = events;
     }
 
@@ -174,6 +176,12 @@ class ProfileService implements ProfileApi {
             business.setVerified(verified);
             businesses.save(business);
         });
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<com.gojogo.profile.EmergencyContactDto> emergencyContactsOf(UUID profileId) {
+        return emergencyContacts.forProfile(profileId);
     }
 
     @Override

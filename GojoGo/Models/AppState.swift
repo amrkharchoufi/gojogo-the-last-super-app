@@ -432,6 +432,28 @@ final class AppState: ObservableObject {
     @Published var deletionStatus: DeletionStatusDTO? = nil
     /// Transient message for any of the above.
     @Published var safetyNotice: String? = nil
+
+    // The safety pack (Phase 3 M5). See AppState+Safety.swift.
+    /// Who to tell if something goes wrong, and how many are allowed.
+    @Published var emergencyContacts: [EmergencyContactDTO] = []
+    @Published var emergencyContactsMax: Int = 5
+    @Published var showEmergencyContacts: Bool = false
+    @Published var emergencyContactsBusy: Bool = false
+    /// The live trip's public tracking link, once somebody has made one.
+    @Published var tripShare: ShareTripDTO? = nil
+    @Published var shareBusy: Bool = false
+    /// Set the moment SOS is confirmed. Non-nil is what turns the trip screen
+    /// red and puts the emergency number in front of a thumb.
+    @Published var sos: SosDTO? = nil
+    @Published var sosBusy: Bool = false
+    /// Two deliberate taps: an SOS raised by accident is a person explaining
+    /// themselves to their mother at midnight.
+    @Published var confirmingSos: Bool = false
+    /// Vehicles this account has been asked to confirm, newest first. Usually
+    /// empty; a card appears on the travel screen when it isn't.
+    @Published var verificationInvites: [VerificationInviteDTO] = []
+    @Published var openVerification: VerificationInviteDTO? = nil
+    @Published var verificationBusy: Bool = false
     /// Transient message over the business sheet (a taken handle, a failed save).
     @Published var businessNotice: String? = nil
     var businessNoticeTask: Task<Void, Never>?
@@ -2045,6 +2067,16 @@ final class AppState: ObservableObject {
         reportNotice = nil
         safetyNotice = nil
         deletionStatus = nil
+        // The safety pack is as personal as the block list: an emergency
+        // contact list left behind on a shared device is somebody else's
+        // mother's phone number.
+        emergencyContacts = []
+        showEmergencyContacts = false
+        tripShare = nil
+        sos = nil
+        confirmingSos = false
+        verificationInvites = []
+        openVerification = nil
         stopActingAsBusiness()
         WorldSocket.shared.disconnect()
         MessagingStore.shared.reset()

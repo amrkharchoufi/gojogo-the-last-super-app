@@ -1,6 +1,7 @@
 package com.gojogo.dispatch.internal;
 
 import com.gojogo.dispatch.VehicleCategory;
+import com.gojogo.dispatch.VehicleRef;
 import com.gojogo.dispatch.WorkerKind;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -56,6 +57,17 @@ class Worker {
     @Column(name = "vehicle_plate", nullable = false, length = 20)
     private String vehiclePlate = "";
 
+    /** The {@code partner.vehicle} row behind that description — opaque here,
+     *  and handed back on an assignment so the vertical can record which car
+     *  actually did the trip (Phase 3 M5). See V33. */
+    @Column(name = "vehicle_id")
+    private UUID vehicleId;
+
+    /** Passengers have confirmed this is the car it claims to be. A badge, not
+     *  a permission: nothing in matching reads it. */
+    @Column(name = "vehicle_verified", nullable = false)
+    private boolean vehicleVerified;
+
     @Column
     private Double latitude;
 
@@ -99,14 +111,16 @@ class Worker {
     }
 
     Worker(UUID userId, WorkerKind kind, UUID partnerAccountId, VehicleCategory category,
-           String homeRegion, String vehicleLabel, String vehiclePlate) {
+           String homeRegion, VehicleRef vehicle) {
         this.userId = userId;
         this.kind = kind;
         this.partnerAccountId = partnerAccountId;
         this.category = category;
         this.homeRegion = homeRegion == null ? "" : homeRegion;
-        this.vehicleLabel = trim(vehicleLabel, 120);
-        this.vehiclePlate = trim(vehiclePlate, 20);
+        this.vehicleId = vehicle.id();
+        this.vehicleLabel = trim(vehicle.label(), 120);
+        this.vehiclePlate = trim(vehicle.plate(), 20);
+        this.vehicleVerified = vehicle.verified();
         this.idleSince = OffsetDateTime.now();
         this.createdAt = this.idleSince;
     }
@@ -158,12 +172,20 @@ class Worker {
         this.category = value;
     }
 
-    /** The driver switched cars. Category and description move together, because
-     *  a plate that no longer matches the category is worse than neither. */
-    void setVehicle(VehicleCategory category, String label, String plate) {
-        if (category != null) this.category = category;
-        this.vehicleLabel = trim(label, 120);
-        this.vehiclePlate = trim(plate, 20);
+    /** The driver switched cars. Every fact about the vehicle moves together,
+     *  because a plate that no longer matches the category — or a badge left
+     *  behind on a car that has been replaced — is worse than none of them. */
+    void setVehicle(VehicleRef vehicle) {
+        if (vehicle.category() != null) this.category = vehicle.category();
+        this.vehicleId = vehicle.id();
+        this.vehicleLabel = trim(vehicle.label(), 120);
+        this.vehiclePlate = trim(vehicle.plate(), 20);
+        this.vehicleVerified = vehicle.verified();
+    }
+
+    /** What dispatch hands back on an assignment. */
+    VehicleRef vehicle() {
+        return new VehicleRef(vehicleId, category, vehicleLabel, vehiclePlate, vehicleVerified);
     }
 
     private static String trim(String value, int max) {

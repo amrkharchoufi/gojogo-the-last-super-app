@@ -75,6 +75,10 @@ class SecurityConfig {
                 // PlatformAdminApi and 404 anyone who is neither an operator nor
                 // holding the token.
                 .requestMatchers("/v1/moderation/admin/**").permitAll()
+                // The SOS queue (Phase 3 M5), on exactly the same terms as the
+                // other two operator surfaces and authorizing itself the same
+                // way through PlatformAdminApi.
+                .requestMatchers("/v1/travel/admin/**").permitAll()
                 // Sumsub's verdict callback. The caller is a machine with no
                 // Cognito account, so its HMAC signature over the raw body is
                 // the authentication — checked in KycWebhookController before
@@ -92,6 +96,15 @@ class SecurityConfig {
                 // no token — and inert for the same reason: it reads nothing,
                 // credits nothing, and only redirects into the app.
                 .requestMatchers(HttpMethod.GET, "/v1/payments/return").permitAll()
+                // A shared trip (Phase 3 M5). Public because the people a trip
+                // is shared with — a parent, a flatmate, somebody meeting you at
+                // the other end — are precisely the people with no account here,
+                // and making them sign up first is how a safety feature stops
+                // being used. The 192-bit token in the path is the whole
+                // authentication, the payload is deliberately thin (a first
+                // name, a plate, a position), and every failure is the same 404
+                // so a stream of guesses learns nothing.
+                .requestMatchers(HttpMethod.GET, "/v1/share/**").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
         return http.build();

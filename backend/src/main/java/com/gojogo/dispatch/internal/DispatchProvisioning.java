@@ -2,7 +2,7 @@ package com.gojogo.dispatch.internal;
 
 import com.gojogo.dispatch.CourierProvisioningApi;
 import com.gojogo.dispatch.DriverProvisioningApi;
-import com.gojogo.dispatch.VehicleCategory;
+import com.gojogo.dispatch.VehicleRef;
 import com.gojogo.dispatch.WorkerKind;
 import com.gojogo.dispatch.WorkerRegistration;
 import org.springframework.stereotype.Service;
@@ -37,9 +37,8 @@ class DispatchProvisioning implements DriverProvisioningApi, CourierProvisioning
     }
 
     @Override
-    public void setDriverVehicle(UUID workerId, VehicleCategory category,
-                                 String vehicleLabel, String vehiclePlate) {
-        dispatch.setVehicle(WorkerKind.DRIVER, workerId, category, vehicleLabel, vehiclePlate);
+    public void setDriverVehicle(UUID workerId, VehicleRef vehicle) {
+        dispatch.setVehicle(WorkerKind.DRIVER, workerId, vehicle);
     }
 
     @Override
@@ -53,14 +52,12 @@ class DispatchProvisioning implements DriverProvisioningApi, CourierProvisioning
     }
 
     @Override
-    public void setCourierVehicle(UUID workerId, VehicleCategory category,
-                                  String vehicleLabel, String vehiclePlate) {
-        dispatch.setVehicle(WorkerKind.COURIER, workerId, category, vehicleLabel, vehiclePlate);
+    public void setCourierVehicle(UUID workerId, VehicleRef vehicle) {
+        dispatch.setVehicle(WorkerKind.COURIER, workerId, vehicle);
     }
 
     private UUID provision(WorkerKind kind, WorkerRegistration registration) {
         return dispatch.provision(kind, registration.userId(), registration.partnerAccountId(),
-            registration.category(), registration.homeRegion(),
-            registration.vehicleLabel(), registration.vehiclePlate());
+            registration.vehicle(), registration.homeRegion());
     }
 }

@@ -84,4 +84,15 @@ public interface ProfileApi {
      * verified, and the owner-scoped edit surface deliberately has no path to it.
      */
     void setBusinessVerified(UUID businessProfileId, boolean verified);
+
+    /**
+     * Who to tell when this person is in trouble (Phase 3 M5, SPECS §10).
+     *
+     * <p>Here rather than in {@code travel} because an emergency contact is a
+     * fact about a person, not about a trip: a delivery, and anything else that
+     * ever needs one, should read this list rather than growing a second copy
+     * that drifts. Empty for somebody who has not set any up, which is the
+     * common case and is why an SOS must still work without them.
+     */
+    List<EmergencyContactDto> emergencyContactsOf(UUID profileId);
 }

@@ -51,6 +51,8 @@ class RideNegotiationTests {
     private static final UUID RIVAL = UUID.randomUUID();
     private static final UUID WORKER = UUID.randomUUID();
     private static final UUID RIVAL_WORKER = UUID.randomUUID();
+    private static final com.gojogo.dispatch.VehicleRef CAR = new com.gojogo.dispatch.VehicleRef(
+        UUID.randomUUID(), VehicleCategory.CAR, "White Dacia Logan", "12345-A-6", false);
 
     private RideRepository rides;
     private RideOfferRepository offers;
@@ -97,7 +99,7 @@ class RideNegotiationTests {
 
         rideTokens = mock(RideTokenService.class);
         service = new RideService(rides, offers, pricing, policy, dispatch, wallet,
-            rideTokens, messaging, profiles, events);
+            rideTokens, messaging, profiles, mock(com.gojogo.share.ShareApi.class), events);
 
         ride = new Ride(RIDER, "CAR", 33.5731, -7.5898, "Bd Anfa",
             33.5892, -7.6031, "Maarif", "", 4_000, 600, 1_000, 900, "USD",
@@ -110,8 +112,7 @@ class RideNegotiationTests {
             .thenReturn(Optional.of(RIVAL_WORKER));
         when(dispatch.assign(any(), any(), any())).thenAnswer(call ->
             new Assignment(call.getArgument(2), DRIVER, WorkerKind.DRIVER, VehicleCategory.CAR,
-                JobKind.RIDE, ride.getId(), 4.8, 120, "White Dacia Logan", "12345-A-6",
-                OffsetDateTime.now()));
+                JobKind.RIDE, ride.getId(), 4.8, 120, CAR, OffsetDateTime.now()));
         when(offers.findByRideIdAndState(any(), any())).thenReturn(List.of());
         when(offers.findByRideIdAndDriverWorkerIdOrderByCreatedAtAsc(any(), any()))
             .thenReturn(List.of());
@@ -427,7 +428,7 @@ class RideNegotiationTests {
     // MARK: Fixtures
 
     private void confirmAt(long fareMinor) {
-        ride.confirm(WORKER, DRIVER, "White Dacia Logan", "12345-A-6", fareMinor);
+        ride.confirm(WORKER, DRIVER, CAR, fareMinor);
     }
 
     private RideOffer offer(OfferParty party, long amount, int round) {

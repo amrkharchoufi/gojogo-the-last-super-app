@@ -17,6 +17,14 @@
  * into it is an {@code ownerId} on the merchant row, which is what lets it
  * authorise "edit my own restaurant" without asking anyone about KYC.
  *
+ * <p><strong>One thing arrives the other way, and it is an event.</strong> Phase
+ * 3 M5's community vehicle verification starts when a trip ends, so this module
+ * <em>listens</em> for {@code travel.TripCompleted} rather than being called by
+ * it. That direction is deliberate: a trip ending is a fact about a trip, and
+ * whether it starts a vehicle check is entirely this module's business — nothing
+ * about the ride changes if the invitation is never created, which is precisely
+ * what makes an event the right shape and a call the wrong one.
+ *
  * <p><strong>Who proves identity.</strong> Personal identity is
  * {@link com.gojogo.kyc.IdentityVerificationApi}'s job — an IDV vendor matching
  * a real document to a live face, which no reviewer does well from a phone

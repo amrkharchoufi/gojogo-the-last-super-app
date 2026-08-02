@@ -36,9 +36,12 @@ public interface DriverProvisioningApi {
      *
      * <p>Separate from provisioning because it happens far more often — a driver
      * with two vehicles switches between them weekly, and re-running an approval
-     * for that would be absurd. It is the one field dispatch matches on, so it
-     * has to be able to change without one.
+     * for that would be absurd. It carries the one field dispatch matches on, so
+     * it has to be able to change without one.
+     *
+     * <p>Also how a badge arrives: a vehicle that passengers have verified is
+     * the same vehicle with {@link VehicleRef#verified()} true, pushed down the
+     * same way. Dispatch does not decide what earns it.
      */
-    void setDriverVehicle(UUID workerId, VehicleCategory category,
-                          String vehicleLabel, String vehiclePlate);
+    void setDriverVehicle(UUID workerId, VehicleRef vehicle);
 }

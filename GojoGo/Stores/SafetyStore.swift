@@ -142,4 +142,100 @@ final class SafetyStore {
     func deleteAccount() async throws -> DeletionStatusDTO {
         try await APIClient.shared.deleteReturning("/v1/me")
     }
+
+    // MARK: Emergency contacts (Phase 3 M5)
+
+    func emergencyContacts() async throws -> EmergencyContactsDTO {
+        try await APIClient.shared.get("/v1/me/emergency-contacts")
+    }
+
+    func addEmergencyContact(name: String, phone: String,
+                             relationship: String) async throws -> EmergencyContactDTO {
+        try await APIClient.shared.post("/v1/me/emergency-contacts",
+            body: SaveEmergencyContactBody(name: name, phone: phone,
+                                           relationship: relationship, linkedProfileId: nil))
+    }
+
+    func removeEmergencyContact(_ id: UUID) async throws {
+        try await APIClient.shared.delete(
+            "/v1/me/emergency-contacts/\(id.uuidString.lowercased())")
+    }
+
+    // MARK: Community vehicle verification (Phase 3 M5)
+
+    /// Open invitations only. An answered or lapsed one is not a card.
+    func verificationInvites() async throws -> [VerificationInviteDTO] {
+        try await APIClient.shared.get("/v1/partner/verifications")
+    }
+
+    func answerVerification(_ id: UUID, driverMatched: Bool, photosMatched: Bool,
+                            plateMatched: Bool, roadworthy: Bool, noFraud: Bool,
+                            comment: String?) async throws -> VerificationInviteDTO {
+        try await APIClient.shared.post(
+            "/v1/partner/verifications/\(id.uuidString.lowercased())",
+            body: AnswerVerificationBody(
+                driverMatched: driverMatched, photosMatched: photosMatched,
+                plateMatched: plateMatched, roadworthy: roadworthy, noFraud: noFraud,
+                comment: (comment?.isEmpty ?? true) ? nil : comment))
+    }
+}
+
+// MARK: - Safety pack payloads (Phase 3 M5)
+
+/// Somebody to tell when a person is in trouble.
+///
+/// The phone number is the required half and the GojoGo account is the bonus,
+/// which is the opposite of what an app-first design would do — the person you
+/// would call in an emergency is usually not a user of the app you happen to be
+/// sitting in.
+struct EmergencyContactDTO: Codable, Equatable, Identifiable {
+    let id: UUID
+    let name: String
+    let phone: String
+    let relationship: String?
+    /// Set when this contact is also on GojoGo, which is what turns an alarm
+    /// into a push rather than a message somebody has to send by hand.
+    let linkedProfileId: UUID?
+}
+
+struct EmergencyContactsDTO: Decodable {
+    let contacts: [EmergencyContactDTO]
+    /// How many are allowed, so the screen says "3 of 5" instead of finding out
+    /// by being refused.
+    let max: Int
+}
+
+struct SaveEmergencyContactBody: Encodable {
+    let name: String
+    let phone: String
+    let relationship: String
+    let linkedProfileId: UUID?
+}
+
+/// A passenger being asked whether the car they just rode in was the car.
+///
+/// Deliberately thin about the driver — a first name and no id — because the
+/// question is "was the person driving the person in the app", and a card
+/// showing their profile has answered it for them.
+struct VerificationInviteDTO: Decodable, Equatable, Identifiable {
+    let id: UUID
+    let status: String
+    let vehicleId: UUID
+    let vehicleLabel: String
+    let vehiclePlate: String
+    let vehicleYear: Int?
+    let driverFirstName: String
+    let rewardMinor: Int
+    let currency: String
+    let expiresAt: Date?
+    let createdAt: Date?
+}
+
+struct AnswerVerificationBody: Encodable {
+    let driverMatched: Bool
+    let photosMatched: Bool
+    let plateMatched: Bool
+    let roadworthy: Bool
+    let noFraud: Bool
+    let comment: String?
 }

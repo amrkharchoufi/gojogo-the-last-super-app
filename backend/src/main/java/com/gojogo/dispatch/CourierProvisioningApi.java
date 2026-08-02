@@ -15,6 +15,5 @@ public interface CourierProvisioningApi {
 
     void setCourierSuspended(UUID workerId, boolean suspended);
 
-    void setCourierVehicle(UUID workerId, VehicleCategory category,
-                           String vehicleLabel, String vehiclePlate);
+    void setCourierVehicle(UUID workerId, VehicleRef vehicle);
 }

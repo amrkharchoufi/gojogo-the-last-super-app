@@ -15,9 +15,12 @@ import com.gojogo.payments.InsufficientFundsException;
 import com.gojogo.payments.LedgerKind;
 import com.gojogo.payments.OwnerKind;
 import com.gojogo.payments.WalletApi;
+import com.gojogo.profile.EmergencyContactDto;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import com.gojogo.share.ShareApi;
 import com.gojogo.travel.RideStatusChanged;
+import com.gojogo.travel.SosRaised;
 import com.gojogo.travel.TripCompleted;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,12 +81,13 @@ class RideService {
     private final RideTokenService rideTokens;
     private final MessagingApi messaging;
     private final ProfileApi profiles;
+    private final ShareApi share;
     private final ApplicationEventPublisher events;
 
     RideService(RideRepository rides, RideOfferRepository offers, PricingConfigRepository pricing,
                 TravelPolicy policy, DispatchApi dispatch, WalletApi wallet,
                 RideTokenService rideTokens, MessagingApi messaging, ProfileApi profiles,
-                ApplicationEventPublisher events) {
+                ShareApi share, ApplicationEventPublisher events) {
         this.rides = rides;
         this.offers = offers;
         this.pricing = pricing;
@@ -93,6 +97,7 @@ class RideService {
         this.rideTokens = rideTokens;
         this.messaging = messaging;
         this.profiles = profiles;
+        this.share = share;
         this.events = events;
     }
 
@@ -317,7 +322,7 @@ class RideService {
      */
     private void confirm(Ride ride, Assignment assignment, long fareMinor) {
         ride.confirm(assignment.workerId(), assignment.userId(),
-            assignment.vehicleLabel(), assignment.vehiclePlate(), fareMinor);
+            assignment.vehicle(), fareMinor);
         try {
             rides.saveAndFlush(ride);
         } catch (OptimisticLockingFailureException raced) {
@@ -426,9 +431,16 @@ class RideService {
         }
         ride.complete();
         dispatch.complete(JobKind.RIDE, ride.getId(), null);
+        // Share links are deliberately *not* revoked here. A link that dies at
+        // the kerb dies at the one moment the person watching cares about it, so
+        // the trip's own grace window (safety.share.grace.minutes) lets them see
+        // "Arrived safely" instead of a dead page.
+        // vehicleId is what makes Phase 3 M5's community verification land on
+        // the car this passenger actually rode in, rather than on whatever the
+        // driver has made active by the time they answer.
         events.publishEvent(new TripCompleted(ride.getId(), ride.getRiderId(),
-            ride.getDriverUserId(), ride.getDriverWorkerId(), null, fare, ride.getCurrency(),
-            OffsetDateTime.now()));
+            ride.getDriverUserId(), ride.getDriverWorkerId(), ride.getVehicleId(), fare,
+            ride.getCurrency(), OffsetDateTime.now()));
         publishStatus(ride, ride.getRiderId());
         return toDto(ride, driverUserId);
     }
@@ -502,6 +514,138 @@ class RideService {
         ride.expire();
         dispatch.cancel(JobKind.RIDE, ride.getId(), false);
         publishStatus(ride, ride.getRiderId());
+    }
+
+    // MARK: Safety (Phase 3 M5, SPECS §10)
+
+    /**
+     * A public link to this trip, for somebody who is not in the app.
+     *
+     * <p>Either party may make one — a driver working late has as much reason to
+     * be watched as a rider does — and only while the trip is live: sharing a
+     * finished trip is sharing a receipt, and sharing one that has not been
+     * matched yet is sharing an empty map.
+     */
+    @Transactional
+    ShareTripDto shareTrip(UUID callerId, UUID rideId) {
+        Ride ride = requireParty(callerId, rideId);
+        if (!ride.getState().isLive()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                ride.getState().isFinished()
+                    ? "That trip is over — there's nothing left to follow"
+                    : "You can share a trip once a driver has taken it");
+        }
+        ShareApi.SharedLink link = share.mint(RideShareableResource.KIND, ride.getId(), callerId,
+            ShareApi.ShareReason.SHARE, shareTtl(ride));
+        return new ShareTripDto(link.url(), link.expiresAt(), link.viewCount(),
+            "I'm on a GoJoGo trip to " + shortLabel(ride.getDropoffLabel())
+                + ". You can follow it here: " + link.url());
+    }
+
+    /** Stop sharing. The link is dead from the next request — which is all
+     *  "stop sharing" can ever mean once a URL has been sent to somebody. */
+    @Transactional
+    void stopSharing(UUID callerId, UUID rideId) {
+        requireParty(callerId, rideId);
+        share.revoke(RideShareableResource.KIND, rideId, callerId);
+    }
+
+    /**
+     * The button.
+     *
+     * <p>Three things happen, in an order chosen so the most important one
+     * cannot be lost: the ride is <strong>flagged first</strong> (that is what
+     * puts it in front of an operator and it must survive everything else
+     * failing), then a link is minted, then the alert goes out as an event.
+     *
+     * <p><strong>What this deliberately does not do is call anybody.</strong>
+     * The emergency number is returned to the app and dialled from the phone,
+     * because a server placing an emergency call on somebody's behalf is a claim
+     * about integration with emergency services that this system has no right to
+     * make (SPECS §10: "no PSAP integration claimed"). What the server can
+     * honestly do is make sure the people who love this person know where they
+     * are.
+     *
+     * <p>Contacts who are also GojoGo accounts get a push. Contacts who are only
+     * a phone number come back in the response with the message already written,
+     * for the phone's own composer — the only channel that actually works while
+     * SMS is still sandboxed, and the one whose message arrives from a number the
+     * recipient recognises.
+     */
+    @Transactional
+    SosDto raiseSos(UUID callerId, UUID rideId) {
+        Ride ride = requireParty(callerId, rideId);
+        if (ride.getState().isFinished()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "That trip is over. If you're in danger, call the emergency number.");
+        }
+        ride.raiseSos(callerId);
+        rides.flush();
+        log.error("SOS raised on ride {} by {}", rideId, callerId);
+
+        ShareApi.SharedLink link = share.mint(RideShareableResource.KIND, ride.getId(), callerId,
+            ShareApi.ShareReason.SOS, shareTtl(ride));
+        List<EmergencyContactDto> contacts = profiles.emergencyContactsOf(callerId);
+        List<UUID> reachable = contacts.stream()
+            .map(EmergencyContactDto::linkedProfileId)
+            .filter(java.util.Objects::nonNull)
+            .toList();
+        String message = sosMessage(ride, link.url());
+        events.publishEvent(new SosRaised(ride.getId(), callerId, callerName(callerId),
+            ride.getRiderId(), ride.getDriverUserId(), reachable, link.url(),
+            ride.getPickupLabel(), ride.getDropoffLabel(), ride.getVehicleLabel(),
+            ride.getVehiclePlate(), ride.getPickupLatitude(), ride.getPickupLongitude(),
+            OffsetDateTime.now()));
+        return new SosDto(emergencyNumber(), link.url(), message, contacts, reachable.size(),
+            OffsetDateTime.now());
+    }
+
+    /**
+     * A link lives as long as the trip plus a grace, and never less than the
+     * configured floor.
+     *
+     * <p>Derived from the trip's own duration estimate rather than a flat number
+     * because the two failure modes are asymmetric: a link that outlives a short
+     * trip is harmless, and one that dies during a long one is the feature not
+     * working.
+     */
+    private java.time.Duration shareTtl(Ride ride) {
+        long floorMinutes = Math.max(5, policy.shareTtlMinutes());
+        long tripMinutes = Math.max(0, ride.getDurationSeconds() / 60L);
+        return java.time.Duration.ofMinutes(
+            Math.max(floorMinutes, tripMinutes + policy.shareGraceMinutes()));
+    }
+
+    /** The local emergency number, by the ride's region where one is configured.
+     *  112 is the default because it works across the EU and on most GSM
+     *  networks worldwide, which is the right answer when we do not know. */
+    private String emergencyNumber() {
+        return policy.emergencyNumber();
+    }
+
+    private String sosMessage(Ride ride, String url) {
+        return "I've raised an SOS on a GoJoGo trip"
+            + (ride.getVehiclePlate() == null || ride.getVehiclePlate().isBlank()
+                ? "" : " (" + ride.getVehicleLabel() + ", " + ride.getVehiclePlate() + ")")
+            + ". Follow me here: " + url;
+    }
+
+    private String callerName(UUID userId) {
+        return profiles.findById(userId).map(RideService::displayName).orElse("A GoJoGo user");
+    }
+
+    /** The operator's list (Phase 3 M5). Flagged trips, newest first — reports
+     *  pile up with nobody looking at them unless there is somewhere to look. */
+    @Transactional(readOnly = true)
+    List<SosRideDto> sosRides(int limit) {
+        return rides.withSos(PageRequest.of(0, Math.clamp(limit, 1, 200))).stream()
+            .map(ride -> new SosRideDto(ride.getId(), ride.getState().name(), ride.getSosAt(),
+                ride.getSosBy(), ride.getRiderId(), ride.getDriverUserId(),
+                otherPartyName(ride, ride.getDriverUserId() == null
+                    ? ride.getRiderId() : ride.getDriverUserId()),
+                ride.getPickupLabel(), ride.getDropoffLabel(),
+                ride.getVehicleLabel(), ride.getVehiclePlate(), ride.getRequestedAt()))
+            .toList();
     }
 
     // MARK: Rating
@@ -709,6 +853,13 @@ class RideService {
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such ride"));
     }
 
+    /** Either side of the trip, and nobody else. 404 for a stranger's ride. */
+    private Ride requireParty(UUID callerId, UUID rideId) {
+        return rides.findById(rideId)
+            .filter(r -> r.getRiderId().equals(callerId) || callerId.equals(r.getDriverUserId()))
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such ride"));
+    }
+
     private Ride requireDriver(UUID driverUserId, UUID rideId) {
         return rides.findById(rideId)
             .filter(r -> driverUserId.equals(r.getDriverUserId()))
@@ -786,7 +937,7 @@ class RideService {
             other == null ? null : other.id(),
             other == null ? null : displayName(other),
             other == null ? null : other.avatarUrl(),
-            ride.getVehicleLabel(), ride.getVehiclePlate(),
+            ride.getVehicleLabel(), ride.getVehiclePlate(), ride.isVehicleVerified(),
             position == null ? null : position.latitude(),
             position == null ? null : position.longitude(),
             position == null ? null : position.at(),
@@ -799,6 +950,7 @@ class RideService {
             // Blind until both are in: see Ride.ratingsVisibleTo.
             isDriver ? ride.getRiderRating() : ride.getDriverRating(),
             ratingsOut ? (isDriver ? ride.getDriverRating() : ride.getRiderRating()) : null,
+            ride.getSosAt(),
             ride.getExpiresAt(), ride.getRequestedAt(), ride.getConfirmedAt(),
             ride.getStartedAt(), ride.getCompletedAt(), ride.getCancelReason());
     }

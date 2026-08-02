@@ -149,6 +149,37 @@ record AttachDocumentRequest(@NotBlank @Size(max = 32) String kind,
                              @Size(max = 80) String contentType) {
 }
 
+// MARK: Community vehicle verification (Phase 3 M5, SPECS §4)
+
+/**
+ * What a passenger is being asked, and what it pays.
+ *
+ * <p>Deliberately thin about the driver — a first name and no id — because the
+ * question is "was the person driving the person in the app", and a card that
+ * shows their profile has answered it for them.
+ */
+record VerificationInviteDto(UUID id, String status, UUID vehicleId,
+                             String vehicleLabel, String vehiclePlate, Integer vehicleYear,
+                             String driverFirstName, long rewardMinor, String currency,
+                             OffsetDateTime expiresAt, OffsetDateTime createdAt) {
+}
+
+/** The five questions. Absent means no — an unanswered question is not a
+ *  confirmation, and an older client that omits one must not accidentally
+ *  verify a car. */
+record AnswerVerificationRequest(Boolean driverMatched, Boolean photosMatched,
+                                 Boolean plateMatched, Boolean roadworthy, Boolean noFraud,
+                                 @Size(max = 500) String comment) {
+}
+
+/** One passenger's answers, as a moderator reads them on a flagged vehicle. */
+record VerificationAnswerDto(UUID id, String status, UUID passengerId,
+                             Boolean driverMatched, Boolean photosMatched, Boolean plateMatched,
+                             Boolean roadworthy, Boolean noFraud, String comment,
+                             long rewardMinor, OffsetDateTime answeredAt,
+                             OffsetDateTime createdAt) {
+}
+
 // MARK: Review (PartnerAdminController)
 
 /** One row of the review queue, with signed links to the papers. */
@@ -156,8 +187,11 @@ record ReviewApplicationDto(PartnerAccountDto account, List<ReviewDocumentDto> d
                             List<ReviewVehicleDto> vehicles) {
 }
 
-/** A vehicle as a reviewer sees it: the same object, plus links to its papers. */
-record ReviewVehicleDto(VehicleDto vehicle, List<ReviewDocumentDto> documents) {
+/** A vehicle as a reviewer sees it: the same object, plus links to its papers,
+ *  and every passenger verdict it has collected — which is the only way a
+ *  moderator can tell a flagged car's story. */
+record ReviewVehicleDto(VehicleDto vehicle, List<ReviewDocumentDto> documents,
+                        List<VerificationAnswerDto> verifications) {
 }
 
 /** @param approved false flags it, which is not a rejection — a re-upload

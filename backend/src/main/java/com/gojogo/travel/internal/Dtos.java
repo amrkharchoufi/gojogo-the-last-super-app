@@ -71,6 +71,14 @@ record RateRideRequest(@NotNull @Min(1) @Max(5) Integer stars) {
  *                          <b>null to the rider</b> — the price list is public,
  *                          but what the driver paid for the job is not a line on
  *                          a passenger's receipt
+ * @param vehicleVerified   passengers have confirmed this car is what it claims
+ *                          to be (Phase 3 M5). A snapshot taken at CONFIRMED, so
+ *                          an old receipt does not retroactively claim a badge
+ *                          the car did not have at the time
+ * @param sosAt             when an alarm was raised on this trip, or null. Shown
+ *                          to <b>both</b> parties: a driver whose passenger has
+ *                          pressed it needs to know, and hiding it would be a
+ *                          product pretending nothing happened
  */
 record RideDto(UUID id, String state, String category,
                String pickupLabel, double pickupLatitude, double pickupLongitude,
@@ -79,13 +87,54 @@ record RideDto(UUID id, String state, String category,
                long suggestedFareMinor, long offeredFareMinor, Long agreedFareMinor,
                String currency, long cancelFeeMinor, Integer tokenCost,
                UUID otherPartyId, String otherPartyName, String otherPartyAvatarUrl,
-               String vehicleLabel, String vehiclePlate,
+               String vehicleLabel, String vehiclePlate, boolean vehicleVerified,
                Double driverLatitude, Double driverLongitude, OffsetDateTime driverPositionAt,
                UUID conversationId, List<RideOfferDto> offers,
-               Integer myRating, Integer theirRating,
+               Integer myRating, Integer theirRating, OffsetDateTime sosAt,
                OffsetDateTime expiresAt, OffsetDateTime requestedAt,
                OffsetDateTime confirmedAt, OffsetDateTime startedAt,
                OffsetDateTime completedAt, String cancelReason) {
+}
+
+// MARK: Safety (Phase 3 M5, SPECS §10)
+
+/**
+ * A public link to a live trip.
+ *
+ * @param message  the whole thing, already written, for the phone's own share
+ *                 sheet. Composed here rather than in the app because the
+ *                 wording of a safety message is not a place for six clients to
+ *                 each have their own idea
+ * @param viewCount whether anybody actually opened it, which is the one question
+ *                  a person who shared a trip asks
+ */
+record ShareTripDto(String url, OffsetDateTime expiresAt, int viewCount, String message) {
+}
+
+/**
+ * What comes back from pressing SOS.
+ *
+ * <p><strong>The server does not call anybody.</strong> It returns the number
+ * for the phone to dial, because a backend placing an emergency call on
+ * somebody's behalf is a claim about integration with emergency services that
+ * this system has no right to make (SPECS §10 — "no PSAP integration claimed").
+ *
+ * @param contacts       every emergency contact, so the app can open the message
+ *                       composer for the ones who are only a phone number
+ * @param notifiedCount  how many were reached by push, which is the honest
+ *                       number: it is the contacts who are also GojoGo accounts,
+ *                       and usually fewer than the list
+ */
+record SosDto(String emergencyNumber, String shareUrl, String message,
+              List<com.gojogo.profile.EmergencyContactDto> contacts, int notifiedCount,
+              OffsetDateTime raisedAt) {
+}
+
+/** One flagged trip, as an operator sees it. */
+record SosRideDto(UUID rideId, String state, OffsetDateTime sosAt, UUID raisedBy,
+                  UUID riderId, UUID driverUserId, String driverName,
+                  String pickupLabel, String dropoffLabel,
+                  String vehicleLabel, String vehiclePlate, OffsetDateTime requestedAt) {
 }
 
 /**

@@ -121,6 +121,16 @@ class PartnerAccount {
     @Column(name = "kyc_fee_paid_at")
     private OffsetDateTime kycFeePaidAt;
 
+    /** What community-verification rewards have taken out of the stake (Phase 3
+     *  M5). Accumulated here for the same reason the KYC fee is: without it a
+     *  driver whose stake has paid three rewards still looks fully staked, and a
+     *  release would hand back money that is already somebody else's. */
+    @Column(name = "reward_paid_minor", nullable = false)
+    private long rewardPaidMinor;
+
+    @Column(name = "reward_paid_at")
+    private OffsetDateTime rewardPaidAt;
+
     protected PartnerAccount() {
     }
 
@@ -214,6 +224,15 @@ class PartnerAccount {
         touch();
     }
 
+    /** A passenger was paid for verifying this partner's vehicle (Phase 3 M5).
+     *  Accumulated, because a driver with three vehicles can earn three badges
+     *  and each one costs them. */
+    void recordRewardPaid(long amountMinor, OffsetDateTime at) {
+        this.rewardPaidMinor += amountMinor;
+        this.rewardPaidAt = at;
+        touch();
+    }
+
     void recordStakeReleased(OffsetDateTime at) {
         this.stakeReleasedAt = at;
         touch();
@@ -223,11 +242,11 @@ class PartnerAccount {
         return stakePaidAt != null && stakeReleasedAt == null;
     }
 
-    /** What is still locked: the stake less whatever the ID checks have eaten.
-     *  Never negative — a fee larger than the stake is a config mistake, not a
-     *  debt somebody owes. */
+    /** What is still locked: the stake less whatever the ID checks and the
+     *  verification rewards have eaten. Never negative — a fee larger than the
+     *  stake is a config mistake, not a debt somebody owes. */
     long remainingStakeMinor() {
-        return hasLiveStake() ? Math.max(0, stakeAmountMinor - kycFeeMinor) : 0;
+        return hasLiveStake() ? Math.max(0, stakeAmountMinor - kycFeeMinor - rewardPaidMinor) : 0;
     }
 
     private void touch() {
@@ -265,4 +284,5 @@ class PartnerAccount {
     OffsetDateTime getStakePaidAt() { return stakePaidAt; }
     OffsetDateTime getStakeReleasedAt() { return stakeReleasedAt; }
     long getKycFeeMinor() { return kycFeeMinor; }
+    long getRewardPaidMinor() { return rewardPaidMinor; }
 }

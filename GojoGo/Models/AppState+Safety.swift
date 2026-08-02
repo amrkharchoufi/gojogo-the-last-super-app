@@ -183,3 +183,178 @@ struct BlockCandidate: Identifiable, Equatable {
     let id: UUID
     let handle: String
 }
+
+// MARK: - The safety pack (Phase 3 · Milestone 5)
+//
+// Emergency contacts, a public tracking link, SOS, and the passenger side of
+// community vehicle verification. Three of the four are used at the worst
+// moment somebody will ever have with this app, which sets the rules:
+//
+//   * **Nothing here guesses.** The emergency number, the link, the wording of
+//     the message — all of it comes from the server, because a client that
+//     composed its own would eventually compose a different one.
+//   * **The dangerous control takes two taps** and the safe one takes one.
+//     Sharing a trip is a tap. SOS is a tap and a confirmation, because an
+//     alarm raised by accident is a person explaining themselves to their
+//     mother at midnight — and one that needs three taps is an alarm nobody
+//     raises in time.
+//   * **The app never dials on its own.** SOS hands back a number and the
+//     person taps it. A phone that starts calling emergency services by itself
+//     is a phone people turn this feature off on.
+
+extension AppState {
+
+    // MARK: Emergency contacts
+
+    func loadEmergencyContacts() async {
+        guard backendConnected else { return }
+        do {
+            let response = try await SafetyStore.shared.emergencyContacts()
+            emergencyContacts = response.contacts
+            emergencyContactsMax = response.max
+        } catch {
+            safetyNotice = message(forSafety: error)
+        }
+    }
+
+    func addEmergencyContact(name: String, phone: String, relationship: String) async {
+        guard !emergencyContactsBusy else { return }
+        emergencyContactsBusy = true
+        defer { emergencyContactsBusy = false }
+        do {
+            let added = try await SafetyStore.shared.addEmergencyContact(
+                name: name, phone: phone, relationship: relationship)
+            emergencyContacts.append(added)
+        } catch {
+            safetyNotice = message(forSafety: error)
+        }
+    }
+
+    func removeEmergencyContact(_ id: UUID) async {
+        // Removed locally first: the list is short, the call is a delete, and a
+        // row that lingers after a swipe reads as a failure that didn't happen.
+        let previous = emergencyContacts
+        emergencyContacts.removeAll { $0.id == id }
+        do {
+            try await SafetyStore.shared.removeEmergencyContact(id)
+        } catch {
+            emergencyContacts = previous
+            safetyNotice = message(forSafety: error)
+        }
+    }
+
+    // MARK: Sharing a trip
+
+    /// A public link to the live trip, for somebody who isn't in the app.
+    ///
+    /// Returns the whole written message rather than just the URL, so the share
+    /// sheet sends a sentence a recipient understands instead of a bare link
+    /// from an app they may never have heard of.
+    func shareTrip() async -> String? {
+        guard let ride, backendConnected, !shareBusy else { return nil }
+        shareBusy = true
+        defer { shareBusy = false }
+        do {
+            let shared = try await TravelStore.shared.share(ride.id)
+            tripShare = shared
+            return shared.message
+        } catch {
+            safetyNotice = message(forSafety: error)
+            return nil
+        }
+    }
+
+    func stopSharingTrip() async {
+        guard let ride, backendConnected else { return }
+        let previous = tripShare
+        tripShare = nil
+        do {
+            try await TravelStore.shared.stopSharing(ride.id)
+        } catch {
+            tripShare = previous
+            safetyNotice = message(forSafety: error)
+        }
+    }
+
+    // MARK: SOS
+
+    /// Raises the alarm.
+    ///
+    /// The server flags the trip, mints a tracking link and pushes to every
+    /// emergency contact who is also on GojoGo. What comes back is the local
+    /// emergency number to dial and the contacts nobody could reach that way —
+    /// which is what the SOS sheet turns into a message the person sends
+    /// themselves, from their own number, which is the one their family opens.
+    func raiseSos() async {
+        guard let ride, backendConnected, !sosBusy else { return }
+        sosBusy = true
+        defer { sosBusy = false }
+        do {
+            sos = try await TravelStore.shared.sos(ride.id)
+            // The ride row now carries the flag; refreshing keeps both sides of
+            // the screen telling the same story.
+            await refreshRide()
+        } catch {
+            safetyNotice = message(forSafety: error)
+        }
+    }
+
+    /// The local emergency number, as a `tel:` URL. Nil rather than a guess when
+    /// the server hasn't answered — a wrong emergency number is worse than none.
+    var emergencyDialURL: URL? {
+        guard let number = sos?.emergencyNumber, !number.isEmpty else { return nil }
+        return URL(string: "tel://" + number.filter { $0.isNumber || $0 == "+" })
+    }
+
+    // MARK: Community vehicle verification
+
+    /// Vehicles this account has been asked to confirm.
+    ///
+    /// Silent on failure, deliberately: this is a bonus somebody may earn, and
+    /// an error banner about it on the travel screen would be noise at the
+    /// moment they are trying to get somewhere.
+    func loadVerificationInvites() async {
+        guard backendConnected else { return }
+        verificationInvites = (try? await SafetyStore.shared.verificationInvites()) ?? []
+    }
+
+    /// Answers all five questions. The server decides what they add up to — a
+    /// badge and a reward, or a flag and a suspension — and the app never
+    /// pre-empts that, because "thanks, verified!" over a rejection would be a
+    /// lie the person could check.
+    func answerVerification(_ invite: VerificationInviteDTO,
+                            driverMatched: Bool, photosMatched: Bool, plateMatched: Bool,
+                            roadworthy: Bool, noFraud: Bool, comment: String) async {
+        guard !verificationBusy else { return }
+        verificationBusy = true
+        defer { verificationBusy = false }
+        do {
+            _ = try await SafetyStore.shared.answerVerification(
+                invite.id, driverMatched: driverMatched, photosMatched: photosMatched,
+                plateMatched: plateMatched, roadworthy: roadworthy, noFraud: noFraud,
+                comment: comment)
+            verificationInvites.removeAll { $0.id == invite.id }
+            openVerification = nil
+            let allYes = driverMatched && photosMatched && plateMatched && roadworthy && noFraud
+            safetyNotice = allYes
+                ? "Thanks — that vehicle is now community verified."
+                : "Thanks for telling us. Somebody will look at this."
+        } catch {
+            safetyNotice = message(forSafety: error)
+        }
+    }
+}
+
+extension VerificationInviteDTO {
+
+    /// "USD 3.00" — what the card offers, formatted once rather than in three
+    /// places.
+    var rewardText: String {
+        String(format: "%@ %.2f", currency, Double(rewardMinor) / 100)
+    }
+
+    /// "White Dacia Logan · 12345-A-6", as much of it as was filled in.
+    var carLine: String {
+        vehiclePlate.isEmpty ? vehicleLabel : "\(vehicleLabel) · \(vehiclePlate)"
+    }
+}

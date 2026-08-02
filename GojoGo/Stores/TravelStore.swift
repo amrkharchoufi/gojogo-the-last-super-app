@@ -65,6 +65,10 @@ struct RideDTO: Decodable, Equatable, Identifiable {
     let otherPartyAvatarUrl: String?
     let vehicleLabel: String?
     let vehiclePlate: String?
+    /// Passengers have confirmed this car is what it claims to be (Phase 3 M5).
+    /// A snapshot taken when the trip was matched, so an old receipt never
+    /// retroactively claims a badge the car didn't have at the time.
+    let vehicleVerified: Bool?
     /// Where the car is right now — read from dispatch per request, so it can
     /// never be a stale copy.
     let driverLatitude: Double?
@@ -76,6 +80,10 @@ struct RideDTO: Decodable, Equatable, Identifiable {
     /// Null until both sides have rated: reading a one-star before writing your
     /// own turns a rating into a reply.
     let theirRating: Int?
+    /// When somebody raised an alarm on this trip. Shown to **both** parties —
+    /// a driver whose passenger has pressed it needs to know, and an app that
+    /// hid it would be pretending nothing happened.
+    let sosAt: Date?
     let expiresAt: Date?
     let requestedAt: Date?
     let confirmedAt: Date?
@@ -258,4 +266,58 @@ final class TravelStore {
     func complete(_ rideID: UUID) async throws -> RideDTO {
         try await APIClient.shared.post("/v1/travel/rides/\(rideID)/complete")
     }
+
+    // MARK: Safety (Phase 3 M5)
+
+    /// A public link to this trip, for somebody who isn't in the app. Either
+    /// party may make one — a driver working nights has as much reason to be
+    /// watched as a rider does.
+    func share(_ rideID: UUID) async throws -> ShareTripDTO {
+        try await APIClient.shared.post("/v1/travel/rides/\(rideID)/share")
+    }
+
+    func stopSharing(_ rideID: UUID) async throws {
+        try await APIClient.shared.delete("/v1/travel/rides/\(rideID)/share")
+    }
+
+    /// The button. Flags the trip, mints a tracking link and pushes to every
+    /// emergency contact who is also on GojoGo. **The server never dials** —
+    /// it hands back the number and the phone does it.
+    func sos(_ rideID: UUID) async throws -> SosDTO {
+        try await APIClient.shared.post("/v1/travel/rides/\(rideID)/sos")
+    }
+}
+
+// MARK: - Safety payloads (Phase 3 M5)
+
+/// A public link to a live trip.
+struct ShareTripDTO: Decodable, Equatable {
+    let url: String
+    let expiresAt: Date?
+    /// Whether anybody actually opened it — the one question a person who
+    /// shared a trip asks.
+    let viewCount: Int
+    /// The whole message, already written by the server. Composed there rather
+    /// than here because the wording of a safety message is not a place for
+    /// every client to have its own idea.
+    let message: String
+}
+
+/// What comes back from pressing SOS.
+///
+/// The app dials `emergencyNumber` and opens the message composer for the
+/// contacts the server could not push to. It does **not** place a call on
+/// anybody's behalf without their tap, and neither does the server.
+struct SosDTO: Decodable, Equatable {
+    let emergencyNumber: String
+    let shareUrl: String
+    let message: String
+    let contacts: [EmergencyContactDTO]
+    /// How many were reached by push — the contacts who are also GojoGo
+    /// accounts, and usually fewer than the list.
+    let notifiedCount: Int
+    let raisedAt: Date?
+
+    /// The ones nobody could push to, which is who the message composer is for.
+    var unreachable: [EmergencyContactDTO] { contacts.filter { $0.linkedProfileId == nil } }
 }

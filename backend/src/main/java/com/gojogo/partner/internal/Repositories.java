@@ -61,6 +61,22 @@ interface VehicleDocumentRepository extends JpaRepository<VehicleDocument, UUID>
     Optional<VehicleDocument> findByVehicleIdAndKind(UUID vehicleId, VehicleDocumentKind kind);
 }
 
+interface VehicleVerificationRepository extends JpaRepository<VehicleVerification, UUID> {
+
+    /** Every invitation this vehicle has ever had — the cap is a count over
+     *  these, and the "is one still out?" check is a filter over them. Small by
+     *  construction: the cap is three. */
+    List<VehicleVerification> findByVehicleIdOrderByCreatedAtDesc(UUID vehicleId);
+
+    List<VehicleVerification> findByPassengerIdOrderByCreatedAtDesc(UUID passengerId);
+
+    /** The sweep: invitations nobody answered in time. */
+    @Query("select v from VehicleVerification v where v.status = :status "
+        + "and v.expiresAt <= :now order by v.expiresAt asc")
+    List<VehicleVerification> lapsed(@Param("status") VerificationStatus status,
+                                     @Param("now") java.time.OffsetDateTime now, Pageable page);
+}
+
 interface VehiclePhotoRepository extends JpaRepository<VehiclePhoto, VehiclePhoto.Key> {
 
     List<VehiclePhoto> findByVehicleIdOrderBySortOrderAsc(UUID vehicleId);

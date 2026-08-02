@@ -32,6 +32,12 @@ interface RideRepository extends JpaRepository<Ride, UUID> {
 
     List<Ride> findByDriverUserIdOrderByRequestedAtDesc(UUID driverUserId, Pageable page);
 
+    /** The operator's SOS list (Phase 3 M5). Newest alarm first — the queue is
+     *  worked from the top, and an hour-old one has usually resolved itself one
+     *  way or another. */
+    @Query("select r from Ride r where r.sosAt is not null order by r.sosAt desc")
+    List<Ride> withSos(Pageable page);
+
     /** The expiry sweep: searches that ran out of time. */
     @Query("select r from Ride r where r.state in :states and r.expiresAt <= :now "
         + "order by r.expiresAt asc")

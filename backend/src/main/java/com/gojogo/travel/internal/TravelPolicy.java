@@ -64,4 +64,35 @@ class TravelPolicy {
     long maxOfferMultipleBps() {
         return Math.max(10_000, config.number("travel.offer.max.multiple.bps", 30_000));
     }
+
+    // MARK: Safety (Phase 3 M5, SPECS §10)
+
+    /** The floor on a share link's life. A trip's own estimate usually beats it;
+     *  this is what stops a two-minute hop producing a link that has expired by
+     *  the time the message is read. */
+    long shareTtlMinutes() {
+        return Math.clamp(config.number("safety.share.ttl.minutes", 180), 5, 24 * 60);
+    }
+
+    /** How long a link keeps working after the trip ends. Deliberately generous:
+     *  a link that dies at the kerb dies at the one moment somebody is looking
+     *  at it. */
+    long shareGraceMinutes() {
+        return Math.clamp(config.number("safety.share.grace.minutes", 60), 0, 24 * 60);
+    }
+
+    /**
+     * The number the SOS screen dials.
+     *
+     * <p>112 by default because it works across the EU and on most GSM networks
+     * worldwide, which is the right answer when we do not know where somebody
+     * is. A market overrides it with {@code safety.emergency.number.<REGION>}.
+     *
+     * <p>The <em>server</em> never dials it. Placing an emergency call on
+     * somebody's behalf would be a claim about integration with emergency
+     * services this system has no right to make (SPECS §10).
+     */
+    String emergencyNumber() {
+        return config.string("safety.emergency.number", "112");
+    }
 }

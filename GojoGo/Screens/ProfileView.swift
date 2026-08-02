@@ -311,6 +311,11 @@ struct ProfileView: View {
         .sheet(isPresented: $app.showDeleteAccount) {
             DeleteAccountView().environmentObject(app)
         }
+        // Phase 3 M5, and here for the same reason as the two above: it opens
+        // from Settings, which opens from here.
+        .sheet(isPresented: $app.showEmergencyContacts) {
+            EmergencyContactsView().environmentObject(app)
+        }
         // Report and block open from this screen's menu, so they present from
         // here; the root's copy stands down while this page is up. A comments
         // thread opened *over* this profile owns them instead — it is a real

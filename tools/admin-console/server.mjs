@@ -73,6 +73,11 @@ const ALLOWED = [
   ['GET', /^\/v1\/moderation\/admin\/reports\/[0-9a-f-]{36}$/],
   ['GET', /^\/v1\/moderation\/admin\/accounts\/[0-9a-f-]{36}\/reports(\?.*)?$/],
   ['POST', /^\/v1\/moderation\/admin\/reports\/[0-9a-f-]{36}\/(action|dismiss)$/],
+  // SOS (Phase 3 M5). Read-only, and there is nothing here to decide: a trip in
+  // trouble is dealt with by a person picking up a phone, not by a status
+  // changing in a queue. What the surface owes an operator is the trip, who
+  // raised it, and who to call.
+  ['GET', /^\/v1\/travel\/admin\/sos(\?.*)?$/],
   // Liveness, so the console can say whether the API is even up.
   ['GET', /^\/actuator\/health$/]
 ];

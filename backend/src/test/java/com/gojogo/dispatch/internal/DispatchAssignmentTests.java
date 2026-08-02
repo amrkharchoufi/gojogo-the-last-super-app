@@ -366,7 +366,8 @@ class DispatchAssignmentTests {
 
     private static Worker worker(UUID userId, WorkerKind kind) {
         Worker worker = new Worker(userId, kind, UUID.randomUUID(), VehicleCategory.CAR,
-            "Casa", "White Dacia Logan", "12345-A-6");
+            "Casa", new com.gojogo.dispatch.VehicleRef(UUID.randomUUID(), VehicleCategory.CAR,
+                "White Dacia Logan", "12345-A-6", false));
         setId(worker, UUID.randomUUID());
         worker.reportPosition(33.57, -7.58);
         worker.setAvailable(true);

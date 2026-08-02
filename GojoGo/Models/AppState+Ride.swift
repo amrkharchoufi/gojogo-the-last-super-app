@@ -190,6 +190,12 @@ extension AppState {
         stopRidePolling()
         ride = nil
         travelDriver = nil
+        // The safety pack belongs to a trip, not to a session: a share link on
+        // screen after the trip it pointed at is gone would invite somebody to
+        // send a dead URL to the person waiting for them (Phase 3 M5).
+        tripShare = nil
+        sos = nil
+        confirmingSos = false
         if travelPhase == .matching || travelPhase == .enRoute || travelPhase == .inTrip {
             withAnimation(.easeInOut(duration: 0.3)) { travelPhase = .home }
         }

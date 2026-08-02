@@ -638,7 +638,8 @@ function viewHelp(main) {
         row('Partner review', 'queue, documents, approve / reject / suspend / restore'),
         row('Vehicle review', 'approve or flag a driver\'s car, separately from the person'),
         row('Admin-side create', 'file an application for a merchant, and submit it'),
-        row('Moderation', 'report queue, hide / remove / suspend / restore / dismiss'))),
+        row('Moderation', 'report queue, hide / remove / suspend / restore / dismiss'),
+        row('SOS', 'trips somebody raised an alarm on — read-only, see below'))),
     el('div', { className: 'card' },
       el('h3', {}, 'Not covered, on purpose'),
       el('div', { style: 'margin-top:var(--sm)' },
@@ -647,7 +648,9 @@ function viewHelp(main) {
         row('Menus and storefronts', 'those are the owner\'s own /mine surfaces, driven with '
           + 'their JWT, not an admin mirror'),
         row('Anything with its own database', 'this console stores nothing. Close it and no '
-          + 'state is lost, because there was none'))),
+          + 'state is lost, because there was none'),
+        row('Closing an SOS', 'there is no honest thing a button could mean. A trip in '
+          + 'trouble is dealt with by a person picking up a phone'))),
     el('div', { className: 'card-soft' },
       el('p', { className: 'subtle', style: 'font-size:14px' },
         'Decisions are signed with whichever credential the server was started with. A '
@@ -655,9 +658,62 @@ function viewHelp(main) {
         + 'anonymous operator, which is fine for a stopgap and not fine as a habit.')));
 }
 
+// ── SOS (Phase 3 M5) ────────────────────────────────────────────────────────
+//
+// Read-only, and deliberately so. There is no "resolve" button because there is
+// no honest thing for one to mean: a trip in trouble is dealt with by a person
+// picking up a phone, not by a status changing in a queue. What this screen owes
+// an operator is the trip, who raised it, and enough to act on — and it is the
+// screen existing at all that turns a button on somebody's phone into something
+// anybody sees.
+
+async function viewSos(main) {
+  main.replaceChildren(
+    el('div', { className: 'main-head' },
+      el('div', {},
+        el('h1', {}, 'SOS'),
+        el('p', {}, 'Trips somebody raised an alarm on, newest first. Nothing here '
+          + 'closes itself, and nothing here closes it for you.'))),
+    el('div', { id: 'sos-body' }, skeleton(3)));
+
+  let rows;
+  try {
+    rows = await api('/v1/travel/admin/sos?limit=50');
+  } catch (err) {
+    $('#sos-body')?.replaceChildren(empty('Could not load SOS trips', err.message));
+    return;
+  }
+  $('#count-sos').textContent = rows.length || '';
+  if (!rows.length) {
+    $('#sos-body')?.replaceChildren(
+      empty('Nothing raised', 'No trip has had an SOS raised on it.'));
+    return;
+  }
+  const body = el('tbody');
+  for (const r of rows) {
+    body.append(el('tr', {},
+      el('td', {}, el('div', {}, when(r.sosAt)),
+        el('div', { className: 'mono muted' }, `ride ${r.rideId.slice(0, 8)}`)),
+      el('td', {}, badge(r.state.toLowerCase().replace(/_/g, ' '), badgeClass(r.state))),
+      el('td', {}, r.raisedBy === r.riderId ? 'the rider' : 'the driver'),
+      el('td', {}, el('div', {}, r.driverName || '—'),
+        el('div', { className: 'mono muted' },
+          [r.vehicleLabel, r.vehiclePlate].filter(Boolean).join(' · ') || '—')),
+      el('td', { className: 'subtle' },
+        `${r.pickupLabel || '—'} → ${r.dropoffLabel || '—'}`)));
+  }
+  $('#sos-body')?.replaceChildren(
+    el('div', { className: 'card', style: 'padding:0;overflow:hidden' },
+      el('table', {},
+        el('thead', {}, el('tr', {},
+          ...['Raised', 'Trip', 'By', 'Driver', 'Route'].map(h => el('th', {}, h)))),
+        body)));
+}
+
 // ── Routing ─────────────────────────────────────────────────────────────────
 
-const VIEWS = { partners: viewPartners, moderation: viewModeration, create: viewCreate, help: viewHelp };
+const VIEWS = { partners: viewPartners, moderation: viewModeration, sos: viewSos,
+                create: viewCreate, help: viewHelp };
 
 function go(name) {
   for (const btn of document.querySelectorAll('.nav-row')) {
@@ -691,6 +747,13 @@ async function boot() {
   try {
     const summary = await api('/v1/moderation/admin/reports/summary');
     $('#count-reports').textContent = summary.open || '';
+  } catch { /* the badge is a nicety */ }
+
+  try {
+    // The one count worth fetching before anybody clicks anything: a raised SOS
+    // that nobody has noticed is the whole failure mode this screen exists for.
+    const sos = await api('/v1/travel/admin/sos?limit=50');
+    $('#count-sos').textContent = sos.length || '';
   } catch { /* the badge is a nicety */ }
 
   go('partners');

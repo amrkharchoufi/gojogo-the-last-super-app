@@ -51,7 +51,8 @@ class AccountDeletionTests {
         when(profiles.findByCognitoSub(SUB)).thenReturn(Optional.of(me));
         when(profiles.findById(me.getId())).thenReturn(Optional.of(me));
 
-        service = new AccountDeletionService(profiles, accounts, config);
+        service = new AccountDeletionService(profiles,
+            mock(EmergencyContactRepository.class), accounts, config);
     }
 
     @Test

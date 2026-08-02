@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -187,5 +188,38 @@ class TravelController {
     RideDto rate(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID rideId,
                  @Valid @RequestBody RateRideRequest body) {
         return rides.rate(current.require(jwt).id(), rideId, body.stars());
+    }
+
+    // MARK: Safety (Phase 3 M5, SPECS §10)
+
+    /**
+     * A public link to this trip, for somebody who is not in the app.
+     *
+     * <p>Either party may make one — a driver working nights has as much reason
+     * to be watched as a rider does.
+     */
+    @PostMapping("/v1/travel/rides/{rideId}/share")
+    ShareTripDto share(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID rideId) {
+        return rides.shareTrip(current.require(jwt).id(), rideId);
+    }
+
+    @DeleteMapping("/v1/travel/rides/{rideId}/share")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void stopSharing(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID rideId) {
+        rides.stopSharing(current.require(jwt).id(), rideId);
+    }
+
+    /**
+     * The button.
+     *
+     * <p>It flags the trip, mints a tracking link, pushes to every emergency
+     * contact who is also on GojoGo, and hands back the local emergency number
+     * and a written message for the rest. <b>The server never dials</b> — that
+     * would be a claim about integration with emergency services this system has
+     * not earned (SPECS §10).
+     */
+    @PostMapping("/v1/travel/rides/{rideId}/sos")
+    SosDto sos(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID rideId) {
+        return rides.raiseSos(current.require(jwt).id(), rideId);
     }
 }

@@ -8,6 +8,7 @@ import com.gojogo.dispatch.DispatchOffered;
 import com.gojogo.dispatch.DispatchRequest;
 import com.gojogo.dispatch.JobKind;
 import com.gojogo.dispatch.VehicleCategory;
+import com.gojogo.dispatch.VehicleRef;
 import com.gojogo.dispatch.WorkerEligibility;
 import com.gojogo.dispatch.WorkerKind;
 import com.gojogo.dispatch.WorkerPosition;
@@ -152,10 +153,7 @@ class DispatchService implements DispatchApi {
         events.publishEvent(new DispatchAssigned(job.getId(), job.getJobKind(), job.getJobRefId(),
             worker.getId(), worker.getUserId(), worker.getKind(), worker.getCategory(),
             job.getAssignedAt()));
-        return new Assignment(worker.getId(), worker.getUserId(), worker.getKind(),
-            worker.getCategory(), job.getJobKind(), job.getJobRefId(),
-            worker.getRating().doubleValue(), worker.getCompletedCount(),
-            worker.getVehicleLabel(), worker.getVehiclePlate(), job.getAssignedAt());
+        return toAssignment(worker, job);
     }
 
     @Override
@@ -194,10 +192,14 @@ class DispatchService implements DispatchApi {
         return jobs.findByJobKindAndJobRefId(jobKind, jobRefId)
             .filter(j -> j.getAssignedWorkerId() != null)
             .flatMap(j -> workers.findById(j.getAssignedWorkerId())
-                .map(w -> new Assignment(w.getId(), w.getUserId(), w.getKind(), w.getCategory(),
-                    j.getJobKind(), j.getJobRefId(), w.getRating().doubleValue(),
-                    w.getCompletedCount(), w.getVehicleLabel(), w.getVehiclePlate(),
-                    j.getAssignedAt())));
+                .map(w -> toAssignment(w, j)));
+    }
+
+    private static Assignment toAssignment(Worker worker, DispatchJob job) {
+        return new Assignment(worker.getId(), worker.getUserId(), worker.getKind(),
+            worker.getCategory(), job.getJobKind(), job.getJobRefId(),
+            worker.getRating().doubleValue(), worker.getCompletedCount(),
+            worker.vehicle(), job.getAssignedAt());
     }
 
     @Override
@@ -224,23 +226,22 @@ class DispatchService implements DispatchApi {
 
     @Transactional
     UUID provision(WorkerKind kind, UUID userId, UUID partnerAccountId,
-                   VehicleCategory category, String homeRegion,
-                   String vehicleLabel, String vehiclePlate) {
+                   VehicleRef vehicle, String homeRegion) {
         return workers.findByUserIdAndKind(userId, kind)
             .map(Worker::getId)
             .orElseGet(() -> workers.save(new Worker(userId, kind, partnerAccountId,
-                category == null ? VehicleCategory.defaultFor(kind) : category,
-                homeRegion, vehicleLabel, vehiclePlate)).getId());
+                vehicle.category() == null ? VehicleCategory.defaultFor(kind) : vehicle.category(),
+                homeRegion, vehicle)).getId());
     }
 
-    /** The driver switched cars. Not a re-provisioning: it happens weekly, and
-     *  it is the one field matching reads. */
+    /** The driver switched cars — or the one they are in earned its badge. Not a
+     *  re-provisioning: it happens weekly, and it carries the one field matching
+     *  reads. */
     @Transactional
-    void setVehicle(WorkerKind kind, UUID workerId, VehicleCategory category,
-                    String vehicleLabel, String vehiclePlate) {
+    void setVehicle(WorkerKind kind, UUID workerId, VehicleRef vehicle) {
         workers.findById(workerId)
             .filter(w -> w.getKind() == kind)
-            .ifPresent(w -> w.setVehicle(category, vehicleLabel, vehiclePlate));
+            .ifPresent(w -> w.setVehicle(vehicle));
     }
 
     /**

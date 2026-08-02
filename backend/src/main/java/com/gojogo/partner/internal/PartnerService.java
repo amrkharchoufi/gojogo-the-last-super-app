@@ -4,6 +4,7 @@ import com.gojogo.delivery.MerchantProvisioningApi;
 import com.gojogo.delivery.MerchantRegistration;
 import com.gojogo.dispatch.CourierProvisioningApi;
 import com.gojogo.dispatch.DriverProvisioningApi;
+import com.gojogo.dispatch.VehicleRef;
 import com.gojogo.dispatch.WorkerRegistration;
 import com.gojogo.kyc.IdentityStatus;
 import com.gojogo.kyc.IdentityVerificationApi;
@@ -578,9 +579,8 @@ class PartnerService {
      * default for the kind, which is the honest answer for somebody on a bicycle.
      */
     private WorkerRegistration workerRegistration(PartnerAccount account) {
-        VehicleService.ActiveVehicle active = vehicles.activeSnapshot(account.getId());
         return new WorkerRegistration(account.getUserId(), account.getId(),
-            active.category(), account.getCity(), active.label(), active.plate());
+            vehicles.activeSnapshot(account.getId()), account.getCity());
     }
 
     /**
@@ -594,15 +594,13 @@ class PartnerService {
      * <p>Only for a provisioned partner: before an approval there is no registry
      * row, and after a suspension there is one that must not receive work anyway.
      */
-    private void pushVehicleToDispatch(PartnerAccount account) {
+    void pushVehicleToDispatch(PartnerAccount account) {
         UUID refId = account.getProvisionedRefId();
         if (refId == null) return;
-        VehicleService.ActiveVehicle active = vehicles.activeSnapshot(account.getId());
+        VehicleRef active = vehicles.activeSnapshot(account.getId());
         switch (account.getKind()) {
-            case DRIVER -> drivers.setDriverVehicle(refId, active.category(),
-                active.label(), active.plate());
-            case COURIER -> couriers.setCourierVehicle(refId, active.category(),
-                active.label(), active.plate());
+            case DRIVER -> drivers.setDriverVehicle(refId, active);
+            case COURIER -> couriers.setCourierVehicle(refId, active);
             case RESTAURANT -> { }
         }
     }

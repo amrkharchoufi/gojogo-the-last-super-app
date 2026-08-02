@@ -10,18 +10,20 @@ import java.util.UUID;
  * @param userId           the profile that will be offered work
  * @param partnerAccountId the application that earned it, kept for the audit
  *                         trail; dispatch never reads back into {@code partner}
- * @param category         what they will be driving, or null for the default for
- *                         their kind. Null is the honest answer until Phase 3 M2
- *                         registers vehicles: an approval today knows a person is
- *                         allowed to drive, not what they drive
+ * @param vehicle          what they will be driving — pushed down rather than
+ *                         read across, because the vehicle lives in
+ *                         {@code partner} and a rider on a kerb needs to know
+ *                         which car is theirs. {@link VehicleRef#none()} for
+ *                         somebody with no vehicle at all, which is the honest
+ *                         answer for a courier on a bicycle; a null category
+ *                         inside it lets dispatch fall back to the default for
+ *                         the kind
  * @param homeRegion       the city on the application, for later regional policy
- * @param vehicleLabel     "White Dacia Logan", and {@code vehiclePlate} beside
- *                         it. Pushed down rather than read across: the vehicle
- *                         lives in {@code partner} and a rider on a kerb needs to
- *                         know which car is theirs, so the fact travels in the
- *                         direction provisioning already goes
  */
-public record WorkerRegistration(UUID userId, UUID partnerAccountId,
-                                 VehicleCategory category, String homeRegion,
-                                 String vehicleLabel, String vehiclePlate) {
+public record WorkerRegistration(UUID userId, UUID partnerAccountId, VehicleRef vehicle,
+                                 String homeRegion) {
+
+    public WorkerRegistration {
+        vehicle = vehicle == null ? VehicleRef.none() : vehicle;
+    }
 }

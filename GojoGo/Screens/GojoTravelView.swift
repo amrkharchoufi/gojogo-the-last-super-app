@@ -61,6 +61,15 @@ struct GojoTravelView: View {
                   let driver = app.travelDriver else { return }
             viewport = TravelCamera.follow(driver: driver)
         }
+        // Phase 3 M5. Both present from this screen and nowhere else — one
+        // owner per AppState-driven sheet, or it silently refuses to present.
+        .task { await app.loadVerificationInvites() }
+        .sheet(isPresented: $app.confirmingSos) {
+            SosSheet().environmentObject(app)
+        }
+        .sheet(item: $app.openVerification) { invite in
+            VehicleVerificationSheet(invite: invite).environmentObject(app)
+        }
     }
 
     // MARK: Header
@@ -126,6 +135,13 @@ struct GojoTravelView: View {
 
     private var homeSheet: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Phase 3 M5. Above "Where to?" rather than in a notification
+            // centre, because this is the one screen the person who can answer
+            // it is already looking at — and it disappears the moment they do.
+            if let invite = app.verificationInvites.first {
+                VerificationInviteCard(invite: invite)
+                    .padding(.bottom, 2)
+            }
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 app.openTravelSearch()
@@ -426,9 +442,19 @@ struct GojoTravelView: View {
                         Text(driver.vehicle)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(GGColor.textPrimary)
-                        Text(driver.plate)
-                            .font(.ggMono(11, .semibold))
-                            .foregroundStyle(GGColor.textSecondary)
+                        HStack(spacing: 4) {
+                            // Earned by other passengers checking this exact car
+                            // (Phase 3 M5). Beside the plate because the plate
+                            // is what it is a claim about.
+                            if app.ride?.vehicleVerified == true {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(GGColor.accent)
+                            }
+                            Text(driver.plate)
+                                .font(.ggMono(11, .semibold))
+                                .foregroundStyle(GGColor.textSecondary)
+                        }
                     }
                 }
                 .padding(14)
@@ -445,6 +471,13 @@ struct GojoTravelView: View {
                         .font(.ggMono(13, .semibold))
                         .foregroundStyle(GGColor.textPrimary)
                 }
+            }
+
+            // Phase 3 M5: share and SOS sit *above* Cancel, because the person
+            // who needs them is not looking for the cancel button.
+            if app.travelPhase == .enRoute || app.travelPhase == .inTrip {
+                TripSafetyBar()
+                TripShareStatus()
             }
 
             if app.travelPhase == .enRoute || app.travelPhase == .inTrip {

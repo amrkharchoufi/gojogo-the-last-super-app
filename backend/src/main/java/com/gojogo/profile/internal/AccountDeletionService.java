@@ -59,12 +59,15 @@ class AccountDeletionService {
     private static final Logger log = LoggerFactory.getLogger(AccountDeletionService.class);
 
     private final UserProfileRepository profiles;
+    private final EmergencyContactRepository emergencyContacts;
     private final AccountAdminApi accounts;
     private final ConfigApi config;
 
-    AccountDeletionService(UserProfileRepository profiles, AccountAdminApi accounts,
-                           ConfigApi config) {
+    AccountDeletionService(UserProfileRepository profiles,
+                           EmergencyContactRepository emergencyContacts,
+                           AccountAdminApi accounts, ConfigApi config) {
         this.profiles = profiles;
+        this.emergencyContacts = emergencyContacts;
         this.accounts = accounts;
         this.config = config;
     }
@@ -141,6 +144,13 @@ class AccountDeletionService {
             UUID id = profile.getId();
             profile.anonymize(tombstoneHandle());
             profiles.save(profile);
+            // The tombstone is what makes every old post read "Deleted user",
+            // but it leaves the rows that hang off the profile. Emergency
+            // contacts are other people's names and phone numbers (Phase 3 M5),
+            // which is exactly the kind of thing a deletion is supposed to take
+            // with it — and unlike a post, nobody else's thread has a hole in it
+            // when they go.
+            emergencyContacts.deleteByProfileId(id);
             log.warn("Account {} anonymized after its grace period", id);
         }
         return due.size();

@@ -1,13 +1,13 @@
 # GojoAdmin, locally
 
 A stopgap operator console for the jobs that need a human **now** — reviewing partner
-applications, reviewing vehicles, and working the moderation queue — while the real
-GojoAdmin is still unbuilt.
+applications, reviewing vehicles, working the moderation queue and watching for a
+raised SOS — while the real GojoAdmin is still unbuilt.
 
 It is deliberately small and deliberately disposable. It has **no database, no build
-step and no dependencies**: every screen is a renderer for `/v1/partner/admin/**` and
-`/v1/moderation/admin/**`, which is the same public REST surface ARCHITECTURE §10b
-reserves for GojoAdmin ("no private tables and no parallel data path"). The day the
+step and no dependencies**: every screen is a renderer for `/v1/partner/admin/**`,
+`/v1/moderation/admin/**` and `/v1/travel/admin/sos` — the same public REST surface
+ARCHITECTURE §10b reserves for GojoAdmin ("no private tables and no parallel data path"). The day the
 real console exists, this directory is deleted and nothing has to be unwound.
 
 ## Running it
@@ -72,6 +72,7 @@ Two consequences worth knowing:
 |---|---|
 | **Applications** | The partner queue by status and kind; full detail with the stake, the identity check, every uploaded document behind a short-lived signed link, and each vehicle with its papers. Approve / reject / suspend / restore, and submit a draft on the applicant's behalf. |
 | **Reports** | The moderation queue. Hide, remove, suspend, restore, dismiss — with the context a decision needs (how many other reports are open on the same target, whether the content is already gone). |
+| **SOS** | Trips somebody raised an alarm on (Phase 3 M5), newest first: when, who raised it, the driver and their plate, and the route. **Read-only, deliberately** — there is no "resolve" button because there is no honest thing for one to mean. A trip in trouble is dealt with by a person picking up a phone, and a status changing in a queue would only make it look handled. |
 | **File an application** | The admin-side create. Restaurants are created here rather than in the app (decided 2026-07-27). |
 
 Two rules it holds to throughout:

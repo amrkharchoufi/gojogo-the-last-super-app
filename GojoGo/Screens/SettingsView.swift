@@ -124,6 +124,16 @@ struct SettingsView: View {
     /// Store review looks for exactly this to be findable without support.
     private var safety: some View {
         group("Safety") {
+            // Phase 3 M5. Above the block list on purpose: this is the one
+            // control here you are meant to set up *before* anything goes
+            // wrong, and a list you only find after you needed it is a list
+            // that was never filled in.
+            row("Emergency contacts", "person.2.badge.key",
+                detail: app.emergencyContacts.isEmpty
+                    ? "" : "\(app.emergencyContacts.count)") {
+                open { app.showEmergencyContacts = true }
+            }
+            divider
             row("Blocked accounts", "hand.raised",
                 detail: app.blockedAccounts.isEmpty ? "" : "\(app.blockedAccounts.count)") {
                 open { app.showBlockedAccounts = true }
