@@ -36,6 +36,8 @@ struct WorldContactView: View {
     /// Whether this is somebody you may add — they reached you first, so the
     /// server will part with the number an add is made of.
     @State private var canAddBack = false
+    /// First fetch for this person only — a refresh keeps what's on screen.
+    @State private var loadingPosts = false
     @State private var addingContact = false
 
     private var convo: WorldConversation? { app.selectedWorldConversation }
@@ -353,7 +355,13 @@ struct WorldContactView: View {
 
     private var postsSection: some View {
         VStack(spacing: 14) {
-            if theirPosts.isEmpty {
+            if loadingPosts {
+                // "Nothing shared with you yet" while the request is still out
+                // is a lie with a persuasive tone of voice — and the one this
+                // tab tells is about somebody's privacy, so it must not be told
+                // a second before it's true.
+                ForEach(0..<2, id: \.self) { _ in postShimmerCard }
+            } else if theirPosts.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "square.stack")
                         .font(.system(size: 28))
@@ -382,12 +390,40 @@ struct WorldContactView: View {
         .padding(.horizontal, 16)
     }
 
+    private var postShimmerCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(IMColor.chrome)
+                    .frame(width: 34, height: 34)
+                    .shimmering()
+                Capsule()
+                    .fill(IMColor.chrome)
+                    .frame(width: 110, height: 11)
+                    .shimmering()
+                Spacer(minLength: 0)
+            }
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(IMColor.chrome)
+                .frame(height: 170)
+                .shimmering()
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(IMColor.inputFill))
+        .allowsHitTesting(false)
+        .accessibilityLabel("Loading posts")
+    }
+
     /// Their posts and rich profile. Both are entitlement-gated server-side —
     /// the posts come from the viewer's own feed, and the profile comes back
     /// empty unless the server agrees they're actually a contact.
     private func loadTheirContent() async {
         guard let cid = contactID, loadedContentFor != cid else { return }
         loadedContentFor = cid
+        loadingPosts = theirPosts.isEmpty
+        defer { loadingPosts = false }
         if let posts = try? await WorldContentStore.shared.content(by: cid) {
             theirPosts = posts
         } else {

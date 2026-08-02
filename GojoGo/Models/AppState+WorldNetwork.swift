@@ -23,6 +23,18 @@ extension AppState {
 
     // MARK: Feed
 
+    /// Placeholders instead of a blank space while the first feed fetch is in
+    /// flight. Only the first: a pull-to-refresh has content on screen already,
+    /// and replacing it with grey bars would read as losing it.
+    ///
+    /// Bounded by the same conditions the fetch itself is guarded by. An account
+    /// that never asks — offline, or still in setup — would otherwise shimmer
+    /// forever, which is the failure mode that makes people distrust a spinner.
+    var shouldShowWorldFeedShimmer: Bool {
+        backendConnected && worldSetupComplete && !worldFeedLoaded
+            && worldStories.isEmpty && worldFeedPosts.isEmpty
+    }
+
     func refreshWorldFeed() async {
         guard backendConnected, worldSetupComplete else { return }
         if worldFeedPosts.isEmpty && !worldFeedLoaded { worldFeedLoading = true }

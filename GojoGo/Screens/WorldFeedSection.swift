@@ -12,16 +12,77 @@ import SwiftUI
 struct WorldFeedSection: View {
     @EnvironmentObject var app: AppState
 
+    /// The first fetch hasn't landed, so the row and the card stand in for what
+    /// is coming. Read once per body rather than per subview, so the stories and
+    /// the posts can't disagree about whether the feed is still loading.
+    private var loading: Bool { app.shouldShowWorldFeedShimmer }
+
     var body: some View {
         VStack(spacing: 0) {
-            if !app.worldStories.isEmpty || app.worldSetupComplete {
+            if loading || !app.worldStories.isEmpty || app.worldSetupComplete {
                 storiesRow
             }
-            if !app.worldFeedPosts.isEmpty {
+            if loading {
+                postsShimmerRow
+                sectionDivider("Messages")
+            } else if !app.worldFeedPosts.isEmpty {
                 postsRow
                 sectionDivider("Messages")
             }
         }
+    }
+
+    // MARK: Loading
+
+    /// One card's worth of placeholder, sized like the real thing so the feed
+    /// doesn't jump when the posts arrive.
+    private var postsShimmerRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(IMColor.chrome)
+                    .frame(width: 34, height: 34)
+                    .shimmering()
+                VStack(alignment: .leading, spacing: 6) {
+                    Capsule()
+                        .fill(IMColor.chrome)
+                        .frame(width: 120, height: 11)
+                        .shimmering()
+                    Capsule()
+                        .fill(IMColor.chrome)
+                        .frame(width: 54, height: 9)
+                        .shimmering()
+                }
+                Spacer(minLength: 0)
+            }
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(IMColor.chrome)
+                .frame(height: 210)
+                .shimmering()
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(IMColor.inputFill))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 14)
+        .allowsHitTesting(false)
+        .accessibilityLabel("Loading posts")
+    }
+
+    private var storyShimmerBubble: some View {
+        VStack(spacing: 6) {
+            Circle()
+                .fill(IMColor.chrome)
+                .frame(width: 62, height: 62)
+                .shimmering()
+            Capsule()
+                .fill(IMColor.chrome)
+                .frame(width: 42, height: 9)
+                .shimmering()
+        }
+        .frame(width: 70)
+        .allowsHitTesting(false)
     }
 
     // MARK: Posts
@@ -68,6 +129,11 @@ struct WorldFeedSection: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 14) {
                 yourStoryBubble
+                // Your own bubble is real from the first frame — it's yours, and
+                // it composes. The rings beside it are what the fetch is for.
+                if loading {
+                    ForEach(0..<4, id: \.self) { _ in storyShimmerBubble }
+                }
                 ForEach(otherRings) { ring in
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
