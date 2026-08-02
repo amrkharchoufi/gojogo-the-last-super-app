@@ -46,12 +46,11 @@ class WorldGraphService {
                 "That's your own number");
         }
         repo.addContact(ownerId, contactId, phone);
-        // Adding somebody joins their audience, and an audience you joined a
-        // minute ago should not start empty. Content is fanned out on write, so
-        // without this the add delivers only what they publish *next* — they
-        // read as somebody who has never posted, indefinitely, while whoever
-        // added *you* first has been seeing your posts all along.
-        repo.deliverBacklog(ownerId, contactId);
+        // Adding somebody *lets them in*, so the backlog runs from the owner to
+        // the new contact and not the other way about. Content is fanned out on
+        // write, so without this they'd only ever receive what the owner posts
+        // next, and an audience somebody was just admitted to would start empty.
+        repo.deliverBacklog(contactId, ownerId);
         if (alias != null && !alias.isBlank()) {
             repo.putAlias(ownerId, contactId, alias.trim());
         }
@@ -66,10 +65,11 @@ class WorldGraphService {
 
     void removeContact(UUID ownerId, UUID contactId) {
         repo.removeContact(ownerId, contactId);
-        // What the add handed over goes back with it: keeping their posts in a
-        // feed built out of a number you no longer have would leave the graph
-        // and the feed disagreeing about who is in the audience.
-        repo.withdrawBacklog(ownerId, contactId);
+        // Dropping somebody takes back what admitting them handed over. Same
+        // direction as the add: the owner's posts leave the dropped contact's
+        // feed, because a feed is not allowed to outlive the permission that
+        // filled it.
+        repo.withdrawBacklog(contactId, ownerId);
         // The rename goes with the contact: keeping it would resurrect a private
         // name for somebody you deliberately dropped.
         repo.deleteAlias(ownerId, contactId);
@@ -143,10 +143,20 @@ class WorldGraphService {
      * Everyone who may read something published to this audience. Content is
      * fanned out to exactly this list, which is what keeps the read path free of
      * any filter that could be forgotten.
+     *
+     * <p><b>The author's own contacts</b> — the people they added — and not, as
+     * this read until 2026-08-02, everyone who had added <em>them</em>. The old
+     * direction handed the audience to the wrong person: anybody who knew your
+     * number could add you and start receiving everything you posted, and there
+     * was nothing you could do about it. An audience you cannot close is not an
+     * audience. Now adding somebody is the act of letting them in, and dropping
+     * them is the act of shutting them out again.
      */
     Set<UUID> resolveAudience(UUID authorId, WorldAudience audience, List<UUID> circleIds) {
         if (audience == WorldAudience.CONTACTS) {
-            return new LinkedHashSet<>(repo.followersOf(authorId));
+            return repo.listContacts(authorId).stream()
+                .map(ContactEdge::contactId)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         }
         if (circleIds == null || circleIds.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,

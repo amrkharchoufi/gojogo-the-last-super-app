@@ -742,7 +742,14 @@ class MessagingRepository {
         return item != null && !item.isEmpty();
     }
 
-    /** Everyone who has this person as a contact — the {@code CONTACTS} audience. */
+    /**
+     * Everyone who has this person as a contact.
+     *
+     * <p>No longer the {@code CONTACTS} audience — that is the author's own
+     * contact list now, since an audience made of people who added you is one
+     * you cannot close. This still answers "who holds my number", which is what
+     * decides whether somebody may be shown a number and added back.
+     */
     List<UUID> followersOf(UUID contactId) {
         List<UUID> out = new ArrayList<>();
         for (var it : queryPrefix("CONTACTOF#" + contactId, "OWNER#")) {
@@ -901,24 +908,22 @@ class MessagingRepository {
     private static final int BACKLOG = 100;
 
     /**
-     * Hands somebody the content an author had <em>already</em> published to
-     * their contacts, at the moment they become one.
+     * Hands a newly admitted contact everything the author had <em>already</em>
+     * published to their contacts.
      *
-     * <p>Fan-out happens on write, so adding a contact on its own only ever
-     * delivers their <em>next</em> post. Without this, the person you just added
-     * reads as somebody who has never posted anything and stays that way until
-     * they post again — while their side, who added you earlier, sees everything
-     * you have written since. That asymmetry is what an add looked like from the
-     * outside, and it is not the graph being one-directional (it is, by design):
-     * it is history never being delivered at all.
+     * <p>Fan-out happens on write, so an add on its own only ever delivers the
+     * author's <em>next</em> post: somebody let into an audience would find it
+     * empty and stay that way until the author posted again. History is not a
+     * different kind of content from what arrives a minute later, and admitting
+     * somebody is a decision about them, not about a timestamp.
      *
      * <p>The new viewer is recorded on the author's copy as each one goes out,
      * because that stored list is what a delete walks — a copy handed out here
      * and not recorded there would outlive the post it came from.
      *
-     * <p>Circle posts are deliberately left behind. A circle is an audience the
-     * author picked by hand, and being added to somebody's contacts is not being
-     * picked.
+     * <p>Circle posts are deliberately left behind. A circle is a smaller
+     * audience the author picked by hand, and being let into the contacts is not
+     * being picked for one.
      */
     void deliverBacklog(UUID viewerId, UUID authorId) {
         for (String kind : List.of("post", "story")) {
@@ -938,7 +943,7 @@ class MessagingRepository {
      * The inverse: takes back what {@link #deliverBacklog} handed out, when the
      * contact is dropped. Only the contacts-audience copies — a post the author
      * sent a named circle was addressed to this person by hand, and dropping
-     * their number is not the author taking that back.
+     * them from the contacts is not the author unsaying that.
      */
     void withdrawBacklog(UUID viewerId, UUID authorId) {
         for (String kind : List.of("post", "story")) {

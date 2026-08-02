@@ -118,8 +118,10 @@ extension AppState {
             if !worldGraphContacts.contains(where: { $0.id == contact.id }) {
                 worldGraphContacts.append(contact)
             }
-            // The server hands a new contact's existing posts over on the add, so
-            // there is something to show the moment this returns. Off the caller's
+            // The add hands *your* back catalogue to them, not theirs to you, so
+            // your own feed doesn't change here. Refreshed anyway because the
+            // add is also how a circle becomes possible and how the graph the
+            // feed's names come from moves — and it's cheap. Off the caller's
             // thread of control: the tap that gets here is usually made from a
             // chat, and that screen should not wait on a feed.
             Task { await refreshWorldFeed() }

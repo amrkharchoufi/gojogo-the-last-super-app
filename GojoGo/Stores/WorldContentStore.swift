@@ -134,7 +134,9 @@ enum WorldPostAudience: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .contacts: return "Everyone who has your number"
+        // The people you added — not everyone holding your number, which is an
+        // audience you could never close.
+        case .contacts: return "Everyone you've added"
         case .circles: return "Only the circles you pick"
         }
     }

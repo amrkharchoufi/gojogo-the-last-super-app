@@ -525,14 +525,14 @@ struct WorldChatView: View {
     }
 
     /// A thread makes nobody a contact — not the person who opened it and not
-    /// the person who answered. That's deliberate: in a graph where a post goes
-    /// to *everyone who has the author's number*, being added is being handed
-    /// somebody's posts, and neither side should have that decided for them by a
-    /// message. So the decision lives here, on the one screen where the person
-    /// is unambiguously in front of you, and it costs one tap. The thread is
-    /// also the proof that lets the server hand over the number an add is made
-    /// of. Read from the loaded graph, so the bar itself costs nothing and never
-    /// guesses before the graph is in.
+    /// the person who answered. That's deliberate: a post goes to *the people
+    /// the author added*, so adding somebody is handing them your posts, and
+    /// that is not a thing a message should decide on your behalf. The decision
+    /// lives here, on the one screen where the person is unambiguously in front
+    /// of you, and it costs one tap. The thread is also the proof that lets the
+    /// server hand over the number an add is made of. Read from the loaded
+    /// graph, so the bar itself costs nothing and never guesses before the graph
+    /// is in.
     @ViewBuilder
     private var addToContactsBar: some View {
         if app.worldGraphLoaded, let id = otherPersonID,
@@ -541,7 +541,7 @@ struct WorldChatView: View {
                 Image(systemName: "person.badge.plus")
                     .font(.system(size: 15))
                     .foregroundStyle(IMColor.blue)
-                Text("Not in your contacts — you won't see their posts")
+                Text("Not in your contacts — they can't see your posts")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(IMColor.secondary)
                     .lineLimit(2)

@@ -120,7 +120,11 @@ record WorldContactProfileDto(UUID profileId, String displayName, String avatarU
  * adding a third constant here is what would make this system able to leak.
  */
 enum WorldAudience {
-    /** Everyone who has the author as a contact. */
+    /**
+     * Everyone the author has as a contact — the people they added, not the
+     * people who added them. An audience made of the latter is one the author
+     * cannot close.
+     */
     CONTACTS,
     /** Only the named circles. */
     CIRCLES

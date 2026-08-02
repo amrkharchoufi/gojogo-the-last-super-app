@@ -341,14 +341,14 @@ extension AppState {
     /// theory was that reaching somebody by number is the same act as putting
     /// them in your graph — but the two are not the same act at all, and this
     /// one runs from a sheet whose button says *Start a chat*. Messaging
-    /// somebody once is not a decision to carry their posts in your feed, and
-    /// it certainly isn't one made here, silently, on their behalf.
+    /// somebody once is not a decision to show them everything you post, and it
+    /// certainly isn't one made here, silently, on your behalf.
     ///
-    /// So both sides of a new thread now sit in the same place: neither is a
+    /// So both sides of a new thread sit in the same place: neither is a
     /// contact, and either can become one by tapping Add on the bar in the
-    /// thread. Note which way that runs — a GojoMessages post goes to *everyone
-    /// who has the author's number*, so adding them is what lets **you** see
-    /// **their** posts, and them seeing yours is their own tap to make.
+    /// thread. Note which way that runs — a GojoMessages post goes to *the
+    /// people the author added*, so adding them is what lets **them** see
+    /// **your** posts, and seeing theirs waits on the same tap from their side.
     func startLiveConversation(phone raw: String) async -> Bool {
         guard backendConnected,
               let user = try? await MessagingStore.shared.worldByPhone(raw),

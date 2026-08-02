@@ -14,6 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -49,25 +50,49 @@ class WorldContactGraphTests {
         when(repo.getAlias(any(), any())).thenReturn(Optional.empty());
     }
 
+    /**
+     * The direction the whole model turns on. Adding somebody lets *them* see
+     * *your* posts — so the history goes to the person being added, not to the
+     * person doing the adding. Get this backwards and an add silently hands the
+     * adder a copy of somebody else's private posts.
+     */
     @Test
-    @DisplayName("adding by number hands over what they had already posted")
-    void addingByNumberDeliversTheBacklog() {
+    @DisplayName("adding somebody hands them what you had already posted")
+    void addingSomebodyDeliversYourBacklogToThem() {
         when(repo.profileIdForPhone(anyString())).thenReturn(Optional.of(THEM));
 
         graph.addContact(ME, "+212600000001", null);
 
         verify(repo).addContact(ME, THEM, "+212600000001");
-        verify(repo).deliverBacklog(ME, THEM);
+        verify(repo).deliverBacklog(THEM, ME);
+        verify(repo, never()).deliverBacklog(ME, THEM);
     }
 
     @Test
-    @DisplayName("dropping a contact takes that backlog back out of the feed")
+    @DisplayName("dropping them takes your posts back out of their feed")
     void droppingAContactWithdrawsTheBacklog() {
         when(repo.listCircles(ME)).thenReturn(List.of());
 
         graph.removeContact(ME, THEM);
 
-        verify(repo).withdrawBacklog(ME, THEM);
+        verify(repo).withdrawBacklog(THEM, ME);
+    }
+
+    /**
+     * The audience is the author's own contact list. It used to be everyone who
+     * had added the author, which meant anybody holding your number could put
+     * themselves in your audience and you had no way to remove them.
+     */
+    @Test
+    @DisplayName("a post goes to the people you added, not the people who added you")
+    void contactsAudienceIsYourOwnContactList() {
+        UUID mine = UUID.randomUUID();
+        when(repo.listContacts(ME)).thenReturn(List.of(
+            new MessagingRepository.ContactEdge(mine, null, Instant.now())));
+
+        assertThat(graph.resolveAudience(ME, WorldAudience.CONTACTS, null))
+            .containsExactly(mine);
+        verify(repo, never()).followersOf(ME);
     }
 
     /**

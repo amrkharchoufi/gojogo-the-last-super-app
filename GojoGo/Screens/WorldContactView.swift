@@ -33,9 +33,6 @@ struct WorldContactView: View {
     @State private var theirPosts: [WorldPost] = []
     @State private var theirProfile: WorldRichProfile?
     @State private var loadedContentFor: UUID?
-    /// Nil until the server has been asked. Drives the empty-state wording,
-    /// which is better vague than wrong for the second before the answer lands.
-    @State private var isContact: Bool?
     /// Whether this is somebody you may add — they reached you first, so the
     /// server will part with the number an add is made of.
     @State private var canAddBack = false
@@ -364,20 +361,18 @@ struct WorldContactView: View {
                     Text("Nothing shared with you yet")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(IMColor.label)
-                    // The empty tab has two quite different causes, and only one
-                    // of them is "they haven't posted". Saying which is which is
-                    // the whole point: not being in your contacts is a thing you
-                    // can fix, and used to look identical to silence.
-                    Text(isContact == false
-                         ? "You'll see their posts once they're in your contacts."
-                         : "Posts they send to their contacts, or to a circle you're in, show up here.")
+                    // Whether their posts reach you is *their* decision — they
+                    // have to add you. Saying so is the honest version of an
+                    // empty tab, and it's why there's no Add button here: adding
+                    // them would give them your posts, not get you theirs.
+                    Text("Their posts show up here once they add you, "
+                         + "or when they post to a circle you're in.")
                         .font(.system(size: 13))
                         .foregroundStyle(IMColor.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 30)
                 }
                 .padding(.vertical, 30)
-                addBackCard
             } else {
                 ForEach(theirPosts) { post in
                     WorldPostCard(post: post)
@@ -404,7 +399,6 @@ struct WorldContactView: View {
             loadedContentFor = nil
         }
         guard let dto = try? await WorldContentStore.shared.contactProfile(cid) else { return }
-        isContact = dto.isContact
         // A number comes back for a contact, and for anybody who reached you
         // first. Adding is done *with* that number — there is no other way into
         // this graph — so its absence is the server saying this isn't somebody
@@ -462,7 +456,9 @@ struct WorldContactView: View {
                     Text("Not in your contacts")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(IMColor.label)
-                    Text("Add \(displayName) to see what they post.")
+                    // Adding is giving, not taking: it lets them see your posts.
+                    // Whether you see theirs is their decision to make.
+                    Text("Add \(displayName) so they can see your posts.")
                         .font(.system(size: 13))
                         .foregroundStyle(IMColor.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -498,7 +494,6 @@ struct WorldContactView: View {
             addingContact = false
             guard ok else { return }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            isContact = true
             canAddBack = false
             // Their backlog landed with the add, and the rich profile is only
             // returned to a contact — so both are worth asking for again.
