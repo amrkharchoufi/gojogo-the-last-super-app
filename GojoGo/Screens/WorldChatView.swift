@@ -418,27 +418,42 @@ struct WorldChatView: View {
 
     // MARK: Header
 
+    /// A round chrome disc with a glyph in it — the shape the Messages list uses
+    /// for `+` and the menu, reused here so a thread's top bar belongs to the
+    /// same app as the screen it opened from.
+    ///
+    /// It also solves the wallpaper: a filled disc gives its glyph contrast
+    /// against whatever picture is behind it, which a bare tinted icon cannot.
+    private func headerDisc(_ systemName: String, size: CGFloat = 16,
+                            label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(IMColor.label)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(IMColor.chrome))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
     private var chatHeader: some View {
-        HStack(alignment: .center, spacing: 0) {
-            Button {
-                app.closeWorldConversation()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 20, weight: .semibold))
-                    if app.worldUnreadCount > 0 {
-                        Text("\(min(app.worldUnreadCount, 99))")
-                            .font(.system(size: 15, weight: .semibold))
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(IMColor.chrome))
-                    }
+        HStack(alignment: .center, spacing: 10) {
+            HStack(spacing: 6) {
+                headerDisc("chevron.left", size: 17, label: "Back") {
+                    app.closeWorldConversation()
                 }
-                .foregroundStyle(IMColor.blue)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
+                // The unread count keeps its capsule beside the disc, the way
+                // the list's Edit pill sits beside the avatar.
+                if app.worldUnreadCount > 0 {
+                    Text("\(min(app.worldUnreadCount, 99))")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(IMColor.label)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(IMColor.chrome))
+                }
             }
-            .buttonStyle(.plain)
 
             Spacer(minLength: 0)
 
@@ -470,19 +485,11 @@ struct WorldChatView: View {
 
             Spacer(minLength: 0)
 
-            Button { } label: {
-                Image(systemName: "video")
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(IMColor.blue)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Video call")
+            headerDisc("video", size: 15, label: "Video call") { }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
         .padding(.bottom, 8)
-        .padding(.top, 2)
         .frame(maxWidth: .infinity)
         .shadow(color: .black.opacity(live.background.isDecorated ? 0.45 : 0),
                 radius: chromeShadowRadius, y: 1)
