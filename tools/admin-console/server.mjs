@@ -63,6 +63,13 @@ const ALLOWED = [
   ['GET', /^\/v1\/partner\/admin\/applications\/[0-9a-f-]{36}$/],
   ['GET', /^\/v1\/partner\/admin\/applications\/[0-9a-f-]{36}\/documents\/[0-9a-f-]{36}$/],
   ['GET', /^\/v1\/partner\/admin\/vehicles\/[0-9a-f-]{36}\/documents\/[0-9a-f-]{36}$/],
+  // Partner papers, filed on the applicant's behalf. Only the presign and the
+  // attach are proxied: the bytes go from the browser straight to S3 on the
+  // signed URL, so they never pass through this process any more than they pass
+  // through the API.
+  ['POST', /^\/v1\/partner\/admin\/applications\/[0-9a-f-]{36}\/documents\/presign$/],
+  ['PUT', /^\/v1\/partner\/admin\/applications\/[0-9a-f-]{36}\/documents$/],
+  ['DELETE', /^\/v1\/partner\/admin\/applications\/[0-9a-f-]{36}\/documents\/[0-9a-f-]{36}$/],
   // Partner decisions.
   ['POST', /^\/v1\/partner\/admin\/applications\/[0-9a-f-]{36}\/(approve|reject|suspend|submit)$/],
   ['POST', /^\/v1\/partner\/admin\/applications\/[0-9a-f-]{36}\/vehicles\/[0-9a-f-]{36}\/review$/],

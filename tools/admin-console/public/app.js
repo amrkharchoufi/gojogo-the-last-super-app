@@ -248,7 +248,13 @@ function partnerDetail(row) {
       el('dt', {}, 'still locked'), el('dd', { className: 'mono' }, money(s.remainingMinor, s.currency))));
   }
 
-  card.append(documentsBlock('Documents', row.documents, a.missingDocuments));
+  // The applicant's own papers can be filed from here — an operator who created
+  // the application (restaurants are created here, decided 2026-07-27) would
+  // otherwise have a draft nobody can ever submit, since the licence has no
+  // other way in. A vehicle's papers have no admin endpoint, so its block below
+  // stays read-only.
+  card.append(documentsBlock('Documents', row.documents, a.missingDocuments,
+    a.canEdit ? { accountId: a.id } : null));
 
   for (const rv of row.vehicles || []) {
     const v = rv.vehicle;
@@ -283,7 +289,15 @@ function partnerDetail(row) {
   return card;
 }
 
-function documentsBlock(label, docs, missing) {
+/**
+ * The papers on an application or a vehicle.
+ *
+ * @param uploader `{ accountId }` to let an operator file and remove the
+ *                 applicant's own papers, or null for a read-only block — which
+ *                 is every vehicle, and every application the server says is
+ *                 past editing.
+ */
+function documentsBlock(label, docs, missing, uploader) {
   const wrap = el('div', {});
   if (label) wrap.append(el('div', { className: 'section-label' }, label));
   if (!docs?.length) {
@@ -295,13 +309,116 @@ function documentsBlock(label, docs, missing) {
       el('span', { style: 'margin-left:auto' },
         // A short-lived signed GET, minted by the API. Opened in a new tab so
         // the console never proxies the bytes themselves.
-        el('a', { href: d.url, target: '_blank', rel: 'noreferrer' }, 'View'))));
+        el('a', { href: d.url, target: '_blank', rel: 'noreferrer' }, 'View')),
+      uploader ? uploadControl(uploader, d.kind, 'Replace') : null,
+      uploader ? removeDocumentButton(uploader, d) : null));
   }
-  if (missing?.length) {
+  // Which kinds are outstanding is the server's answer, never one computed
+  // here — so the picker is drawn straight from `missingDocuments`.
+  if (missing?.length && uploader) {
+    for (const kind of missing) {
+      wrap.append(el('div', { className: 'doc-row' },
+        el('span', { className: 'mono' }, kind),
+        badge('missing', 'badge-bad'),
+        el('span', { style: 'margin-left:auto' }),
+        uploadControl(uploader, kind, 'Upload')));
+    }
+  } else if (missing?.length) {
     wrap.append(el('p', { className: 'subtle', style: 'font-size:14px;margin-top:var(--xs)' },
       `Still missing: ${missing.join(', ')}`));
   }
   return wrap;
+}
+
+// What the media service will mint a signature for (PresignService), and
+// nothing else — a file it refuses is worth saying so about before a round
+// trip. The extension is trusted over `file.type` because browsers report
+// HEIC as an empty string.
+const DOCUMENT_CONTENT_TYPES = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  heic: 'image/heic', heif: 'image/heic', pdf: 'application/pdf'
+};
+const DOCUMENT_ACCEPT = 'image/jpeg,image/png,image/heic,image/heif,application/pdf,.heic,.heif';
+
+function contentTypeOf(file) {
+  const byExtension = DOCUMENT_CONTENT_TYPES[file.name.split('.').pop()?.toLowerCase()];
+  if (byExtension) return byExtension;
+  return Object.values(DOCUMENT_CONTENT_TYPES).includes(file.type) ? file.type : null;
+}
+
+/** A file picker for one document kind, disguised as a button. */
+function uploadControl(uploader, kind, label) {
+  const input = el('input', {
+    type: 'file', accept: DOCUMENT_ACCEPT, style: 'display:none'
+  });
+  const button = el('button', { className: 'btn btn-small', textContent: label });
+  button.onclick = () => input.click();
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    button.disabled = true;
+    button.textContent = 'Uploading…';
+    try {
+      await uploadDocument(uploader.accountId, kind, file);
+      toast(`${kind} uploaded.`);
+      await refreshPartners();
+    } catch (err) {
+      toast(err.message, true);
+      button.disabled = false;
+      button.textContent = label;
+    }
+  };
+  return el('span', {}, button, input);
+}
+
+/**
+ * Presign, PUT, attach — the same three steps the app takes.
+ *
+ * The bytes go from this browser straight to S3 on a signed URL: neither the
+ * console's proxy nor the API ever holds somebody's licence in memory.
+ */
+async function uploadDocument(accountId, kind, file) {
+  const contentType = contentTypeOf(file);
+  if (!contentType) {
+    throw new Error(`${file.name} isn't a kind of file the API takes — `
+      + 'send a JPEG, PNG, HEIC or PDF.');
+  }
+  const slot = await api(`/v1/partner/admin/applications/${accountId}/documents/presign`,
+    { method: 'POST', body: { kind, contentType } });
+  // The content type must be exactly the one the signature was minted for;
+  // anything else comes back as an opaque SignatureDoesNotMatch.
+  const put = await fetch(slot.uploadUrl, {
+    method: 'PUT', headers: { 'content-type': slot.contentType }, body: file
+  });
+  if (!put.ok) {
+    throw new Error(`Storage refused the upload (${put.status} ${put.statusText}). `
+      + 'The signed link is short-lived — try again.');
+  }
+  await api(`/v1/partner/admin/applications/${accountId}/documents`,
+    { method: 'PUT', body: { kind, objectKey: slot.objectKey, contentType: slot.contentType } });
+}
+
+function removeDocumentButton(uploader, doc) {
+  const button = el('button', { className: 'btn btn-small btn-danger', textContent: 'Remove' });
+  button.onclick = async () => {
+    const ok = await confirmAction({
+      title: `Remove this ${doc.kind}?`,
+      detail: 'The file is deleted from storage, not just unlinked — nothing else keeps a '
+        + 'copy. The applicant can upload another one.',
+      confirmLabel: 'Remove', danger: true
+    });
+    if (ok === null) return;
+    try {
+      await api(`/v1/partner/admin/applications/${uploader.accountId}/documents/${doc.id}`,
+        { method: 'DELETE' });
+      toast(`${doc.kind} removed.`);
+      await refreshPartners();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
+  return button;
 }
 
 function partnerActions(a) {
@@ -601,7 +718,8 @@ function viewCreate(main) {
       : { ownerHandle: owner.replace(/^@/, ''), application };
     try {
       const created = await api('/v1/partner/admin/applications', { method: 'POST', body });
-      toast(`Filed as ${created.account?.id?.slice(0, 8) || 'a draft'} — it still needs its documents.`);
+      toast(`Filed as ${created.account?.id?.slice(0, 8) || 'a draft'} — open it under `
+        + 'the draft filter to upload its documents.');
     } catch (err) { toast(err.message, true); }
   };
 
@@ -644,7 +762,7 @@ function viewHelp(main) {
     el('div', { className: 'card' },
       el('h3', {}, 'Covered'),
       el('div', { style: 'margin-top:var(--sm)' },
-        row('Partner review', 'queue, documents, approve / reject / suspend / restore'),
+        row('Partner review', 'queue, documents (view, upload, remove), approve / reject / suspend / restore'),
         row('Vehicle review', 'approve or flag a driver\'s car, separately from the person'),
         row('Admin-side create', 'file an application for a merchant, and submit it'),
         row('Moderation', 'report queue, hide / remove / suspend / restore / dismiss'),

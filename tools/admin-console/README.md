@@ -70,7 +70,7 @@ Two consequences worth knowing:
 
 | Screen | What it covers |
 |---|---|
-| **Applications** | The partner queue by status and kind; full detail with the stake, the identity check, every uploaded document behind a short-lived signed link, and each vehicle with its papers. Approve / reject / suspend / restore, and submit a draft on the applicant's behalf. |
+| **Applications** | The partner queue by status and kind; full detail with the stake, the identity check, every uploaded document behind a short-lived signed link, and each vehicle with its papers. Approve / reject / suspend / restore, submit a draft on the applicant's behalf, and file or remove the applicant's own papers while the application is still editable. |
 | **Reports** | The moderation queue. Hide, remove, suspend, restore, dismiss — with the context a decision needs (how many other reports are open on the same target, whether the content is already gone). |
 | **SOS** | Trips somebody raised an alarm on (Phase 3 M5), newest first: when, who raised it, the driver and their plate, and the route. **Read-only, deliberately** — there is no "resolve" button because there is no honest thing for one to mean. A trip in trouble is dealt with by a person picking up a phone, and a status changing in a queue would only make it look handled. |
 | **File an application** | The admin-side create. Restaurants are created here rather than in the app (decided 2026-07-27). |
@@ -101,6 +101,14 @@ Two rules it holds to throughout:
 - **A driver or merchant still has to pass their own ID check before an application can
   be submitted.** Nobody can do a liveness check on somebody else's behalf, and this
   console cannot either — it will show you the refusal, in the server's words.
+- **A vehicle's papers can be viewed here but not filed.** The applicant's own documents
+  have an admin presign (`/documents/presign` + `/documents`), so a restaurant created
+  here can have its licence uploaded here too — otherwise that draft could never be
+  submitted, since a restaurant owner has no other way in. A *vehicle's* registration and
+  insurance have no admin equivalent; the driver uploads those from the app.
+- Uploads go **from the browser straight to S3** on the signed URL, which is the one thing
+  on this screen that is not proxied — the bytes never enter this process. JPEG, PNG,
+  HEIC and PDF are what the media service will sign for.
 - Vehicle *photos* are not rendered (there is a table and a cap, but no client picker
   yet, so there is nothing to show).
 - No pagination: the queue reads the newest 100 of a status. If that ever truncates
