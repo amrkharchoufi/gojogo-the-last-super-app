@@ -27,6 +27,15 @@ extension AppState {
             withAnimation(.ggSnappy) { self?.worldRealtimeConnected = connected }
         }
         await loadWorldProfile()
+
+        // The feed and the messages list are two fetches for one screen, so they
+        // are started together and not one behind the other. Chained, the screen
+        // loads twice in front of you: the list shimmers, resolves, and only
+        // then do the stories and posts start their own shimmer above it —
+        // which reads as the screen having finished and then changed its mind.
+        // Nothing here depends on the list, so nothing waits for it.
+        async let network: Void = connectWorldNetwork()
+
         // Before the conversation fetch: the mapping lens reads these, so loading
         // them second would render the list once with real names.
         await loadWorldAliases()
@@ -35,23 +44,23 @@ extension AppState {
         // empty state flashes while connectBackend is still mid-flight.
         let showLoading = worldConversations.isEmpty
         if showLoading { worldConversationsLoading = true }
-        defer {
-            worldConversationsLoading = false
-            worldConversationsLoaded = true
-        }
 
         do {
             let live = try await MessagingStore.shared.fetchConversations()
             mergeLiveConversations(live)
             WorldSocket.shared.connect()
             worldRealtimeConnected = WorldSocket.shared.isConnected
-            // The private network on top of chat: graph, circles, feed.
-            await connectWorldNetwork()
         } catch {
             #if DEBUG
             print("Messaging connect failed: \(error.localizedDescription)")
             #endif
         }
+
+        worldConversationsLoading = false
+        worldConversationsLoaded = true
+        // Awaited last so a slow graph can't hold the list back, and so the two
+        // halves of the screen settle within a beat of each other either way.
+        await network
     }
 
     /// Re-dials the socket and refreshes what's on screen. Called when the app

@@ -27,11 +27,19 @@ extension AppState {
     /// flight. Only the first: a pull-to-refresh has content on screen already,
     /// and replacing it with grey bars would read as losing it.
     ///
-    /// Bounded by the same conditions the fetch itself is guarded by. An account
-    /// that never asks — offline, or still in setup — would otherwise shimmer
-    /// forever, which is the failure mode that makes people distrust a spinner.
+    /// Live from the moment the screen is, rather than from the moment the
+    /// profile comes back. Waiting for `worldSetupComplete` meant the feed could
+    /// not begin to shimmer until a fetch it doesn't depend on had answered, so
+    /// the screen loaded in two visible stages — list first, then stories and
+    /// posts, arriving after everything else had already settled. `!setupLoaded`
+    /// is the honest "we don't know yet", and it is a window of one request.
+    ///
+    /// Still bounded, though: once the answer is in and it is *not* set up,
+    /// nobody is fetching a feed, and a placeholder for a request that will
+    /// never be made is what teaches people to distrust a spinner.
     var shouldShowWorldFeedShimmer: Bool {
-        backendConnected && worldSetupComplete && !worldFeedLoaded
+        backendConnected && !worldFeedLoaded
+            && (worldSetupComplete || !worldSetupLoaded)
             && worldStories.isEmpty && worldFeedPosts.isEmpty
     }
 
