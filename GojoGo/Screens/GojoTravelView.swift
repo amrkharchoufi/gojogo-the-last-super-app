@@ -24,7 +24,7 @@ struct GojoTravelView: View {
         ZStack(alignment: .bottom) {
             TravelMapView(
                 viewport: $viewport,
-                pickup: app.travelPickup,
+                pickup: mapPickup,
                 dropoff: app.travelDropoff,
                 driver: app.travelDriver,
                 showRoute: app.travelDropoff != nil
@@ -61,6 +61,16 @@ struct GojoTravelView: View {
         .onAppear {
             MapboxOptions.accessToken = MapboxConfig.accessToken
             refreshCamera(animated: false)
+            // Ask on arrival rather than when the rider taps "Where to?" — the
+            // permission sheet in the middle of booking a car is the worst
+            // moment for it, and the map is wrong until the fix lands anyway.
+            app.refreshTravelPickup()
+        }
+        .onChange(of: app.travelPickup.latitude) { _, _ in
+            // The first fix moves the pin off the placeholder; fly there unless
+            // the camera is busy following a car.
+            guard app.travelPhase == .home || app.travelPhase == .searching else { return }
+            refreshCamera(animated: true)
         }
         .onChange(of: app.travelPhase) { _, _ in refreshCamera(animated: true) }
         .onChange(of: app.travelDropoff?.id) { _, _ in refreshCamera(animated: true) }
@@ -80,6 +90,16 @@ struct GojoTravelView: View {
         .sheet(item: $app.openVerification) { invite in
             VehicleVerificationSheet(invite: invite).environmentObject(app)
         }
+    }
+
+    /// The pickup pin, but only once it means something. Before the first fix
+    /// the coordinate is a placeholder, and a labelled "Pickup" pin sitting on
+    /// a street the rider has never seen is worse than no pin at all. From the
+    /// moment a ride is being priced the pickup is whatever was booked, so it
+    /// is always shown then.
+    private var mapPickup: TravelPlace? {
+        if app.travelPickupState.isReal { return app.travelPickup }
+        return app.travelPhase == .home || app.travelPhase == .searching ? nil : app.travelPickup
     }
 
     // MARK: Header
@@ -152,6 +172,9 @@ struct GojoTravelView: View {
                 VerificationInviteCard(invite: invite)
                     .padding(.bottom, 2)
             }
+
+            pickupStatusLine
+
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 app.openTravelSearch()
@@ -199,6 +222,39 @@ struct GojoTravelView: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
+    /// Where the app thinks you are, before you ask it for a car. Quiet when
+    /// the fix is real, and the only thing worth tapping when it isn't.
+    private var pickupStatusLine: some View {
+        Button {
+            if app.travelPickupState == .denied {
+                openLocationSettings()
+            } else {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                app.refreshTravelPickup(force: true)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: app.travelPickupState.isReal
+                      ? "location.fill" : "location.slash.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(app.travelPickupState.isReal
+                                     ? GGColor.textSecondary : GGColor.textTertiary)
+                Text(app.travelPickupLabel)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if app.travelPickupState == .locating {
+                    ProgressView().controlSize(.mini).tint(GGColor.textTertiary)
+                }
+            }
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(app.travelPickupState == .locating)
+    }
+
     // MARK: Search
 
     private var searchSheet: some View {
@@ -222,8 +278,33 @@ struct GojoTravelView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                locationLine(dot: .white, title: "Pickup",
-                             value: app.travelPickup.name)
+                // Tappable, because the two states worth acting on — location
+                // refused and no fix — are both fixed by trying again, and this
+                // row is where somebody looks when the pickup looks wrong.
+                Button {
+                    if app.travelPickupState == .denied {
+                        openLocationSettings()
+                    } else {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        app.refreshTravelPickup(force: true)
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        locationLine(dot: pickupDotColor, title: "Pickup",
+                                     value: app.travelPickupLabel)
+                        Spacer(minLength: 0)
+                        if app.travelPickupState == .locating {
+                            ProgressView().controlSize(.mini).tint(GGColor.textSecondary)
+                        } else if !app.travelPickupState.isReal {
+                            Image(systemName: "location.slash")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(GGColor.textSecondary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressableStyle())
+
                 Rectangle()
                     .fill(GGColor.ink(0.12))
                     .frame(width: 1, height: 10)
@@ -237,31 +318,30 @@ struct GojoTravelView: View {
                         .foregroundStyle(GGColor.textPrimary)
                         .focused($searchFocused)
                         .submitLabel(.search)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.words)
+                        .onChange(of: app.travelQuery) { _, text in
+                            app.travelQueryChanged(text)
+                        }
+                    if app.travelSearching {
+                        ProgressView().controlSize(.mini).tint(GGColor.textSecondary)
+                    } else if !app.travelQuery.isEmpty {
+                        Button {
+                            app.travelQuery = ""
+                            app.travelQueryChanged("")
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(GGColor.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             .padding(14)
             .glass(cornerRadius: 16, tint: Color.black.opacity(0.35))
 
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 0) {
-                    ForEach(Array(app.filteredTravelPlaces.enumerated()), id: \.element.id) { i, place in
-                        Button {
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            searchFocused = false
-                            app.selectTravelDestination(place)
-                    Task { await app.quoteRide(to: place) }
-                        } label: {
-                            placeRow(place)
-                        }
-                        .buttonStyle(PressableStyle())
-                        if i < app.filteredTravelPlaces.count - 1 {
-                            Divider().background(GGColor.ink(0.08))
-                        }
-                    }
-                }
-            }
-            .frame(maxHeight: 220)
-            .glass(cornerRadius: 16, tint: Color.black.opacity(0.35))
+            suggestionList
         }
         .padding(16)
         .glass(cornerRadius: 24, tint: Color.black.opacity(0.52), floating: true)
@@ -269,6 +349,64 @@ struct GojoTravelView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var pickupDotColor: Color {
+        app.travelPickupState.isReal ? .white : GGColor.textTertiary
+    }
+
+    @ViewBuilder
+    private var suggestionList: some View {
+        let places = app.filteredTravelPlaces
+        Group {
+            if places.isEmpty {
+                // Three different silences, and telling them apart is the
+                // difference between "keep typing" and "that place isn't there".
+                VStack(spacing: 6) {
+                    Image(systemName: app.travelSearchIsEmpty ? "mappin.slash" : "magnifyingglass")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(GGColor.textTertiary)
+                    Text(emptyStateText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 26)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(places.enumerated()), id: \.element.id) { i, place in
+                            Button {
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                searchFocused = false
+                                app.selectTravelDestination(place)
+                                Task { await app.quoteRide(to: place) }
+                            } label: {
+                                placeRow(place)
+                            }
+                            .buttonStyle(PressableStyle())
+                            if i < places.count - 1 {
+                                Divider().background(GGColor.ink(0.08))
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+        }
+        .glass(cornerRadius: 16, tint: Color.black.opacity(0.35))
+    }
+
+    private var emptyStateText: String {
+        if app.travelSearchIsEmpty { return "No places match “\(app.travelQuery)”" }
+        if app.travelQuery.isEmpty { return "Search a place, address, or landmark" }
+        return "Keep typing…"
+    }
+
+    private func openLocationSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     // MARK: Ride options

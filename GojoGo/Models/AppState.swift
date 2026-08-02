@@ -327,6 +327,14 @@ final class AppState: ObservableObject {
     @Published var travelDriver: TravelDriver? = nil
     @Published var travelRating: Int = 0
     @Published var travelRecent: [TravelPlace] = SampleData.travelRecentPlaces
+    /// Live geocoder suggestions for `travelQuery` (see `travelQueryChanged`).
+    @Published var travelSearchResults: [TravelPlace] = []
+    @Published var travelSearching: Bool = false
+    /// Where the pickup point came from, which the rider is entitled to know:
+    /// a guessed city centre and a GPS fix look identical on a map.
+    @Published var travelPickupState: TravelPickupState = .unknown
+    var travelSearchTask: Task<Void, Never>?
+    var travelPickupTask: Task<Void, Never>?
     // The real ride, when there is one (Phase 3 M3). Non-nil is what makes every
     // action on the travel screen a server call rather than a simulation.
     @Published var ride: RideDTO? = nil
@@ -3577,33 +3585,128 @@ final class AppState: ObservableObject {
 
     // MARK: GojoTravel
 
+    /// What the destination list shows: recents until somebody types, then the
+    /// geocoder's guesses with any matching recent kept on top — a place you
+    /// have actually been to is a better answer than a place that merely
+    /// matches the letters.
     var filteredTravelPlaces: [TravelPlace] {
         let q = travelQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let pool = SampleData.travelSuggestions + travelRecent
-        guard !q.isEmpty else { return pool }
-        return pool.filter {
+        guard !q.isEmpty else { return Array(travelRecent.prefix(6)) }
+        let matchingRecent = travelRecent.filter {
             $0.name.lowercased().contains(q) || $0.subtitle.lowercased().contains(q)
+        }
+        let fresh = travelSearchResults.filter { result in
+            !matchingRecent.contains { $0.name.caseInsensitiveCompare(result.name) == .orderedSame }
+        }
+        return matchingRecent + fresh
+    }
+
+    /// True while there is genuinely nothing to show — used to tell "still
+    /// typing" apart from "no such place", which look the same otherwise.
+    var travelSearchIsEmpty: Bool {
+        !travelQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !travelSearching
+            && filteredTravelPlaces.isEmpty
+    }
+
+    /// Debounced forward geocode. Called on every keystroke; only the last one
+    /// in any 300ms window actually reaches the network.
+    func travelQueryChanged(_ text: String) {
+        travelSearchTask?.cancel()
+        let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 2 else {
+            travelSearchResults = []
+            travelSearching = false
+            return
+        }
+        travelSearching = true
+        travelSearchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            // Bias toward the rider only once there is a real fix — proximity to
+            // the placeholder would rank results around a city they aren't in.
+            let near = travelPickupState.isReal
+                ? CLLocationCoordinate2D(latitude: travelPickup.latitude,
+                                         longitude: travelPickup.longitude)
+                : nil
+            let results = await PlaceSearch.suggest(q, near: near)
+            guard !Task.isCancelled else { return }
+            // A slower reply for an older query must not overwrite a newer one.
+            guard self.travelQuery.trimmingCharacters(in: .whitespacesAndNewlines) == q else { return }
+            self.travelSearchResults = results
+            self.travelSearching = false
+        }
+    }
+
+    // MARK: Pickup
+
+    /// Puts the pickup pin where the rider actually is.
+    ///
+    /// The app opens on a placeholder coordinate so the map has something to
+    /// draw; leaving it there means every ride is requested from that spot. One
+    /// GPS fix plus a reverse geocode replaces it with a real corner and a name
+    /// somebody would recognise.
+    func refreshTravelPickup(force: Bool = false) {
+        guard force || !travelPickupState.isReal else { return }
+        travelPickupTask?.cancel()
+        travelPickupState = .locating
+        travelPickupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let place = try await LiveLocationProvider.shared.currentPlace()
+                guard !Task.isCancelled else { return }
+                updateTravelPickup(latitude: place.coordinate.latitude,
+                                   longitude: place.coordinate.longitude,
+                                   label: place.name)
+                travelPickupState = .live
+            } catch LiveLocationProvider.LocationError.denied {
+                guard !Task.isCancelled else { return }
+                travelPickupState = .denied
+            } catch {
+                guard !Task.isCancelled else { return }
+                travelPickupState = .unavailable
+            }
+        }
+    }
+
+    /// What the pickup row should read, given where the coordinate came from.
+    var travelPickupLabel: String {
+        switch travelPickupState {
+        case .live: return travelPickup.name
+        case .locating: return "Finding your location…"
+        case .denied: return "Location is off — tap to fix"
+        case .unavailable: return "No GPS fix — tap to retry"
+        case .unknown: return "Set your pickup"
         }
     }
 
     func openTravelSearch() {
         travelQuery = ""
+        travelSearchResults = []
+        travelSearching = false
+        refreshTravelPickup()
         withAnimation(.easeInOut(duration: 0.28)) { travelPhase = .searching }
     }
 
     func closeTravelSearch() {
+        travelSearchTask?.cancel()
         travelQuery = ""
+        travelSearchResults = []
+        travelSearching = false
         withAnimation(.easeInOut(duration: 0.28)) { travelPhase = .home }
     }
 
     func selectTravelDestination(_ place: TravelPlace) {
         travelDropoff = place
-        travelRideOptions = SampleData.rideOptions(to: place)
+        travelRideOptions = SampleData.rideOptions(from: travelPickup, to: place)
         selectedRide = travelRideOptions.first
         if !travelRecent.contains(where: { $0.name == place.name }) {
             travelRecent.insert(place, at: 0)
             if travelRecent.count > 8 { travelRecent = Array(travelRecent.prefix(8)) }
         }
+        travelSearchTask?.cancel()
+        travelSearchResults = []
+        travelSearching = false
         travelQuery = ""
         withAnimation(.easeInOut(duration: 0.32)) { travelPhase = .choosingRide }
     }
@@ -3730,7 +3833,9 @@ final class AppState: ObservableObject {
         travelPickup = TravelPlace(
             id: travelPickup.id,
             name: label ?? travelPickup.name,
-            subtitle: travelPickup.subtitle,
+            // The street is now in `name`, so the second line says where the
+            // street came from rather than repeating it.
+            subtitle: label == nil ? travelPickup.subtitle : "Current location",
             latitude: latitude,
             longitude: longitude,
             icon: "location.fill"

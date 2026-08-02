@@ -55,6 +55,24 @@ struct TravelPlace: Identifiable, Equatable, Hashable {
     var coordinate: (lat: Double, lon: Double) { (latitude, longitude) }
 }
 
+/// How trustworthy the pickup point currently is.
+///
+/// `.unknown` is the placeholder the app opens with and is *not* a location —
+/// a car sent to it would go to a city the rider has never been to, so the UI
+/// has to say so rather than quietly showing a pin.
+enum TravelPickupState: Equatable {
+    case unknown
+    case locating
+    /// A real GPS fix. The associated name is what the reverse geocode called it.
+    case live
+    /// The rider turned location off for GojoGo.
+    case denied
+    /// Permission is fine, no fix arrived.
+    case unavailable
+
+    var isReal: Bool { self == .live }
+}
+
 struct RideOption: Identifiable, Equatable {
     let id: UUID
     var name: String

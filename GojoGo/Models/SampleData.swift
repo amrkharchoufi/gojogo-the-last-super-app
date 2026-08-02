@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 
 /// Shared gradients, onboarding chips, and generators.
 /// Feed / marketplace / social content starts empty — no mock media.
@@ -123,6 +124,10 @@ enum SampleData {
 
     // MARK: GojoTravel
 
+    /// Where the map opens before the first GPS fix lands. It is a placeholder,
+    /// not a location — `AppState.travelPickupState` is what says whether the
+    /// pin under the rider is real, and the UI must not present this one as if
+    /// it were.
     static let travelDefaultCenter = TravelPlace(
         name: "Current location",
         subtitle: "Near you",
@@ -132,12 +137,15 @@ enum SampleData {
     )
 
     static let travelRecentPlaces: [TravelPlace] = []
-    static let travelSuggestions: [TravelPlace] = []
 
-    static func rideOptions(to dropoff: TravelPlace) -> [RideOption] {
-        let dist = hypot(dropoff.latitude - travelDefaultCenter.latitude,
-                         dropoff.longitude - travelDefaultCenter.longitude)
-        let base = max(8, Int(dist * 120))
+    /// Offline fare guesses, measured from the rider's real pickup rather than
+    /// the placeholder centre — a demo price for a trip across town should not
+    /// be computed from a city they are not in. Real fares come from the server
+    /// (`AppState.quoteRide`); these only run with no backend.
+    static func rideOptions(from pickup: TravelPlace, to dropoff: TravelPlace) -> [RideOption] {
+        let km = CLLocation(latitude: pickup.latitude, longitude: pickup.longitude)
+            .distance(from: CLLocation(latitude: dropoff.latitude, longitude: dropoff.longitude)) / 1000
+        let base = max(8, Int(km))
         return [
             RideOption(name: "GojoGo", tagline: "Everyday rides",
                        etaMinutes: max(2, base / 4),
