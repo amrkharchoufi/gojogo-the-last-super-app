@@ -239,13 +239,9 @@ private struct PartnerRulesPage: View {
     /// dirhams or naira agreed to one number on the rules screen and was asked
     /// for a different one on the next. The constant survives only as the value
     /// to show before the application has loaded.
-    private var stakeMinor: Int {
-        app.driverStake?.requiredMinor ?? Int(PartnerRole.stakeAmount * 100)
-    }
-    private var stakeCurrency: String { app.driverStake?.currency ?? "USD" }
-
     private var stakeLabel: String {
-        WalletStore.money(stakeMinor, currency: stakeCurrency)
+        guard let stake = app.driverStake else { return "$\(Int(PartnerRole.stakeAmount))" }
+        return WalletStore.money(stake.requiredMinor, currency: stake.currency)
     }
 
     private var stakeNote: some View {
@@ -256,17 +252,9 @@ private struct PartnerRulesPage: View {
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(GGColor.white))
             VStack(alignment: .leading, spacing: 3) {
-                // "$30" tells somebody who has never held a dollar nothing about
-                // whether this is a coffee or a week's shopping — so the figure
-                // they think in goes next to it, marked as the estimate it is.
                 Text("A \(stakeLabel) refundable stake")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(GGColor.textPrimary)
-                if let local = Money.approx(stakeMinor, currency: stakeCurrency) {
-                    Text(local)
-                        .font(.ggMono(11, .semibold))
-                        .foregroundStyle(GGColor.textTertiary)
-                }
                 Text("Held as a good-conduct deposit. If a \(role.earner.dropLast()) is wronged, it can be released to them as compensation. You get it back when you leave in good standing.")
                     .font(.system(size: 13))
                     .foregroundStyle(GGColor.textSecondary)
@@ -358,16 +346,6 @@ private struct PartnerStakePage: View {
             Text(stakeLabel)
                 .font(.system(size: 56, weight: .bold))
                 .foregroundStyle(GGColor.textPrimary)
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-            // The charged figure stays the big one and the local reading goes
-            // under it — this is the number that leaves their wallet, and a
-            // converted amount in that position is a promise nothing can keep.
-            if let local = Money.approx(stakeMinor, currency: stakeCurrency) {
-                Text(local)
-                    .font(.ggMono(13, .semibold))
-                    .foregroundStyle(GGColor.textSecondary)
-            }
             Text("Refundable · held in your own wallet")
                 .font(.system(size: 13))
                 .foregroundStyle(GGColor.textSecondary)
@@ -384,22 +362,14 @@ private struct PartnerStakePage: View {
             row("Your wallet", WalletStore.money(
                 app.driverStake?.walletAvailableMinor ?? app.wallet?.availableMinor ?? 0))
             Divider().background(GGColor.ink(0.1))
-            HStack(alignment: .firstTextBaseline) {
+            HStack {
                 Text(shortfall > 0 ? "Still needed" : "Due today")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(GGColor.textPrimary)
                 Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(shortfall > 0 ? WalletStore.money(shortfall) : stakeLabel)
-                        .font(.ggMono(15, .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
-                    if let local = Money.approx(shortfall > 0 ? shortfall : stakeMinor,
-                                                currency: stakeCurrency) {
-                        Text(local)
-                            .font(.ggMono(11))
-                            .foregroundStyle(GGColor.textTertiary)
-                    }
-                }
+                Text(shortfall > 0 ? WalletStore.money(shortfall) : stakeLabel)
+                    .font(.ggMono(15, .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
             }
         }
         .padding(16)
@@ -450,11 +420,9 @@ private struct PartnerStakePage: View {
 
     /// The amount is the server's, not a constant in this app — a stake that
     /// changes should be a config row, not a release.
-    private var stakeMinor: Int { app.driverStake?.requiredMinor ?? 3000 }
-    private var stakeCurrency: String { app.driverStake?.currency ?? "USD" }
-
     private var stakeLabel: String {
-        WalletStore.money(stakeMinor, currency: stakeCurrency)
+        WalletStore.money(app.driverStake?.requiredMinor ?? 3000,
+                          currency: app.driverStake?.currency ?? "USD")
     }
 
     private var shortfall: Int { app.driverStake?.shortfallMinor ?? 0 }

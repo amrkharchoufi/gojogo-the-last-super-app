@@ -86,17 +86,6 @@ struct WalletView: View {
                 .font(.ggMono(38, .bold))
                 .foregroundStyle(GGColor.textPrimary)
                 .contentTransition(.numericText())
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-
-            // What the balance is worth in the currency they think in — under
-            // it, never instead of it. The wallet holds the platform currency
-            // and this is a translation of that, not a second balance.
-            if let local = Money.approx(app.wallet?.availableMinor ?? 0, currency: currency) {
-                Text(local)
-                    .font(.ggMono(13, .semibold))
-                    .foregroundStyle(GGColor.textSecondary)
-            }
 
             // Held money is still the customer's, so it is shown as part of
             // their balance rather than as something taken from them — the

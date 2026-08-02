@@ -24,10 +24,6 @@ extension AppState {
             SocialStore.shared.myHandle = profile.handle
             applyProfile(profile)
             backendConnected = true
-            // Before anything that draws a price. One small GET, cached for the
-            // launch, and a failure is silent — a screen with no rate shows the
-            // platform amount, which is the one that is actually true.
-            await ExchangeRates.shared.loadIfNeeded()
             // Messaging fetch is next — start shimmer early so My World never
             // flashes the empty state while connectMessaging is still running.
             if worldConversations.isEmpty {
