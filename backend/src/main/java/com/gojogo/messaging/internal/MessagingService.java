@@ -221,13 +221,36 @@ class MessagingService {
         List<UUID> recipients = otherThan(meta.participants(), msg.senderId());
         if (recipients.isEmpty()) return;
         events.publishEvent(new MessageSent(msg.conversationId(), msg.senderId(),
-            worldName(msg.senderId()), snippet(msg), recipients));
+            worldName(msg.senderId()), snippet(msg), recipients,
+            senderNamesFor(recipients, msg.senderId())));
     }
 
+    /**
+     * Push titles for the recipients who have privately renamed the sender. This
+     * is the one path where the server has to resolve a name per viewer: a push
+     * is rendered on the recipient's behalf and their device can't rewrite it
+     * afterwards. Only recipients with a rename appear in the map — a targeted
+     * lookup each, rather than loading anybody's whole alias list.
+     */
+    private Map<UUID, String> senderNamesFor(List<UUID> recipients, UUID senderId) {
+        Map<UUID, String> out = new LinkedHashMap<>();
+        for (UUID r : recipients) {
+            repo.getAlias(r, senderId).ifPresent(alias -> out.put(r, alias));
+        }
+        return out;
+    }
+
+    /**
+     * The quoted-reply card. {@code authorName} is stored with the message and is
+     * therefore the same string for every viewer — so {@code authorId} rides
+     * along, and a client that has privately renamed the author uses it to show
+     * the name <em>it</em> knows them by. Without the id the alias would be right
+     * in the thread and wrong in the quote directly above it.
+     */
     private ReplySnippetDto buildReply(UUID convId, UUID replyToMessageId) {
         if (replyToMessageId == null) return null;
         return repo.getMessage(convId, replyToMessageId)
-            .map(rm -> new ReplySnippetDto(rm.id(), worldName(rm.senderId()), snippet(rm)))
+            .map(rm -> new ReplySnippetDto(rm.id(), rm.senderId(), worldName(rm.senderId()), snippet(rm)))
             .orElse(null);
     }
 

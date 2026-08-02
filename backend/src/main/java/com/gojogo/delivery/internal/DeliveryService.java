@@ -1,7 +1,8 @@
 package com.gojogo.delivery.internal;
 
 import com.gojogo.delivery.OrderPlaced;
-import com.gojogo.delivery.OrderStatusChanged;
+import com.gojogo.dispatch.DispatchApi;
+import com.gojogo.dispatch.WorkerPosition;
 import com.gojogo.storefront.StorefrontDocument;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
@@ -11,8 +12,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.EnumSet;
@@ -39,28 +38,31 @@ class DeliveryService {
     private final MenuItemRepository menuItems;
     private final OrderRepository orders;
     private final AddressRepository addresses;
-    private final DeliveryTimeline timeline;
     private final ApplicationEventPublisher events;
     private final OrderPayments payments;
     private final PromotionService promotions;
     private final MerchantStorefrontService storefronts;
+    private final OrderFulfilmentService fulfilment;
+    private final DispatchApi dispatch;
     private final int serviceFeeCents;
 
     DeliveryService(MerchantRepository merchants, MenuItemRepository menuItems,
                     OrderRepository orders, AddressRepository addresses,
-                    DeliveryTimeline timeline, ApplicationEventPublisher events,
+                    ApplicationEventPublisher events,
                     OrderPayments payments, PromotionService promotions,
                     MerchantStorefrontService storefronts,
+                    OrderFulfilmentService fulfilment, DispatchApi dispatch,
                     @Value("${gojogo.delivery.service-fee-cents:99}") int serviceFeeCents) {
         this.merchants = merchants;
         this.menuItems = menuItems;
         this.orders = orders;
         this.addresses = addresses;
-        this.timeline = timeline;
         this.events = events;
         this.payments = payments;
         this.promotions = promotions;
         this.storefronts = storefronts;
+        this.fulfilment = fulfilment;
+        this.dispatch = dispatch;
         this.serviceFeeCents = serviceFeeCents;
     }
 
@@ -225,9 +227,13 @@ class DeliveryService {
         Map<UUID, Integer> qtyByItem = mergeLines(request.lines());
         Map<UUID, MenuItem> found = priceableItems(merchant, qtyByItem);
 
+        // The restaurant's own advertised ETA is the best guess anybody has
+        // until they accept and say how long they actually need — which is the
+        // number that replaces this one, and the first honest one in this
+        // vertical's history.
         OffsetDateTime now = OffsetDateTime.now();
         CustomerOrder order = new CustomerOrder(me, merchant.getId(), payments.currency(),
-            request.note(), now.plus(timeline.total()));
+            request.note(), now.plusMinutes(merchant.getEtaMinutes()));
         applyAddress(me, request, order);
         qtyByItem.forEach((itemId, qty) -> {
             MenuItem item = found.get(itemId);
@@ -245,8 +251,13 @@ class DeliveryService {
         payments.hold(saved, merchant.getName());
         promotions.redeem(applied, me, saved.getId());
 
+        // The owner rides along so somebody can be told an order is waiting.
+        // Under the simulation nothing had to be: a timeline started cooking on
+        // its own. A real kitchen that is never told has an order it can only
+        // time out.
         events.publishEvent(new OrderPlaced(saved.getId(), me, merchant.getId(), merchant.getName(),
-            saved.getTotalCents(), saved.getCurrency(), saved.getPlacedAt()));
+            merchant.getOwnerId(), saved.getTotalCents(), saved.getCurrency(),
+            saved.getPlacedAt()));
         return toOrderDto(saved, merchant);
     }
 
@@ -323,6 +334,12 @@ class DeliveryService {
         return toOrderDto(require(me, orderId));
     }
 
+    /**
+     * The customer changes their mind. Allowed right up until a courier has the
+     * food in their hands — which is now a real event rather than a point on a
+     * timeline, and stands the courier down through dispatch so they are free
+     * for the next offer instead of busy for an order nobody is waiting on.
+     */
     @Transactional
     OrderDto cancel(UUID me, UUID orderId) {
         CustomerOrder order = require(me, orderId);
@@ -330,14 +347,11 @@ class DeliveryService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 order.getStatus() == OrderStatus.CANCELLED
                     ? "That order is already cancelled"
-                    : "Too late to cancel — your courier is on the way");
+                    : "Too late to cancel — your courier has your order");
         }
-        order.moveTo(OrderStatus.CANCELLED, OffsetDateTime.now());
         // Nothing was captured, so this is a release and not a refund: the money
         // never left the customer's own escrow.
-        payments.release(order);
-        events.publishEvent(new OrderStatusChanged(order.getId(), me,
-            merchantName(order.getMerchantId()), OrderStatus.CANCELLED.name(), 0));
+        fulfilment.cancel(order, merchantName(order.getMerchantId()), "You cancelled this order");
         return toOrderDto(order);
     }
 
@@ -375,66 +389,6 @@ class DeliveryService {
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such order"));
     }
 
-    // MARK: Fulfilment (called by OrderFulfilmentJob)
-
-    /** Orders still in flight, oldest first. */
-    @Transactional(readOnly = true)
-    List<UUID> openOrderIds(int limit) {
-        return orders.findByStatusNotInOrderByPlacedAtAsc(TERMINAL, PageRequest.of(0, limit))
-            .stream().map(CustomerOrder::getId).toList();
-    }
-
-    /**
-     * Walks one order up to wherever the timeline says it should be by now,
-     * publishing every step it passes through. Recomputed from {@code placedAt}
-     * each tick, so a missed run (or a restart) catches up rather than stalls.
-     */
-    @Transactional
-    void advance(UUID orderId) {
-        CustomerOrder order = orders.findById(orderId).orElse(null);
-        if (order == null || order.getStatus().isTerminal()) {
-            return;
-        }
-        OffsetDateTime now = OffsetDateTime.now();
-        OrderStatus target = timeline.statusAt(Duration.between(order.getPlacedAt(), now));
-        String merchantName = merchantName(order.getMerchantId());
-        while (order.getStatus().ordinal() < target.ordinal()) {
-            OrderStatus next = order.getStatus().next().orElseThrow();
-            order.moveTo(next, now);
-            if (next == OrderStatus.COURIER_TO_RESTAURANT) {
-                assignCourier(order);
-            }
-            if (next == OrderStatus.DELIVERED) {
-                // The food arrived: the hold becomes the merchant's, the
-                // courier's and the platform's. Idempotent on the order, so a
-                // second pass through DELIVERED cannot pay anyone twice.
-                payments.settle(order, merchantName);
-            }
-            events.publishEvent(new OrderStatusChanged(order.getId(), order.getUserId(),
-                merchantName, next.name(), etaMinutes(order, now)));
-        }
-    }
-
-    /**
-     * Picks the courier. Deterministic on the order id so every device (and a
-     * retry) shows the same person — a random pick per read is how you end up
-     * with a courier who changes name mid-delivery.
-     */
-    private static void assignCourier(CustomerOrder order) {
-        Courier courier = Courier.ROSTER.get(
-            Math.floorMod(order.getId().hashCode(), Courier.ROSTER.size()));
-        order.assignCourier(courier.name(), courier.vehicle(),
-            BigDecimal.valueOf(courier.rating()), courier.deliveries());
-    }
-
-    private record Courier(String name, String vehicle, double rating, int deliveries) {
-        static final List<Courier> ROSTER = List.of(
-            new Courier("Yassine B.", "Scooter · Yamaha", 4.94, 2140),
-            new Courier("Sara L.", "E-bike", 4.88, 1675),
-            new Courier("Mehdi K.", "Scooter · Honda", 4.97, 3020),
-            new Courier("Amine T.", "On foot", 4.91, 890));
-    }
-
     // MARK: Mapping
 
     private List<OrderDto> decorate(List<CustomerOrder> page) {
@@ -452,13 +406,21 @@ class DeliveryService {
     }
 
     private OrderDto toOrderDto(CustomerOrder order, Merchant merchant) {
-        OffsetDateTime now = OffsetDateTime.now();
-        Duration elapsed = Duration.between(order.getPlacedAt(), now);
+        // Where the courier actually is, straight from dispatch, rather than
+        // where a timeline says somebody would be by now. Only while they are
+        // carrying it: their position between jobs is nobody's business.
+        WorkerPosition position = order.getStatus() == OrderStatus.DELIVERING
+            && order.getCourierWorkerId() != null
+            ? dispatch.positionOf(order.getCourierWorkerId()).orElse(null)
+            : null;
         CourierDto courier = order.getCourierName() == null ? null : new CourierDto(
             order.getCourierName(),
             order.getCourierVehicle(),
             order.getCourierRating() == null ? 0 : order.getCourierRating().doubleValue(),
-            order.getCourierDeliveries() == null ? 0 : order.getCourierDeliveries());
+            order.getCourierDeliveries() == null ? 0 : order.getCourierDeliveries(),
+            position == null ? null : position.latitude(),
+            position == null ? null : position.longitude(),
+            position == null ? null : position.at());
         OrderMerchantDto merchantDto = merchant == null
             ? new OrderMerchantDto(order.getMerchantId(), "Restaurant", null, 0, 0)
             : new OrderMerchantDto(merchant.getId(), merchant.getName(), merchant.getImageUrl(),
@@ -467,9 +429,16 @@ class DeliveryService {
             order.getId(),
             merchantDto,
             order.getStatus().name(),
-            etaMinutes(order, now),
-            timeline.courierProgress(order.getStatus(), elapsed),
+            Eta.minutesLeft(order),
+            Eta.courierProgress(order,
+                position == null ? null : position.latitude(),
+                position == null ? null : position.longitude(),
+                merchant == null ? null : merchant.getLatitude(),
+                merchant == null ? null : merchant.getLongitude()),
             courier,
+            order.getCourierSearch().name(),
+            order.getCancelReason(),
+            order.getReadyAt(),
             order.getLines().stream()
                 .map(l -> new OrderLineDto(l.getMenuItemId(), l.getName(), l.getUnitPriceCents(), l.getQty()))
                 .toList(),
@@ -491,15 +460,6 @@ class DeliveryService {
             order.getPlacedAt(),
             order.getStatusChangedAt(),
             order.getEtaAt());
-    }
-
-    /** Minutes left on the promise, floored at 1 while the order is still live. */
-    private static int etaMinutes(CustomerOrder order, OffsetDateTime now) {
-        if (order.getStatus().isTerminal()) {
-            return 0;
-        }
-        long seconds = Duration.between(now, order.getEtaAt()).getSeconds();
-        return (int) Math.max(1, Math.ceilDiv(seconds, 60));
     }
 
     private String merchantName(UUID merchantId) {

@@ -13,9 +13,15 @@ struct WorldContactView: View {
     @EnvironmentObject var app: AppState
     @State private var tab: ContactTab = .info
     @State private var confirmingDelete = false
+    @State private var renaming = false
+    @State private var draftAlias = ""
 
     enum ContactTab: String, CaseIterable, Identifiable {
         case info = "Info"
+        /// Phase 2f: what this person has published to their phone graph or to a
+        /// circle you're in. Answered from *your* feed server-side, so it can
+        /// only ever show what they actually sent you.
+        case posts = "Posts"
         case backgrounds = "Backgrounds"
         case photos = "Photos"
         case links = "Links"
@@ -23,6 +29,10 @@ struct WorldContactView: View {
         case locations = "Locations"
         var id: String { rawValue }
     }
+
+    @State private var theirPosts: [WorldPost] = []
+    @State private var theirProfile: WorldRichProfile?
+    @State private var loadedContentFor: UUID?
 
     private var convo: WorldConversation? { app.selectedWorldConversation }
     private var contact: WorldContact? { app.selectedWorldContact }
@@ -34,7 +44,22 @@ struct WorldContactView: View {
     }
 
     private var displayName: String {
-        profile?.name ?? contact?.name ?? convo?.title ?? "Contact"
+        let base = profile?.name ?? contact?.name ?? convo?.title ?? "Contact"
+        return app.worldDisplayName(for: contactID, fallback: base) ?? base
+    }
+
+    /// The other side of a live 1:1, which is who a rename applies to. Nil for a
+    /// group (you rename a person, not a thread) and for demo threads.
+    private var contactID: UUID? {
+        guard let convo, !convo.isGroup else { return nil }
+        return MessagingStore.shared.otherParticipant(in: convo.id)?.id
+    }
+
+    /// The name they set for themselves — shown in the rename dialog so it's
+    /// clear what a rename is covering up, and what clearing it restores.
+    private var theirOwnName: String? {
+        guard let convo else { return nil }
+        return MessagingStore.shared.otherParticipant(in: convo.id)?.displayName
     }
 
     private var avatarURL: String? {
@@ -75,6 +100,9 @@ struct WorldContactView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
         }
+        // Loaded once per contact regardless of which tab is showing — the rich
+        // profile lands on Info and the posts on their own tab.
+        .task(id: contactID) { await loadTheirContent() }
         .confirmationDialog("Delete this conversation?",
                             isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button(isGroup ? "Leave Conversation" : "Delete Conversation", role: .destructive) {
@@ -84,7 +112,24 @@ struct WorldContactView: View {
         } message: {
             Text(isGroup
                  ? "You'll stop receiving messages from this group."
-                 : "The conversation and its messages are removed from your My World.")
+                 : "The conversation and its messages are removed from your GojoMessages.")
+        }
+        .alert("Rename for me", isPresented: $renaming) {
+            TextField("Name", text: $draftAlias)
+            Button("Save") {
+                guard let cid = contactID else { return }
+                Task { await app.renameWorldContact(cid, to: draftAlias) }
+            }
+            if let cid = contactID, app.worldAliases[cid] != nil {
+                Button("Reset", role: .destructive) {
+                    Task { await app.renameWorldContact(cid, to: nil) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(theirOwnName.map {
+                "Only you see this name — they'll still appear as \($0) to everyone else."
+            } ?? "Only you see this name.")
         }
     }
 
@@ -285,6 +330,8 @@ struct WorldContactView: View {
         switch tab {
         case .info:
             infoSection
+        case .posts:
+            postsSection
         case .photos:
             photosGrid
         case .locations:
@@ -298,10 +345,60 @@ struct WorldContactView: View {
         }
     }
 
+    // MARK: Posts (Phase 2f — what they published to you)
+
+    private var postsSection: some View {
+        VStack(spacing: 14) {
+            if theirPosts.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "square.stack")
+                        .font(.system(size: 28))
+                        .foregroundStyle(IMColor.secondary)
+                    Text("Nothing shared with you yet")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(IMColor.label)
+                    Text("Posts they send to their contacts, or to a circle you're in, show up here.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(IMColor.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 30)
+                }
+                .padding(.vertical, 30)
+            } else {
+                ForEach(theirPosts) { post in
+                    WorldPostCard(post: post)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    /// Their posts and rich profile. Both are entitlement-gated server-side —
+    /// the posts come from the viewer's own feed, and the profile comes back
+    /// empty unless the server agrees they're actually a contact.
+    private func loadTheirContent() async {
+        guard let cid = contactID, loadedContentFor != cid else { return }
+        loadedContentFor = cid
+        theirPosts = (try? await WorldContentStore.shared.content(by: cid)) ?? []
+        if let dto = try? await WorldContentStore.shared.contactProfile(cid), dto.isContact,
+           let p = dto.profile {
+            theirProfile = WorldRichProfile(
+                bio: p.bio ?? "", gender: p.gender ?? "", city: p.city ?? "",
+                languages: p.languages ?? [], education: p.education ?? "",
+                occupation: p.occupation ?? "", interests: p.interests ?? [],
+                favouriteBooks: p.favouriteBooks ?? [], favouriteFilms: p.favouriteFilms ?? [],
+                favouriteTv: p.favouriteTv ?? [], favouriteSport: p.favouriteSport ?? [],
+                favouriteGames: p.favouriteGames ?? [])
+        }
+    }
+
     // MARK: Info
 
     private var infoSection: some View {
         VStack(spacing: 12) {
+            if let profile = theirProfile, !profile.isEmpty {
+                WorldRichProfileCard(profile: profile)
+            }
             if let phone {
                 phoneCard(phone)
             }
@@ -449,6 +546,37 @@ struct WorldContactView: View {
             .frame(height: 52)
 
             rowDivider
+
+            if let cid = contactID {
+                Button {
+                    draftAlias = app.worldAliases[cid] ?? ""
+                    renaming = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "pencil")
+                            .foregroundStyle(IMColor.blue)
+                        Text("Rename for me")
+                            .font(.system(size: 16))
+                            .foregroundStyle(IMColor.label)
+                        Spacer()
+                        if let alias = app.worldAliases[cid] {
+                            Text(alias)
+                                .font(.system(size: 15))
+                                .foregroundStyle(IMColor.secondary)
+                                .lineLimit(1)
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(IMColor.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 52)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                rowDivider
+            }
 
             Button {
                 withAnimation(.easeOut(duration: 0.2)) { tab = .backgrounds }

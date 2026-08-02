@@ -11,5 +11,19 @@ import java.util.UUID;
  * aren't currently connected.
  */
 public record MessageSent(UUID conversationId, UUID senderId, String senderName,
-                          String preview, List<UUID> recipientIds) {
+                          String preview, List<UUID> recipientIds,
+                          java.util.Map<UUID, String> senderNameByRecipient) {
+
+    /**
+     * A push is the one place the server renders a name <em>on a specific
+     * viewer's behalf</em> — the device can't rewrite an APNs payload the way it
+     * rewrites a screen. So a recipient who has privately renamed the sender gets
+     * their own title here, and {@link #senderName()} is the default for everyone
+     * else. Everywhere else on the wire the real name travels and the client
+     * applies its own renames.
+     */
+    public String titleFor(UUID recipientId) {
+        String alias = senderNameByRecipient == null ? null : senderNameByRecipient.get(recipientId);
+        return alias != null ? alias : senderName;
+    }
 }

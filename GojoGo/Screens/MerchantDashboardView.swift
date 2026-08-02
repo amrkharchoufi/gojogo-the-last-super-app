@@ -104,6 +104,7 @@ struct MerchantDashboardBody: View {
             VStack(alignment: .leading, spacing: 16) {
                 storeCard(store)
                 if store.isSuspended { suspendedNote }
+                orderQueue
                 statsStrip(store)
                 earningsCard
                 menuHeader
@@ -122,7 +123,56 @@ struct MerchantDashboardBody: View {
         }
         // Refreshes the *account* too, not just the restaurant: a suspension
         // lands on the application, and its note is what this screen shows.
-        .refreshable { await app.refreshMerchantPartner() }
+        .refreshable {
+            await app.refreshMerchantPartner()
+            await app.refreshMerchantOrders()
+        }
+        .task { await app.refreshMerchantOrders() }
+        // A kitchen screen that goes stale is a kitchen that misses an order and
+        // times it out. Cheap enough to poll: one small list for one restaurant.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard !Task.isCancelled else { return }
+                await app.refreshMerchantOrders()
+            }
+        }
+    }
+
+    // MARK: Orders (Phase 4 M1)
+
+    /// The kitchen's queue — the screen this dashboard deliberately did not have
+    /// until there was a real courier to hand food to.
+    ///
+    /// Under the simulation a restaurant had nothing to do: a timeline started
+    /// cooking twenty seconds after checkout whether anybody in the building
+    /// knew about it or not. Now nothing happens until somebody here says yes,
+    /// and the prep estimate they give is what decides when a courier is looked
+    /// for. Which is also why an unanswered order is a real failure with a real
+    /// consequence — the card says so, rather than letting it lapse quietly.
+    @ViewBuilder
+    private var orderQueue: some View {
+        if !app.merchantOrders.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("Orders")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    if app.merchantOrders.contains(where: \.needsAnswer) {
+                        Text("\(app.merchantOrders.filter(\.needsAnswer).count) waiting")
+                            .font(.ggMono(11, .medium))
+                            .foregroundStyle(GGColor.textPrimary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 20)
+                            .glassCapsule(tint: GGColor.ink(0.10), interactive: false, dense: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                ForEach(app.merchantOrders) { order in
+                    MerchantOrderCard(order: order)
+                }
+            }
+        }
     }
 
     private func storeCard(_ store: MerchantStorefront) -> some View {
@@ -564,6 +614,132 @@ struct MerchantDashboardBody: View {
             if await app.saveMerchantStorefront(body) {
                 withAnimation(.ggSnappy) { editingStorefront = false }
             }
+        }
+    }
+}
+
+// MARK: - One order in the kitchen's queue (Phase 4 M1)
+
+private struct MerchantOrderCard: View {
+    @EnvironmentObject var app: AppState
+    let order: MerchantOrderDTO
+
+    /// The prep estimate. A picker rather than a text field, because this is
+    /// tapped by somebody with one hand free, and the number decides when a
+    /// courier turns up — a keyboard here is how you get a 5 that meant 50.
+    @State private var prep = 20
+    @State private var busy = false
+
+    private static let choices = [10, 15, 20, 25, 30, 45, 60]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(headline)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Text(order.lines.map { "\($0.qty)× \($0.name)" }.joined(separator: ", "))
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !order.note.isEmpty {
+                        Text(order.note)
+                            .font(.system(size: 12))
+                            .foregroundStyle(GGColor.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 4)
+                Text(DeliveryStore.money(cents: order.earningsMinor))
+                    .font(.ggMono(13, .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+            }
+
+            // A kitchen with food ready and nobody coming for it needs to know
+            // before the food does. Silence here would be the cruellest possible
+            // way to find out.
+            if order.noCourier {
+                Text("No courier took this one. The customer has been told and can cancel.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(GGColor.ink(0.10)))
+            }
+
+            if order.needsAnswer {
+                Picker("Ready in", selection: $prep) {
+                    ForEach(Self.choices, id: \.self) { Text("\($0) min").tag($0) }
+                }
+                .pickerStyle(.segmented)
+
+                HStack(spacing: 10) {
+                    Button {
+                        act { await app.rejectMerchantOrder(order.id) }
+                    } label: {
+                        Text("Can't take it")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(GGColor.textPrimary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Capsule().fill(GGColor.ink(0.10)))
+                    }
+                    .buttonStyle(PressableStyle())
+
+                    Button {
+                        act { await app.acceptMerchantOrder(order.id, prepMinutes: prep) }
+                    } label: {
+                        Text("Accept · \(prep) min")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(GGColor.onAccent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Capsule().fill(GGColor.white))
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+                .disabled(busy)
+                .opacity(busy ? 0.5 : 1)
+            } else if order.status == "PREPARING" {
+                Button {
+                    act { await app.markMerchantOrderReady(order.id) }
+                } label: {
+                    Text("Food is ready")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(GGColor.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(GGColor.ink(0.10)))
+                }
+                .buttonStyle(PressableStyle())
+                .disabled(busy)
+                .opacity(busy ? 0.5 : 1)
+            }
+        }
+        .padding(14)
+        .glass(cornerRadius: 18, tint: GGColor.ink(0.06))
+    }
+
+    /// What the restaurant needs to know at a glance, which is not the status
+    /// name: it is whether this one is waiting on them.
+    private var headline: String {
+        switch order.status {
+        case "CONFIRMED":             return "New order · \(order.itemCount) items"
+        case "PREPARING":             return order.courierName.map { "Cooking · \($0) is coming" }
+                                             ?? "Cooking · finding a courier"
+        case "COURIER_TO_RESTAURANT": return "\(order.courierName ?? "Courier") on the way here"
+        case "DELIVERING":            return "Out for delivery"
+        default:                      return order.status.capitalized
+        }
+    }
+
+    private func act(_ work: @escaping () async -> Void) {
+        busy = true
+        Task {
+            await work()
+            busy = false
         }
     }
 }

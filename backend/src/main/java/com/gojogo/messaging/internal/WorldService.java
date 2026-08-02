@@ -114,10 +114,41 @@ class WorldService {
         String phone = normalize(rawPhone);
         UUID id = repo.profileIdForPhone(phone)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                "No GojoGo My World account for that number yet"));
+                "Nobody on GojoMessages has that number yet"));
         WorldProfile p = repo.getWorldProfile(id)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
         return new WorldUserDto(id, p.displayName(), p.avatarUrl(), p.phone());
+    }
+
+    // ---- contact aliases (private per-viewer renames) ----------------------
+
+    /**
+     * Privately rename a contact. The alias is the caller's own — it never
+     * touches the name the contact set for themselves, and it is not visible to
+     * them or to anyone else. Passing a blank alias clears the rename.
+     */
+    ContactAliasDto setAlias(UUID viewerId, UUID contactId, String rawAlias) {
+        if (viewerId.equals(contactId)) {
+            // Your own name is your World profile, edited through PUT /v1/world/me.
+            // Allowing a self-alias would give one person two names for themselves
+            // and no rule for which one the other side is shown.
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "You can't rename yourself — change your GojoMessages name instead");
+        }
+        String alias = rawAlias == null ? null : rawAlias.trim();
+        if (alias == null || alias.isBlank()) {
+            repo.deleteAlias(viewerId, contactId);
+            return new ContactAliasDto(contactId, null);
+        }
+        repo.putAlias(viewerId, contactId, alias);
+        return new ContactAliasDto(contactId, alias);
+    }
+
+    /** Every rename the caller has made, so a client can apply them locally. */
+    java.util.List<ContactAliasDto> listAliases(UUID viewerId) {
+        return repo.aliasesFor(viewerId).entrySet().stream()
+            .map(e -> new ContactAliasDto(e.getKey(), e.getValue()))
+            .toList();
     }
 
     // ---- helpers ----------------------------------------------------------

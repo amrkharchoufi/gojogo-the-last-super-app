@@ -444,7 +444,15 @@ extension AppState {
 
     func applyLiveOrder(_ order: OrderDTO) {
         guard let status = DeliveryStore.status(order.status) else {
-            // Cancelled — nothing left to track.
+            // Cancelled — nothing left to track, but somebody has to say why.
+            // Since Phase 4 M1 a cancellation is usually not the customer's own:
+            // a restaurant turned it down, or nobody there answered at all, and
+            // a tracking screen that simply vanished would leave them wondering
+            // what they had done.
+            if let reason = order.cancelReason, !reason.isEmpty,
+               deliveryLiveOrderID == order.id {
+                showDeliveryNotice(reason)
+            }
             clearLiveDeliveryOrder()
             return
         }
@@ -455,6 +463,10 @@ extension AppState {
         deliveryOrderSummary = DeliveryStore.summary(order.lines)
         deliveryEtaMinutes = order.etaMinutes
         deliveryCourier = order.courier.map(DeliveryStore.courier)
+        // "The kitchen is cooking and nobody has taken the delivery" is not a
+        // stage of an order — it is a problem with one, which is why it rides
+        // beside the status rather than inside it.
+        deliveryCourierSearch = order.courierSearch
         if let rating = order.rating { deliveryRating = rating }
         // The tracking map reads the restaurant's coordinates out of the
         // catalog; an order placed before this session's browse may not be in it.
@@ -521,6 +533,7 @@ extension AppState {
         deliveryLiveOrderID = nil
         deliveryCourier = nil
         deliveryCourierProgress = 0
+        deliveryCourierSearch = nil
         deliveryOrderRestaurantID = nil
         deliveryRating = 0
         withAnimation(.easeInOut(duration: 0.3)) { deliveryStatus = nil }

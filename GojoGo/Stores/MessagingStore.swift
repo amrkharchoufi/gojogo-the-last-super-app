@@ -39,6 +39,9 @@ final class MessagingStore {
         liveConversationIds = []
         participantsByConversation = [:]
         phoneByProfile = [:]
+        // Renames are per-account: leaving them behind would show the last
+        // person's private names to whoever signs in next.
+        aliasByContact = [:]
     }
 
     // MARK: REST
@@ -153,13 +156,48 @@ final class MessagingStore {
     /// Known phone number for a World user, if we've ever resolved one.
     func phone(of profileId: UUID) -> String? { phoneByProfile[profileId] }
 
+    // MARK: Contact aliases (private per-viewer renames)
+
+    /// Every rename this account has made. Cached by `AppState` and applied at
+    /// render time — the wire deliberately keeps carrying real names, because a
+    /// socket payload is one object broadcast to every participant and can't
+    /// carry a name that differs per viewer.
+    func aliases() async throws -> [ContactAliasDTO] {
+        try await APIClient.shared.get("/v1/world/aliases")
+    }
+
+    /// Renames a contact for this account only. A nil or blank alias clears it.
+    @discardableResult
+    func setAlias(_ contactId: UUID, to alias: String?) async throws -> ContactAliasDTO {
+        try await APIClient.shared.put(
+            "/v1/world/aliases/\(contactId.uuidString.lowercased())",
+            body: SetContactAliasBody(alias: alias))
+    }
+
     // MARK: Mapping
+
+    /// Private renames, `contactId -> alias`, mirrored from `AppState.worldAliases`.
+    /// Held here because this is the wire->model boundary: applying the lens once,
+    /// where the server's names become app models, means every surface that
+    /// renders a name picks the rename up without knowing it exists.
+    var aliasByContact: [UUID: String] = [:]
+
+    /// The name this account knows someone by — their private rename if there is
+    /// one, otherwise whatever the server said.
+    func aliasedName(for id: UUID?, fallback: String?) -> String? {
+        if let id, let alias = aliasByContact[id] { return alias }
+        return fallback
+    }
 
     func map(_ dto: ConversationDTO) -> WorldConversation {
         liveConversationIds.insert(dto.id)
         participantsByConversation[dto.id] = dto.participants
         let other = dto.participants.first { $0.id != myProfileId }
-        let title = dto.title
+        // A rename wins over every server-supplied name for a 1:1. A group title
+        // names the thread rather than a person, so it is left alone.
+        let renamed = dto.isGroup ? nil : other.flatMap { aliasByContact[$0.id] }
+        let title = renamed
+            ?? dto.title
             ?? other?.displayName
             ?? other.map { "@\($0.handle ?? "user")" }
             ?? "Conversation"
@@ -212,7 +250,11 @@ final class MessagingStore {
                           fromUser: $0.userId == myProfileId)
         }
         let reply = dto.replyTo.map {
-            WorldReplySnippet(authorName: $0.authorName ?? "", preview: $0.preview ?? "", fromUser: false)
+            // authorId is what carries the rename into the quote card. Snippets
+            // written before that field existed have none, and fall back to the
+            // name stored with the message.
+            WorldReplySnippet(authorName: aliasedName(for: $0.authorId, fallback: $0.authorName) ?? "",
+                              preview: $0.preview ?? "", fromUser: false)
         }
         return WorldMessage(
             id: dto.id,
@@ -222,7 +264,7 @@ final class MessagingStore {
             readLabel: mine ? "Delivered" : nil,
             imageURL: firstImage?.imageUrl ?? firstVideo?.imageUrl,
             durationLabel: kind == .location ? nil : (firstImage ?? firstVideo)?.durationLabel,
-            senderName: mine ? nil : dto.senderName,
+            senderName: mine ? nil : aliasedName(for: dto.senderId, fallback: dto.senderName),
             carouselItems: carousel.count >= 2 ? carousel : [],
             reactions: reactions,
             replyTo: reply,

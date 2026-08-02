@@ -130,6 +130,63 @@ extension AppState {
         }
     }
 
+    // MARK: The kitchen's queue (Phase 4 M1)
+    //
+    // A restaurant had nothing to do until real couriers existed: a simulated
+    // timeline cooked every order on its own. Now nothing moves until somebody
+    // here answers, and the prep estimate they give is what schedules a courier
+    // — so these three calls are the difference between an order being made and
+    // an order timing out.
+
+    func refreshMerchantOrders() async {
+        guard backendConnected, merchantStorefront != nil else { return }
+        merchantOrdersLoading = merchantOrders.isEmpty
+        defer { merchantOrdersLoading = false }
+        do {
+            merchantOrders = try await DeliveryStore.shared.merchantOrders()
+        } catch {
+            #if DEBUG
+            print("Merchant orders refresh failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Takes the order and starts the clock everything downstream is timed from.
+    func acceptMerchantOrder(_ orderId: UUID, prepMinutes: Int) async {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        do {
+            _ = try await DeliveryStore.shared.acceptOrder(orderId, prepMinutes: prepMinutes)
+        } catch {
+            showMerchantNotice(Self.message(from: error, fallback: "Couldn't accept that order."))
+        }
+        await refreshMerchantOrders()
+    }
+
+    /// Turning one down cancels it and refunds the customer in one movement, so
+    /// it is worth being a distinct verb rather than a cancel — nobody has been
+    /// charged for food nobody made.
+    func rejectMerchantOrder(_ orderId: UUID,
+                             reason: String = "The restaurant couldn't take this order") async {
+        do {
+            _ = try await DeliveryStore.shared.rejectOrder(orderId, reason: reason)
+        } catch {
+            showMerchantNotice(Self.message(from: error, fallback: "Couldn't turn that one down."))
+        }
+        await refreshMerchantOrders()
+    }
+
+    /// The food is done. Corrects the time the courier is expecting; it does not
+    /// move the order, because "cooked" is not a stage the customer can act on.
+    func markMerchantOrderReady(_ orderId: UUID) async {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        do {
+            _ = try await DeliveryStore.shared.markOrderReady(orderId)
+        } catch {
+            showMerchantNotice(Self.message(from: error, fallback: "Couldn't mark that ready."))
+        }
+        await refreshMerchantOrders()
+    }
+
     // MARK: The menu
     //
     // Every mutation answers with the whole restaurant, so these just adopt the

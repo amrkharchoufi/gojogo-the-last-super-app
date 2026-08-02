@@ -51,6 +51,9 @@ struct PartnerDashboardView: View {
             TokensView().environmentObject(app)
         }
         .task { await app.refreshTokens() }
+        // A courier may have accepted on another device, or closed the app
+        // holding somebody's dinner. Either way the order is still theirs.
+        .task { await app.refreshCourierJob() }
         .onAppear {
             MapboxOptions.accessToken = MapboxConfig.accessToken
             refreshCamera(animated: false)
@@ -91,6 +94,7 @@ struct PartnerDashboardView: View {
                 VStack(spacing: 18) {
                     statsRow
                     tokenCard
+                    courierDeliveryCard
                     onlineCard
                     stageContent
                     Color.clear.frame(height: 24)
@@ -322,11 +326,103 @@ struct PartnerDashboardView: View {
         }
     }
 
+    // MARK: The delivery they are carrying (Phase 4 M1)
+
+    /// The other half of Courier Mode. Dispatch found the work; this is what the
+    /// work turned out to be, and it is the whole screen while it is on it —
+    /// above the online card, because somebody holding a bag of food is not
+    /// looking for the go-offline button.
+    ///
+    /// Two taps and no more: collected, and handed over. Both are deliberate
+    /// rather than inferred from a position, because being *at* a counter is not
+    /// the same as having what is on it, and a delivery confirmed by geofence is
+    /// a delivery somebody can be paid for without doing.
+    @ViewBuilder
+    private var courierDeliveryCard: some View {
+        if let job = app.courierJob {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: job.isCollected ? "figure.wave" : "bag.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(GGColor.ink(0.1)))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(app.courierInstruction ?? "")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(GGColor.textPrimary)
+                        Text("\(job.itemCount) \(job.itemCount == 1 ? "item" : "items") · "
+                             + DeliveryStore.money(cents: job.payMinor) + " for this delivery")
+                            .font(.system(size: 12))
+                            .foregroundStyle(GGColor.textSecondary)
+                    }
+                    Spacer(minLength: 4)
+                }
+
+                courierLeg(icon: "storefront.fill", title: job.merchantName,
+                           detail: job.isCollected ? "Collected" : "Pick up here",
+                           dim: job.isCollected)
+                courierLeg(icon: "house.fill", title: job.addressLabel,
+                           detail: job.addressLine.isEmpty ? "Delivery address" : job.addressLine,
+                           dim: !job.isCollected)
+
+                // The customer's note is the one piece of free text a courier
+                // genuinely needs — "second floor, no bell" is the difference
+                // between a delivery and a phone call.
+                if !job.note.isEmpty || !job.addressNote.isEmpty {
+                    Text([job.note, job.addressNote].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button {
+                    if job.isCollected { app.courierDelivered() } else { app.courierPickedUp() }
+                } label: {
+                    Text(job.isCollected ? "Delivered" : "I've collected the order")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(Capsule().fill(GGColor.white))
+                }
+                .buttonStyle(PressableStyle())
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity)
+            .glass(cornerRadius: 24, tint: Color.black.opacity(0.3), floating: true)
+        }
+    }
+
+    private func courierLeg(icon: String, title: String, detail: String,
+                            dim: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(dim ? GGColor.textTertiary : GGColor.textPrimary)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(GGColor.ink(0.08)))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(dim ? GGColor.textSecondary : GGColor.textPrimary)
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textTertiary)
+            }
+            Spacer(minLength: 4)
+        }
+    }
+
     // MARK: Online status card (radar / prompt)
 
     @ViewBuilder
     private var onlineCard: some View {
-        if app.partnerJobPhase == .idle {
+        // Not while they are carrying something. A radar saying "looking for
+        // delivery requests" above an order somebody is holding is the app
+        // contradicting itself, and dispatch is not offering them anything
+        // anyway — accepting made them BUSY.
+        if app.partnerJobPhase == .idle && app.courierJob == nil {
             VStack(spacing: 16) {
                 PartnerRadar(active: app.partnerOnline, icon: role.icon)
                     .frame(width: 132, height: 132)

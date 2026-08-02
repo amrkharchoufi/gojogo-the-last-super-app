@@ -596,6 +596,359 @@ class MessagingRepository {
             .key(Map.of("pk", s("WORLDOTP#" + profileId), "sk", s("OTP"))));
     }
 
+    // ---- contact aliases (private per-viewer renames) ----------------------
+
+    // Item: pk=WORLDUSER#{viewerId}  sk=ALIAS#{contactId}  { alias }
+    //
+    // Deliberately in the viewer's own partition, next to their WORLDUSER#/PROFILE
+    // item: an alias is a property of the *edge* from the viewer to the contact,
+    // never of the contact. It is the viewer's data, so it is stored under the
+    // viewer's key, read with one query on their partition, and is unreachable
+    // from the renamed person's own reads by construction rather than by a filter.
+
+    /** Every rename this viewer has made, contactId -> alias. One query. */
+    Map<UUID, String> aliasesFor(UUID viewerId) {
+        Map<UUID, String> out = new HashMap<>();
+        QueryResponse resp = db().query(QueryRequest.builder()
+            .tableName(table)
+            .keyConditionExpression("pk = :p AND begins_with(sk, :a)")
+            .expressionAttributeValues(Map.of(
+                ":p", s("WORLDUSER#" + viewerId), ":a", s("ALIAS#")))
+            .build());
+        for (var it : resp.items()) {
+            String alias = attr(it, "alias");
+            if (alias == null) continue;
+            out.put(UUID.fromString(it.get("sk").s().substring("ALIAS#".length())), alias);
+        }
+        return out;
+    }
+
+    /** One viewer's rename of one contact. Used on the push path, where the
+     *  whole map would be wasted work. */
+    Optional<String> getAlias(UUID viewerId, UUID contactId) {
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDUSER#" + viewerId), "sk", s("ALIAS#" + contactId)))).item();
+        if (item == null || item.isEmpty()) return Optional.empty();
+        return Optional.ofNullable(attr(item, "alias"));
+    }
+
+    void putAlias(UUID viewerId, UUID contactId, String alias) {
+        db().putItem(r -> r.tableName(table).item(Map.of(
+            "pk", s("WORLDUSER#" + viewerId),
+            "sk", s("ALIAS#" + contactId),
+            "contactId", s(contactId.toString()),
+            "alias", s(alias))));
+    }
+
+    void deleteAlias(UUID viewerId, UUID contactId) {
+        db().deleteItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDUSER#" + viewerId), "sk", s("ALIAS#" + contactId))));
+    }
+
+    // ---- contacts, circles, content (the GojoMessages graph) ---------------
+
+    // Items:
+    //   Contact        pk=WORLDUSER#{ownerId}    sk=CONTACT#{contactId}
+    //   Reverse edge   pk=CONTACTOF#{contactId}  sk=OWNER#{ownerId}
+    //   Circle         pk=WORLDUSER#{ownerId}    sk=CIRCLE#{circleId}
+    //   Author's copy  pk=WORLDPOST#{authorId}   sk={POST|STORY}#{ts}#{id}
+    //   Feed copy      pk=WORLDFEED#{viewerId}   sk={POST|STORY}#{ts}#{id}
+    //
+    // The reverse edge is what makes "everyone who has my number" answerable: a
+    // contact list reads one way, and an audience reads the other. Both are
+    // written in one transaction so the two directions cannot disagree.
+    //
+    // Content is fanned out on write, one feed copy per audience member. That is
+    // deliberate: a feed read touches only the reader's own partition, so there
+    // is no audience filter on the read path that could ever be forgotten. The
+    // cost is writes proportional to audience size, which is the right trade for
+    // a network whose whole premise is the few hundred people you actually know.
+
+    record ContactEdge(UUID contactId, String alias, Instant addedAt) {}
+
+    record Circle(UUID id, String name, String colorHex, List<UUID> memberIds, Instant createdAt) {}
+
+    record StoredContent(UUID id, UUID authorId, String kind, String text,
+                         List<MediaItemDto> mediaItems, Instant createdAt, Instant expiresAt,
+                         String audience, List<UUID> circleIds) {
+
+        boolean isStory() { return "story".equals(kind); }
+    }
+
+    /** Sort-key prefix. Stories and posts share a partition but never a query. */
+    private static String contentPrefix(String kind) {
+        return "story".equals(kind) ? "STORY#" : "POST#";
+    }
+
+    private static String contentSk(StoredContent c) {
+        return contentPrefix(c.kind()) + c.createdAt() + "#" + c.id();
+    }
+
+    // ---- contacts ---------------------------------------------------------
+
+    void addContact(UUID ownerId, UUID contactId, String phone) {
+        Instant now = Instant.now();
+        Map<String, AttributeValue> edge = new HashMap<>();
+        edge.put("pk", s("WORLDUSER#" + ownerId));
+        edge.put("sk", s("CONTACT#" + contactId));
+        edge.put("contactId", s(contactId.toString()));
+        putIfPresent(edge, "phone", phone);
+        edge.put("addedAt", s(now.toString()));
+
+        Map<String, AttributeValue> reverse = Map.of(
+            "pk", s("CONTACTOF#" + contactId),
+            "sk", s("OWNER#" + ownerId),
+            "ownerId", s(ownerId.toString()),
+            "addedAt", s(now.toString()));
+
+        db().transactWriteItems(TransactWriteItemsRequest.builder().transactItems(
+            TransactWriteItem.builder().put(Put.builder().tableName(table).item(edge).build()).build(),
+            TransactWriteItem.builder().put(Put.builder().tableName(table).item(reverse).build()).build()
+        ).build());
+    }
+
+    void removeContact(UUID ownerId, UUID contactId) {
+        db().transactWriteItems(TransactWriteItemsRequest.builder().transactItems(
+            TransactWriteItem.builder().delete(Delete.builder().tableName(table).key(Map.of(
+                "pk", s("WORLDUSER#" + ownerId), "sk", s("CONTACT#" + contactId))).build()).build(),
+            TransactWriteItem.builder().delete(Delete.builder().tableName(table).key(Map.of(
+                "pk", s("CONTACTOF#" + contactId), "sk", s("OWNER#" + ownerId))).build()).build()
+        ).build());
+    }
+
+    List<ContactEdge> listContacts(UUID ownerId) {
+        Map<UUID, String> aliases = aliasesFor(ownerId);
+        List<ContactEdge> out = new ArrayList<>();
+        for (var it : queryPrefix("WORLDUSER#" + ownerId, "CONTACT#")) {
+            UUID id = UUID.fromString(it.get("contactId").s());
+            out.add(new ContactEdge(id, aliases.get(id),
+                it.containsKey("addedAt") ? Instant.parse(it.get("addedAt").s()) : null));
+        }
+        return out;
+    }
+
+    boolean isContact(UUID ownerId, UUID contactId) {
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDUSER#" + ownerId), "sk", s("CONTACT#" + contactId)))).item();
+        return item != null && !item.isEmpty();
+    }
+
+    /** Everyone who has this person as a contact — the {@code CONTACTS} audience. */
+    List<UUID> followersOf(UUID contactId) {
+        List<UUID> out = new ArrayList<>();
+        for (var it : queryPrefix("CONTACTOF#" + contactId, "OWNER#")) {
+            out.add(UUID.fromString(it.get("ownerId").s()));
+        }
+        return out;
+    }
+
+    // ---- circles ----------------------------------------------------------
+
+    void putCircle(UUID ownerId, Circle circle) {
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", s("WORLDUSER#" + ownerId));
+        item.put("sk", s("CIRCLE#" + circle.id()));
+        item.put("circleId", s(circle.id().toString()));
+        item.put("name", s(circle.name()));
+        putIfPresent(item, "colorHex", circle.colorHex());
+        putJson(item, "memberJson", circle.memberIds());
+        item.put("createdAt", s(circle.createdAt().toString()));
+        db().putItem(r -> r.tableName(table).item(item));
+    }
+
+    void deleteCircle(UUID ownerId, UUID circleId) {
+        db().deleteItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDUSER#" + ownerId), "sk", s("CIRCLE#" + circleId))));
+    }
+
+    Optional<Circle> getCircle(UUID ownerId, UUID circleId) {
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDUSER#" + ownerId), "sk", s("CIRCLE#" + circleId)))).item();
+        if (item == null || item.isEmpty()) return Optional.empty();
+        return Optional.of(readCircle(item));
+    }
+
+    List<Circle> listCircles(UUID ownerId) {
+        List<Circle> out = new ArrayList<>();
+        for (var it : queryPrefix("WORLDUSER#" + ownerId, "CIRCLE#")) out.add(readCircle(it));
+        return out;
+    }
+
+    private Circle readCircle(Map<String, AttributeValue> it) {
+        List<UUID> members = readJson(it, "memberJson", new TypeReference<List<UUID>>() {});
+        return new Circle(
+            UUID.fromString(it.get("circleId").s()),
+            attr(it, "name"),
+            attr(it, "colorHex"),
+            members == null ? List.of() : members,
+            it.containsKey("createdAt") ? Instant.parse(it.get("createdAt").s()) : Instant.EPOCH);
+    }
+
+    // ---- content ----------------------------------------------------------
+
+    /** Writes the author's copy plus one feed copy per viewer. */
+    void publishContent(StoredContent content, List<UUID> viewers) {
+        db().putItem(r -> r.tableName(table).item(contentItem(
+            "WORLDPOST#" + content.authorId(), contentSk(content), content, true)));
+        for (UUID viewer : viewers) {
+            if (viewer.equals(content.authorId())) continue;
+            db().putItem(r -> r.tableName(table).item(contentItem(
+                "WORLDFEED#" + viewer, contentSk(content), content, false)));
+        }
+    }
+
+    private Map<String, AttributeValue> contentItem(String pk, String sk, StoredContent c,
+                                                    boolean authorCopy) {
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", s(pk));
+        item.put("sk", s(sk));
+        item.put("contentId", s(c.id().toString()));
+        item.put("authorId", s(c.authorId().toString()));
+        item.put("kind", s(c.kind()));
+        putIfPresent(item, "text", c.text());
+        putJson(item, "mediaJson", c.mediaItems());
+        item.put("createdAt", s(c.createdAt().toString()));
+        if (c.expiresAt() != null) {
+            item.put("expiresAt", s(c.expiresAt().toString()));
+            // DynamoDB sweeps the row itself; reads also filter, because TTL
+            // deletion is eventual and a story must vanish on time regardless.
+            item.put("ttl", n(c.expiresAt().getEpochSecond()));
+        }
+        // The audience the author picked is theirs to know. It rides on the
+        // author's copy so it can be shown back to them, and is left off every
+        // feed copy so a reader can't infer which circle they were put in.
+        if (authorCopy) {
+            putIfPresent(item, "audience", c.audience());
+            putJson(item, "circleJson", c.circleIds());
+        }
+        return item;
+    }
+
+    private StoredContent readContent(Map<String, AttributeValue> it) {
+        List<MediaItemDto> media = readJson(it, "mediaJson", new TypeReference<List<MediaItemDto>>() {});
+        List<UUID> circles = readJson(it, "circleJson", new TypeReference<List<UUID>>() {});
+        return new StoredContent(
+            UUID.fromString(it.get("contentId").s()),
+            UUID.fromString(it.get("authorId").s()),
+            attr(it, "kind"),
+            attr(it, "text"),
+            media == null ? List.of() : media,
+            Instant.parse(it.get("createdAt").s()),
+            it.containsKey("expiresAt") ? Instant.parse(it.get("expiresAt").s()) : null,
+            attr(it, "audience"),
+            circles == null ? List.of() : circles);
+    }
+
+    /** A reader's own feed partition. Nothing else is ever consulted. */
+    List<StoredContent> feed(UUID viewerId, String kind, int limit) {
+        return readContentPage("WORLDFEED#" + viewerId, contentPrefix(kind), limit);
+    }
+
+    /** One author's own copies — for their grid and the contact page tab. */
+    List<StoredContent> contentBy(UUID authorId, String kind, int limit) {
+        return readContentPage("WORLDPOST#" + authorId, contentPrefix(kind), limit);
+    }
+
+    private List<StoredContent> readContentPage(String pk, String prefix, int limit) {
+        QueryResponse resp = db().query(QueryRequest.builder()
+            .tableName(table)
+            .keyConditionExpression("pk = :p AND begins_with(sk, :s)")
+            .expressionAttributeValues(Map.of(":p", s(pk), ":s", s(prefix)))
+            .scanIndexForward(false) // newest first
+            .limit(Math.max(1, limit))
+            .build());
+        Instant now = Instant.now();
+        List<StoredContent> out = new ArrayList<>();
+        for (var it : resp.items()) {
+            StoredContent c = readContent(it);
+            // TTL deletion is eventual — never serve an expired story because
+            // DynamoDB hasn't got round to sweeping it yet.
+            if (c.expiresAt() != null && c.expiresAt().isBefore(now)) continue;
+            out.add(c);
+        }
+        return out;
+    }
+
+    Optional<StoredContent> getContent(UUID authorId, UUID contentId) {
+        for (String kind : List.of("post", "story")) {
+            for (var it : queryPrefix("WORLDPOST#" + authorId, contentPrefix(kind))) {
+                if (contentId.toString().equals(attr(it, "contentId"))) {
+                    return Optional.of(readContent(it));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** Removes the author's copy and every fanned-out copy. */
+    void deleteContent(StoredContent content, List<UUID> viewers) {
+        String sk = contentSk(content);
+        db().deleteItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDPOST#" + content.authorId()), "sk", s(sk))));
+        for (UUID viewer : viewers) {
+            db().deleteItem(r -> r.tableName(table).key(Map.of(
+                "pk", s("WORLDFEED#" + viewer), "sk", s(sk))));
+        }
+    }
+
+    // ---- story seen state -------------------------------------------------
+
+    void markStorySeen(UUID viewerId, UUID contentId) {
+        db().putItem(r -> r.tableName(table).item(Map.of(
+            "pk", s("WORLDSEEN#" + viewerId),
+            "sk", s("STORY#" + contentId),
+            "seenAt", s(Instant.now().toString()),
+            // Outlives the story it refers to by a day, then sweeps itself.
+            "ttl", n(Instant.now().plusSeconds(172_800).getEpochSecond()))));
+    }
+
+    java.util.Set<UUID> seenStories(UUID viewerId) {
+        java.util.Set<UUID> out = new LinkedHashSet<>();
+        for (var it : queryPrefix("WORLDSEEN#" + viewerId, "STORY#")) {
+            out.add(UUID.fromString(it.get("sk").s().substring("STORY#".length())));
+        }
+        return out;
+    }
+
+    // ---- rich profile -----------------------------------------------------
+
+    /** Stored as one JSON attribute on the existing WORLDUSER#/PROFILE item, so
+     *  reading an identity stays a single get. */
+    void putRichProfile(UUID profileId, WorldRichProfileDto profile) {
+        Map<String, AttributeValue> values = new HashMap<>();
+        values.put(":p", s(writeJson(profile)));
+        db().updateItem(r -> r.tableName(table)
+            .key(Map.of("pk", s("WORLDUSER#" + profileId), "sk", s("PROFILE")))
+            .updateExpression("SET richJson = :p")
+            .expressionAttributeValues(values));
+    }
+
+    Optional<WorldRichProfileDto> getRichProfile(UUID profileId) {
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDUSER#" + profileId), "sk", s("PROFILE")))).item();
+        if (item == null || item.isEmpty()) return Optional.empty();
+        return Optional.ofNullable(readJson(item, "richJson",
+            new TypeReference<WorldRichProfileDto>() {}));
+    }
+
+    // ---- query helper -----------------------------------------------------
+
+    private List<Map<String, AttributeValue>> queryPrefix(String pk, String skPrefix) {
+        List<Map<String, AttributeValue>> out = new ArrayList<>();
+        Map<String, AttributeValue> start = null;
+        do {
+            QueryRequest.Builder q = QueryRequest.builder()
+                .tableName(table)
+                .keyConditionExpression("pk = :p AND begins_with(sk, :s)")
+                .expressionAttributeValues(Map.of(":p", s(pk), ":s", s(skPrefix)));
+            if (start != null && !start.isEmpty()) q.exclusiveStartKey(start);
+            QueryResponse resp = db().query(q.build());
+            out.addAll(resp.items());
+            start = resp.lastEvaluatedKey();
+        } while (start != null && !start.isEmpty());
+        return out;
+    }
+
     // ---- json / attr helpers ---------------------------------------------
 
     private static String attr(Map<String, AttributeValue> it, String k) {

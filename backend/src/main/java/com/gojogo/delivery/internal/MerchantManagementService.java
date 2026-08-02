@@ -27,11 +27,12 @@ import java.util.UUID;
  * {@link MerchantProvisioningApi#provisionMerchant}, and the ownership stamp is
  * all that survives into this module.
  *
- * <p>What is deliberately <em>not</em> here: incoming orders. A merchant cannot
- * accept, reject or advance an order, because {@code OrderFulfilmentJob} walks
- * every order along a simulated timeline — giving the kitchen a button that the
- * job would immediately overrule is worse than not having one. That surface
- * arrives with the Phase 3 {@code dispatch} module, which replaces the job.
+ * <p>What is deliberately <em>not</em> here: incoming orders. They were absent
+ * for a good reason until Phase 4 M1 — a simulated timeline walked every order
+ * along, and a kitchen button the job would immediately overrule is worse than
+ * no button — and they are absent now for a duller one: they live in
+ * {@link OrderFulfilmentService}, next to every other transition an order can
+ * make, rather than in the class that edits prices.
  */
 @Service
 class MerchantManagementService implements MerchantProvisioningApi {

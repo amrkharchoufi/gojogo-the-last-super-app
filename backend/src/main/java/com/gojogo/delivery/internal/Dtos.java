@@ -96,7 +96,14 @@ record SaveStorefrontRequest(@Size(max = 100) List<StorefrontBlock> blocks) {
 record OrderMerchantDto(UUID id, String name, String imageUrl, double latitude, double longitude) {
 }
 
-record CourierDto(String name, String vehicle, double rating, int deliveries) {
+/**
+ * Whoever is bringing the food. Since Phase 4 M1 this is a real person out of
+ * the dispatch registry rather than one of four hardcoded names, which is why
+ * it grew a position: a live one, reported by their phone, and present only
+ * while they are actually carrying this order.
+ */
+record CourierDto(String name, String vehicle, double rating, int deliveries,
+                  Double latitude, Double longitude, OffsetDateTime positionAt) {
 }
 
 record OrderLineDto(UUID menuItemId, String name, int unitPriceCents, int qty) {
@@ -122,17 +129,87 @@ record SaveAddressRequest(@Size(max = 40) String label,
 
 /**
  * A placed order as the app sees it. {@code etaMinutes} and {@code courierProgress}
- * are derived server-side from the fulfilment timeline, so two devices watching
- * the same order agree and a reinstall picks the countdown back up.
+ * are derived server-side, so two devices watching the same order agree and a
+ * reinstall picks the countdown back up.
+ *
+ * <p>Three fields arrived with real couriers (Phase 4 M1) and all three exist to
+ * say something the simulation never had to. {@code courierSearch} is NONE /
+ * SEARCHING / ASSIGNED / FAILED — the only way a customer learns that the
+ * restaurant is cooking but nobody has taken the delivery yet, which is not a
+ * stage of an order and so is deliberately not a seventh {@code status}.
+ * {@code readyAt} is when the kitchen says the food will be done, i.e. the first
+ * estimate in this vertical's history that a person gave. {@code cancelReason}
+ * is why it ended, because "cancelled" alone leaves a customer wondering whether
+ * they did it.
  */
 record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinutes,
-                double courierProgress, CourierDto courier, List<OrderLineDto> lines,
+                double courierProgress, CourierDto courier,
+                String courierSearch, String cancelReason, OffsetDateTime readyAt,
+                List<OrderLineDto> lines,
                 int subtotalCents, int deliveryFeeCents, int serviceFeeCents, int totalCents,
                 int discountCents, int tipCents, String promotionCode,
                 String paymentStatus,
                 String currency, String addressLabel, OrderAddressDto address, String note,
                 Integer rating,
                 OffsetDateTime placedAt, OffsetDateTime statusChangedAt, OffsetDateTime etaAt) {
+}
+
+// MARK: The kitchen's queue (OrderFulfilmentService)
+
+/**
+ * One order as the restaurant sees it — the first time in this product that a
+ * restaurant sees one at all. Under the simulation there was nothing for a
+ * kitchen to do, so there was deliberately no surface for it (see the old note
+ * on {@code MerchantManagementService}): a button the fulfilment job would
+ * immediately overrule is worse than no button.
+ *
+ * @param earningsMinor what this order is worth to them after commission, which
+ *                      is the number an owner actually reads
+ * @param courierSearch whether anybody is coming for it — a kitchen with food
+ *                      ready and no courier needs to know that before the food
+ *                      does
+ */
+record MerchantOrderDto(UUID id, String status, List<OrderLineDto> lines,
+                        int subtotalCents, int discountCents, String currency,
+                        long earningsMinor, String note, String addressLabel,
+                        String courierName, String courierSearch, int prepMinutes,
+                        String cancelReason,
+                        OffsetDateTime placedAt, OffsetDateTime acceptedAt,
+                        OffsetDateTime readyAt, OffsetDateTime statusChangedAt) {
+}
+
+/** A prep estimate, or null for the configured default. Not required, because
+ *  an accept that can fail validation is an accept somebody in a kitchen does
+ *  not make. */
+record AcceptOrderRequest(@Min(1) @Max(1440) Integer prepMinutes) {
+}
+
+record RejectOrderRequest(@Size(max = 240) String reason) {
+}
+
+// MARK: The courier's screen
+
+/**
+ * A delivery from the other end. Two addresses, what is in the bag and what it
+ * pays — and deliberately nothing else about the customer: a courier needs to
+ * find a door, not to know who lives behind it.
+ *
+ * @param payMinor the delivery fee plus whatever was tipped at checkout. The
+ *                 number a courier decides by, and as of this milestone a number
+ *                 that actually reaches them
+ */
+record CourierJobDto(UUID id, String status, String merchantName,
+                     Double merchantLatitude, Double merchantLongitude,
+                     String addressLabel, String addressLine, String addressNote,
+                     Double addressLatitude, Double addressLongitude,
+                     int itemCount, String note,
+                     long payMinor, String currency,
+                     OffsetDateTime readyAt, OffsetDateTime pickedUpAt,
+                     OffsetDateTime statusChangedAt) {
+}
+
+/** Wrapper so "not carrying anything" is a 200 with {@code job: null}. */
+record CourierJobResponse(CourierJobDto job) {
 }
 
 /**

@@ -154,11 +154,11 @@ struct GGTabBar: View {
         }
     }
 
-    /// Photos-app style mode switcher: My World | Collections — compact, left-aligned floating pill.
+    /// Photos-app style mode switcher: GojoMessages | Collections — compact, left-aligned floating pill.
     private var myWorldModeCapsule: some View {
         HStack(spacing: 2) {
             modeSegment(
-                title: "My World",
+                title: "GojoMessages",
                 icon: "message.fill",
                 active: true,
                 action: { /* already here */ }
@@ -251,7 +251,7 @@ struct GGTabBar: View {
                 .contentShape(Circle())
         }
         .buttonStyle(TabPressStyle())
-        .accessibilityLabel("My World")
+        .accessibilityLabel("GojoMessages")
     }
 
     @ViewBuilder

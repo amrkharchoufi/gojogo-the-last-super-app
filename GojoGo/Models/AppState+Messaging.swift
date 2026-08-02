@@ -26,6 +26,9 @@ extension AppState {
             withAnimation(.ggSnappy) { self?.worldRealtimeConnected = connected }
         }
         await loadWorldProfile()
+        // Before the conversation fetch: the mapping lens reads these, so loading
+        // them second would render the list once with real names.
+        await loadWorldAliases()
 
         // Show shimmer on My World until this first list lands — otherwise the
         // empty state flashes while connectBackend is still mid-flight.
@@ -41,6 +44,8 @@ extension AppState {
             mergeLiveConversations(live)
             WorldSocket.shared.connect()
             worldRealtimeConnected = WorldSocket.shared.isConnected
+            // The private network on top of chat: graph, circles, feed.
+            await connectWorldNetwork()
         } catch {
             #if DEBUG
             print("Messaging connect failed: \(error.localizedDescription)")
@@ -90,7 +95,82 @@ extension AppState {
         }
     }
 
-    // MARK: My World setup (phone-verified identity)
+    // MARK: GojoMessages contact aliases (private per-viewer renames)
+
+    /// Pulls this account's renames and hands them to the store before the first
+    /// conversation fetch, so the list never renders once with real names and
+    /// again with renames a moment later.
+    func loadWorldAliases() async {
+        guard backendConnected else { return }
+        do {
+            let rows = try await MessagingStore.shared.aliases()
+            var map: [UUID: String] = [:]
+            for row in rows {
+                guard let alias = row.alias, !alias.isEmpty else { continue }
+                map[row.contactId] = alias
+            }
+            worldAliases = map
+            MessagingStore.shared.aliasByContact = map
+        } catch {
+            #if DEBUG
+            print("Alias load failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Renames a contact for this account only. Passing nil or a blank name
+    /// clears the rename and the contact goes back to the name they set.
+    ///
+    /// Applied optimistically: an alias is the caller's own data with no other
+    /// writer, so there is nothing to reconcile against — on failure it simply
+    /// goes back to what it was.
+    func renameWorldContact(_ contactId: UUID, to newName: String?) async {
+        let trimmed = newName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let alias = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        let previous = worldAliases[contactId]
+        applyWorldAlias(alias, to: contactId)
+        guard backendConnected else { return }
+        do {
+            _ = try await MessagingStore.shared.setAlias(contactId, to: alias)
+        } catch {
+            applyWorldAlias(previous, to: contactId)
+            #if DEBUG
+            print("Rename failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// The name this account knows someone by, for surfaces that hold an id
+    /// rather than a mapped model (the contact page, a group roster).
+    func worldDisplayName(for contactId: UUID?, fallback: String?) -> String? {
+        MessagingStore.shared.aliasedName(for: contactId, fallback: fallback)
+    }
+
+    private func applyWorldAlias(_ alias: String?, to contactId: UUID) {
+        if let alias {
+            worldAliases[contactId] = alias
+        } else {
+            worldAliases.removeValue(forKey: contactId)
+        }
+        MessagingStore.shared.aliasByContact = worldAliases
+        relabelWorldConversations()
+    }
+
+    /// Re-titles the 1:1 threads already on screen. The mapping lens only runs
+    /// when a DTO arrives, so without this a rename wouldn't show in the list
+    /// until the next fetch.
+    private func relabelWorldConversations() {
+        let store = MessagingStore.shared
+        for i in worldConversations.indices where !worldConversations[i].isGroup {
+            let parts = store.participants(in: worldConversations[i].id)
+            guard let other = parts.first(where: { $0.id != store.myProfileId }) else { continue }
+            if let name = store.aliasedName(for: other.id, fallback: other.displayName) {
+                worldConversations[i].title = name
+            }
+        }
+    }
+
+    // MARK: GojoMessages setup (phone-verified identity)
 
     /// True once the backend has answered and the caller hasn't finished setup.
     /// Only gates when connected — offline falls back to the local demo.
@@ -189,7 +269,7 @@ extension AppState {
         guard !worldSetupBusy else { return }
         let name = worldSetupName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard name.count >= 2 else {
-            worldSetupError = "Pick a name for My World."
+            worldSetupError = "Pick a name for GojoMessages."
             return
         }
         worldSetupBusy = true
@@ -221,25 +301,21 @@ extension AppState {
         }
     }
 
-    /// Resolves several handles/phone numbers to real accounts and opens a live
-    /// group conversation. Returns false unless at least two others resolve.
+    /// Resolves several phone numbers to real accounts and opens a live group
+    /// conversation. Returns false unless at least two others resolve.
+    ///
+    /// Numbers only: GojoMessages has no username lookup, so an entry that isn't
+    /// a phone number can't reach anybody and is skipped.
     func startLiveGroup(recipients: [String]) async -> Bool {
         guard backendConnected else { return false }
         var ids: [UUID] = []
         var names: [String] = []
         for entry in recipients {
-            let isPhone = entry.allSatisfy { "+0123456789 -()".contains($0) }
-            if isPhone {
-                if let u = try? await MessagingStore.shared.worldByPhone(entry),
-                   u.profileId != SocialStore.shared.myProfileId, !ids.contains(u.profileId) {
-                    ids.append(u.profileId); names.append(u.displayName ?? "Member")
-                }
-            } else {
-                let handle = entry.hasPrefix("@") ? String(entry.dropFirst()) : entry
-                if let v = try? await ProfileStore.shared.view(handle: handle),
-                   v.id != SocialStore.shared.myProfileId, !ids.contains(v.id) {
-                    ids.append(v.id); names.append(v.name)
-                }
+            guard entry.allSatisfy({ "+0123456789 -()".contains($0) }) else { continue }
+            if let u = try? await MessagingStore.shared.worldByPhone(entry),
+               u.profileId != SocialStore.shared.myProfileId, !ids.contains(u.profileId) {
+                ids.append(u.profileId)
+                names.append(worldDisplayName(for: u.profileId, fallback: u.displayName) ?? "Member")
             }
         }
         guard ids.count >= 2 else { return false }
@@ -258,10 +334,16 @@ extension AppState {
     }
 
     /// Resolves a verified phone to a World user and opens a live 1:1 thread.
+    ///
+    /// Also puts them in the contacts graph: reaching somebody by number *is*
+    /// adding them, and the graph is what audiences resolve against — a thread
+    /// with somebody who isn't a contact would leave them unable to see anything
+    /// you post.
     func startLiveConversation(phone raw: String) async -> Bool {
         guard backendConnected,
               let user = try? await MessagingStore.shared.worldByPhone(raw),
               user.profileId != SocialStore.shared.myProfileId else { return false }
+        _ = await addWorldGraphContact(phone: raw)
         do {
             let convo = try await MessagingStore.shared.createConversation(
                 participantIds: [user.profileId], title: user.displayName,
@@ -558,7 +640,9 @@ extension AppState {
         showWorldNotice("Sent to \(title)")
     }
 
-    private func uploadWorldImage(_ data: Data) async throws -> String? {
+    /// Not private: the GojoMessages composer (AppState+WorldNetwork) uploads
+    /// post and story images through the same path as a World avatar.
+    func uploadWorldImage(_ data: Data) async throws -> String? {
         let type = APIClient.imageContentType(for: data)
         let payload: Data
         if type == "image/jpeg" || type == "image/png" || type == "image/gif" {
@@ -604,32 +688,13 @@ extension AppState {
         }
     }
 
-    /// Resolves a handle to a real profile and opens a live 1:1 thread. Returns
-    /// false when there's no matching account (caller falls back to the demo).
-    func startLiveConversation(handle raw: String) async -> Bool {
-        let handle = raw.hasPrefix("@") ? String(raw.dropFirst()) : raw
-        guard backendConnected,
-              let view = try? await ProfileStore.shared.view(handle: handle),
-              view.id != SocialStore.shared.myProfileId else { return false }
-        do {
-            let convo = try await MessagingStore.shared.createConversation(
-                participantIds: [view.id], title: nil, background: worldDefaultBackground)
-            if let existing = worldConversations.firstIndex(where: { $0.id == convo.id }) {
-                openWorldConversation(worldConversations[existing].id)
-            } else {
-                worldConversations.insert(convo, at: 0)
-                openWorldConversation(convo.id)
-            }
-            return true
-        } catch {
-            #if DEBUG
-            print("Start live conversation failed: \(error.localizedDescription)")
-            #endif
-            return false
-        }
-    }
+    // Removed 2026-08-02 (Phase 2f): `startLiveConversation(handle:)`. GojoMessages
+    // is a phone-number graph — an @handle is how the *public* network finds you,
+    // and resolving one here was the one built behaviour the re-spec contradicts
+    // outright. `ProfileStore.view(handle:)` stays; it's still how a public
+    // profile is opened, just no longer a way to start a private thread.
 
-    // MARK: My World settings
+    // MARK: GojoMessages settings
 
     /// Loads the settings screen's editable copy of the World profile.
     func openWorldSettings() {

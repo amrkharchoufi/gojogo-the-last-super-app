@@ -14,11 +14,19 @@
  * is the owner's, over this module's own {@code /v1/delivery/merchants/mine}
  * surface.
  *
- * <p>Fulfilment is <em>simulated</em> until the platform {@code dispatch} module
- * exists (Phase 3): an order walks a server-side timeline rather than being
- * offered to a real courier. The state machine and the API around it are the
- * real thing — only the actor moving the order is fake — so wiring dispatch in
- * later replaces {@code OrderFulfilmentJob} and nothing else.
+ * <p><b>Fulfilment is real as of Phase 4 M1.</b> It used to be simulated: an
+ * order walked a server-side timeline, a kitchen always took twenty seconds and
+ * a courier was drawn from four hardcoded names. The state machine, the events
+ * and the API were the real thing — only the actors were fake — and the swap
+ * came out exactly as 2b M4 predicted: the six statuses, the two events and
+ * every customer-facing endpoint are unchanged, and what was deleted was one
+ * job and one class of durations. Now a restaurant accepts an order and says
+ * how long it needs, that estimate schedules a courier search through the
+ * platform {@code dispatch} module ({@code readyAt − pickupLead}, carried on
+ * {@code DispatchRequest.startAfter}), and a courier who accepts, collects and
+ * hands over is what moves the order the rest of the way — and is paid the
+ * delivery fee and the tip that 2e M3 parked with the platform under their own
+ * ledger kinds for exactly this milestone.
  */
 @org.springframework.modulith.ApplicationModule(displayName = "Delivery")
 package com.gojogo.delivery;

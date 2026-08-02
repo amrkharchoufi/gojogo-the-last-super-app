@@ -48,6 +48,10 @@ record VotePollRequest(@NotNull UUID optionId) {
 record MarkReadRequest(@NotNull UUID lastReadMessageId) {
 }
 
+/** Privately rename a contact. A null or blank alias clears the rename. */
+record SetContactAliasRequest(@Size(max = 60) String alias) {
+}
+
 // ---- Responses ------------------------------------------------------------
 
 record ParticipantDto(UUID id, String displayName, String handle, String avatarUrl) {
@@ -56,7 +60,15 @@ record ParticipantDto(UUID id, String displayName, String handle, String avatarU
 record MediaItemDto(String imageUrl, String videoUrl, boolean isVideo, String durationLabel) {
 }
 
-record ReplySnippetDto(UUID messageId, String authorName, String preview) {
+/** {@code authorId} is what lets a client apply the viewer's private rename to a
+ *  quoted reply. {@code authorName} is stored with the message and is the same
+ *  string for every viewer, so it is only ever the fallback. Snippets written
+ *  before this field existed decode it as null and keep rendering the name. */
+record ReplySnippetDto(UUID messageId, UUID authorId, String authorName, String preview) {
+}
+
+/** One private rename, as the viewer who made it sees it. */
+record ContactAliasDto(UUID contactId, String alias) {
 }
 
 record ReactionDto(UUID userId, String tapback) {

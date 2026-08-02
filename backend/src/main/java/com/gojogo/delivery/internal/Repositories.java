@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -118,7 +119,30 @@ interface OrderRepository extends JpaRepository<CustomerOrder, UUID> {
     List<CustomerOrder> findByUserIdAndStatusInOrderByPlacedAtDesc(
         UUID userId, Collection<OrderStatus> terminal, Pageable page);
 
-    /** Everything the fulfilment job still has to move along. */
-    List<CustomerOrder> findByStatusNotInOrderByPlacedAtAsc(
-        Collection<OrderStatus> terminal, Pageable page);
+
+    /** The restaurant's live queue, oldest first — a kitchen works in the order
+     *  things arrived in. */
+    List<CustomerOrder> findByMerchantIdAndStatusInOrderByPlacedAtAsc(
+        UUID merchantId, Collection<OrderStatus> statuses);
+
+    /** What they finished (or lost), newest first. */
+    List<CustomerOrder> findByMerchantIdAndStatusInOrderByStatusChangedAtDesc(
+        UUID merchantId, Collection<OrderStatus> statuses, Pageable page);
+
+    /** The one order a courier is carrying. Never more than one — accepting
+     *  anything makes a worker BUSY in every registration they hold. */
+    Optional<CustomerOrder> findFirstByCourierUserIdAndStatusInOrderByStatusChangedAtDesc(
+        UUID courierUserId, Collection<OrderStatus> statuses);
+
+    List<CustomerOrder> findByCourierUserIdAndStatusOrderByStatusChangedAtDesc(
+        UUID courierUserId, OrderStatus status, Pageable page);
+
+    /**
+     * Orders nobody in a kitchen ever answered — and, by the same test, the ones
+     * stranded by the Phase 4 M1 deploy, since an order in flight when the
+     * simulated fulfilment job was deleted also has no {@code acceptedAt}. Both
+     * are "placed, never accepted, and old", and both want the same outcome.
+     */
+    List<CustomerOrder> findByStatusNotInAndAcceptedAtIsNullAndPlacedAtBeforeOrderByPlacedAtAsc(
+        Collection<OrderStatus> terminal, OffsetDateTime cutoff, Pageable page);
 }

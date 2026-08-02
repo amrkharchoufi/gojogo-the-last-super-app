@@ -32,9 +32,9 @@ public record AccountRef(OwnerKind ownerKind, UUID ownerId, Bucket bucket) {
         return new AccountRef(OwnerKind.MERCHANT, merchantId, bucket);
     }
 
-    /** Commissions, service fees, and money held for actors that don't exist
-     *  yet — a courier's delivery fee and tip until Phase 4 M1 gives them an
-     *  account of their own. */
+    /** Commissions and service fees — and, on orders that predate Phase 4 M1,
+     *  the courier's fee and tip, which were held here under their own ledger
+     *  kinds until there were couriers to pay them to. */
     public static AccountRef platform() {
         return new AccountRef(OwnerKind.PLATFORM, SINGLETON, Bucket.AVAILABLE);
     }

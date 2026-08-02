@@ -9,12 +9,12 @@ import CoreLocation
 // runs — for somebody who has never been approved, it is the only way to see
 // what the screen is for.
 //
-// What changed is that a *registered* driver now gets the real thing. The
-// registry, the offers and the accept are the server's, which means an empty
-// screen is an honest answer: there is no `travel` vertical yet publishing rides
-// (Phase 3 M3) and delivery still simulates its courier (Phase 4 M1), so a real
-// driver online today will genuinely be offered nothing. Showing them a fake
-// offer instead would be the one thing worse than that.
+// What changed is that a *registered* driver or courier now gets the real thing.
+// The registry, the offers and the accept are the server's — and as of Phase 4
+// M1 both verticals actually ask: `travel` for a ride (3 M3) and `delivery` for
+// a courier, which had been simulating one since 2b M4. An empty screen is
+// still an honest answer, but it now means a quiet city rather than a product
+// with nothing behind it.
 
 extension AppState {
 
@@ -55,6 +55,13 @@ extension AppState {
         dispatchOffers = mine.offers.filter { $0.expiresAt > now }
         dispatchOnline = mine.workers.contains { $0.status != "OFFLINE" }
         presentLiveOffer()
+        // A delivery assignment is only half an answer: dispatch says which job,
+        // and `delivery` says what is in the bag. Asked here rather than on a
+        // loop of its own, so a courier's screen and their offer book are never
+        // one poll apart.
+        if mine.assignment?.jobKind == "DELIVERY" || courierJob != nil {
+            Task { await refreshCourierJob() }
+        }
     }
 
     /// Puts a real offer into the card the dashboard already draws.
@@ -192,6 +199,9 @@ extension AppState {
             // charges at confirmation, so the balance on screen is stale the
             // moment this returns.
             await refreshTokens()
+            // And accepting a delivery is what gives a courier an order to go
+            // and collect (Phase 4 M1).
+            if offer.jobKind == "DELIVERY" { await refreshCourierJob() }
         }
     }
 

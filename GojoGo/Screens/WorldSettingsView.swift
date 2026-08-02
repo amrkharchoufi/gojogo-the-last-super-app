@@ -60,7 +60,7 @@ struct WorldSettingsView: View {
 
     private var header: some View {
         ZStack {
-            Text("My World Settings")
+            Text("GojoMessages Settings")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(IMColor.label)
             HStack {
@@ -116,7 +116,7 @@ struct WorldSettingsView: View {
             }
             .background(card)
 
-            Text("Your name and photo here are what people see in My World — your public GojoGo profile stays separate.")
+            Text("Your name and photo here are what people see in GojoMessages — your public GojoGo profile stays separate.")
                 .font(.system(size: 12))
                 .foregroundStyle(IMColor.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -192,7 +192,7 @@ struct WorldSettingsView: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Change My World photo")
+        .accessibilityLabel("Change GojoMessages photo")
     }
 
     private var initial: String {
@@ -354,7 +354,7 @@ struct WorldSettingsView: View {
 
     private var about: some View {
         VStack(spacing: 6) {
-            Text("GojoGo · My World")
+            Text("GojoGo · GojoMessages")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(IMColor.secondary)
             Text("Version \(Self.appVersion)")

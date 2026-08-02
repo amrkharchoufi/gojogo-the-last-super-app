@@ -76,12 +76,12 @@ struct WorldSetupView: View {
     private var introStep: some View {
         VStack(spacing: 0) {
             TabView {
-                introPage(icon: "person.2.fill", title: "My World",
+                introPage(icon: "person.2.fill", title: "GojoMessages",
                           subtitle: "Your private circle — separate from your public GojoGo. The people you actually talk to.")
                 introPage(icon: "bubble.left.and.bubble.right.fill", title: "Real conversations",
                           subtitle: "Group chats, circles, polls, reactions and send-later — everything a private space should have.")
                 introPage(icon: "lock.fill", title: "Just your number",
-                          subtitle: "Set up My World with your phone number, like a private line. That's how friends find you here.")
+                          subtitle: "Set up GojoMessages with your phone number, like a private line. That's how friends find you here.")
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .interactive))
@@ -127,7 +127,7 @@ struct WorldSetupView: View {
     private var phoneStep: some View {
         stepScaffold(
             title: "Your number",
-            subtitle: "We'll text you a 6-digit code to confirm it's you. This is your private My World line."
+            subtitle: "We'll text you a 6-digit code to confirm it's you. This is your private GojoMessages line."
         ) {
             VStack(alignment: .leading, spacing: 20) {
                 TextField("", text: $app.worldSetupPhone, prompt:
@@ -186,8 +186,8 @@ struct WorldSetupView: View {
 
     private var profileStep: some View {
         stepScaffold(
-            title: "Your My World profile",
-            subtitle: "This name and photo are how friends see you in My World — separate from your public GojoGo profile."
+            title: "Your GojoMessages profile",
+            subtitle: "This name and photo are how friends see you in GojoMessages — separate from your public GojoGo profile."
         ) {
             VStack(spacing: 26) {
                 avatarPicker
@@ -204,7 +204,7 @@ struct WorldSetupView: View {
                 errorText
             }
         } cta: {
-            AccentButton(title: app.worldSetupBusy ? "Saving…" : "Enter My World", trailingArrow: !app.worldSetupBusy) {
+            AccentButton(title: app.worldSetupBusy ? "Saving…" : "Enter GojoMessages", trailingArrow: !app.worldSetupBusy) {
                 app.worldSaveProfile()
             }
             .disabled(app.worldSetupBusy)

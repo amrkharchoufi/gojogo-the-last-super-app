@@ -51,7 +51,7 @@ class WorldSmsSender {
             }
             sns().publish(PublishRequest.builder()
                 .phoneNumber(e164Phone)
-                .message("Your GojoGo My World code is " + code)
+                .message("Your GojoMessages code is " + code)
                 .messageAttributes(attrs)
                 .build());
             return true;

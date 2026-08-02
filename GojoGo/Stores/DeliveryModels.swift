@@ -50,11 +50,18 @@ struct OrderMerchantDTO: Decodable {
     let longitude: Double
 }
 
+/// Whoever is bringing the food. A real person out of the dispatch registry
+/// since Phase 4 M1 rather than one of four hardcoded names — which is why it
+/// has a position, reported by their phone and present only while they are
+/// actually carrying this order.
 struct CourierDTO: Decodable {
     let name: String
     let vehicle: String
     let rating: Double
     let deliveries: Int
+    let latitude: Double?
+    let longitude: Double?
+    let positionAt: Date?
 }
 
 struct OrderLineDTO: Decodable {
@@ -104,6 +111,16 @@ struct OrderDTO: Decodable {
     let etaMinutes: Int
     let courierProgress: Double
     let courier: CourierDTO?
+    /// NONE / SEARCHING / ASSIGNED / FAILED (Phase 4 M1). The only way the app
+    /// learns that the kitchen is cooking and nobody has taken the delivery yet
+    /// — which is not a stage of an order, and so deliberately not a seventh
+    /// `status`.
+    let courierSearch: String?
+    /// Why it ended, when it ended badly. "Cancelled" on its own leaves someone
+    /// wondering whether they did it themselves.
+    let cancelReason: String?
+    /// When the kitchen says the food will be done. Null until they accept.
+    let readyAt: String?
     let lines: [OrderLineDTO]
     let subtotalCents: Int
     let deliveryFeeCents: Int
@@ -229,6 +246,85 @@ struct PayoutDTO: Decodable {
     /// REQUESTED / SENT / FAILED — a failure is reported, not hidden.
     let status: String
     let failureReason: String
+}
+
+// MARK: The kitchen's queue (Phase 4 M1)
+
+/// One order as its restaurant sees it. There was deliberately no such screen
+/// before real couriers: a simulated timeline walked every order along, and a
+/// kitchen button the job would immediately overrule is worse than no button.
+struct MerchantOrderDTO: Decodable, Identifiable {
+    let id: UUID
+    /// CONFIRMED / PREPARING / COURIER_TO_RESTAURANT / DELIVERING / DELIVERED / CANCELLED.
+    let status: String
+    let lines: [OrderLineDTO]
+    let subtotalCents: Int
+    let discountCents: Int
+    let currency: String
+    /// What this order is worth to them after commission — the number an owner
+    /// actually reads.
+    let earningsMinor: Int
+    let note: String
+    let addressLabel: String
+    let courierName: String?
+    /// NONE / SEARCHING / ASSIGNED / FAILED — a kitchen with food ready and
+    /// nobody coming needs to know before the food does.
+    let courierSearch: String
+    let prepMinutes: Int
+    let cancelReason: String
+    let placedAt: String
+    let acceptedAt: String?
+    let readyAt: String?
+    let statusChangedAt: String
+
+    var itemCount: Int { lines.reduce(0) { $0 + $1.qty } }
+    var needsAnswer: Bool { status == "CONFIRMED" }
+    var noCourier: Bool { courierSearch == "FAILED" }
+}
+
+/// A prep estimate, or nil for the server's default. Not required, because an
+/// accept that can fail validation is an accept somebody in a kitchen does not
+/// make.
+struct AcceptOrderBody: Encodable {
+    let prepMinutes: Int?
+}
+
+struct RejectOrderBody: Encodable {
+    let reason: String
+}
+
+// MARK: The courier's screen (Phase 4 M1)
+
+/// A delivery from the other end: two addresses, what is in the bag and what it
+/// pays — and deliberately nothing else about the customer. A courier needs to
+/// find a door, not to know who lives behind it.
+struct CourierJobDTO: Decodable, Identifiable {
+    let id: UUID
+    let status: String
+    let merchantName: String
+    let merchantLatitude: Double?
+    let merchantLongitude: Double?
+    let addressLabel: String
+    let addressLine: String
+    let addressNote: String
+    let addressLatitude: Double?
+    let addressLongitude: Double?
+    let itemCount: Int
+    let note: String
+    /// The delivery fee plus whatever was tipped at checkout — and, since this
+    /// milestone, money that actually reaches them.
+    let payMinor: Int
+    let currency: String
+    let readyAt: String?
+    let pickedUpAt: String?
+    let statusChangedAt: String
+
+    var isCollected: Bool { status == "DELIVERING" }
+}
+
+/// "Not carrying anything" is a 200 with a null job.
+struct CourierJobResponseDTO: Decodable {
+    let job: CourierJobDTO?
 }
 
 struct SavePromotionBody: Encodable {

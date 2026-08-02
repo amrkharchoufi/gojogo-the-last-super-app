@@ -1151,6 +1151,13 @@ enum WorldSetupStep: Int, Comparable {
 enum WorldSheetKind: Int, Identifiable {
     case newMessage
     case settings
+    /// Phase 2f. These ride the same single binding as the two above rather than
+    /// getting booleans of their own — `WorldSheetHost` is the one owner of
+    /// GojoMessages modals, and a second presenter attached to a live screen
+    /// silently swallows the first.
+    case composer
+    case circles
+    case profile
     var id: Int { rawValue }
 }
 

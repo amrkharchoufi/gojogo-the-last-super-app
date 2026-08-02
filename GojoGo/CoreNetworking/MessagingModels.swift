@@ -57,6 +57,10 @@ struct WorldLocationPayload {
 
 struct ReplySnippetDTO: Codable {
     var messageId: UUID
+    /// Who wrote the quoted message. Optional because snippets stored before this
+    /// field existed decode without it — those fall back to `authorName`. It's
+    /// what lets a private rename reach the quote card, not just the bubble.
+    var authorId: UUID?
     var authorName: String?
     var preview: String?
 }
@@ -193,6 +197,17 @@ struct WorldUserDTO: Decodable {
     var displayName: String?
     var avatarUrl: String?
     var phone: String?
+}
+
+/// One private rename. The alias is the viewer's own — the server never shows it
+/// to the person renamed, and the wire always carries their real name alongside.
+struct ContactAliasDTO: Decodable {
+    var contactId: UUID
+    var alias: String?
+}
+
+struct SetContactAliasBody: Encodable {
+    var alias: String?
 }
 
 // MARK: - WebSocket fan-out envelope

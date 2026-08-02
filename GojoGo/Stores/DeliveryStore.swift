@@ -108,6 +108,57 @@ final class DeliveryStore {
         return response.url
     }
 
+    // MARK: The kitchen's queue (Phase 4 M1)
+
+    func merchantOrders() async throws -> [MerchantOrderDTO] {
+        try await APIClient.shared.get("/v1/delivery/merchants/mine/orders")
+    }
+
+    func merchantOrderHistory(limit: Int = 20) async throws -> [MerchantOrderDTO] {
+        try await APIClient.shared.get("/v1/delivery/merchants/mine/orders/history?limit=\(limit)")
+    }
+
+    /// Takes the order, and starts the clock everything downstream is timed
+    /// from: the prep estimate is what schedules the courier search.
+    func acceptOrder(_ orderId: UUID, prepMinutes: Int?) async throws -> MerchantOrderDTO {
+        try await APIClient.shared.post("/v1/delivery/merchants/mine/orders/\(orderId)/accept",
+                                        body: AcceptOrderBody(prepMinutes: prepMinutes))
+    }
+
+    func rejectOrder(_ orderId: UUID, reason: String) async throws -> MerchantOrderDTO {
+        try await APIClient.shared.post("/v1/delivery/merchants/mine/orders/\(orderId)/reject",
+                                        body: RejectOrderBody(reason: reason))
+    }
+
+    /// The food is done — sooner or later than they guessed. Corrects the time
+    /// the courier is expecting; does not move the order.
+    func markOrderReady(_ orderId: UUID) async throws -> MerchantOrderDTO {
+        try await APIClient.shared.post("/v1/delivery/merchants/mine/orders/\(orderId)/ready")
+    }
+
+    // MARK: The courier's screen (Phase 4 M1)
+
+    /// Going online, position and offers are *dispatch's* surface and identical
+    /// for a driver and a courier — a courier does not get a second copy of
+    /// them. What is here is the two things that are about a delivery.
+    func courierJob() async throws -> CourierJobDTO? {
+        let response: CourierJobResponseDTO =
+            try await APIClient.shared.get("/v1/delivery/courier/job")
+        return response.job
+    }
+
+    func courierDeliveries(limit: Int = 20) async throws -> [CourierJobDTO] {
+        try await APIClient.shared.get("/v1/delivery/courier/deliveries?limit=\(limit)")
+    }
+
+    func courierPickedUp(_ orderId: UUID) async throws -> CourierJobDTO {
+        try await APIClient.shared.post("/v1/delivery/courier/orders/\(orderId)/picked-up")
+    }
+
+    func courierDelivered(_ orderId: UUID) async throws -> CourierJobDTO {
+        try await APIClient.shared.post("/v1/delivery/courier/orders/\(orderId)/delivered")
+    }
+
     // MARK: Saved addresses
 
     func addresses() async throws -> [DeliveryAddress] {

@@ -51,7 +51,28 @@ struct WorldSheetHost: ViewModifier {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                     .presentationBackground(IMColor.sheetBG)
+            case .composer:
+                WorldComposerView()
+                    .environmentObject(app)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            case .circles:
+                WorldCirclesView()
+                    .environmentObject(app)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            case .profile:
+                WorldProfileEditorView()
+                    .environmentObject(app)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
+        }
+        // Story playback is a cover rather than a sheet, and rides the same
+        // single owner so it can't fight the sheet binding above.
+        .fullScreenCover(item: $app.openWorldStory) { ring in
+            WorldStoryViewer(ring: ring)
+                .environmentObject(app)
         }
     }
 }
@@ -76,10 +97,14 @@ private struct WorldMessagesList: View {
                 app.worldConversationsLoading = true
             }
             await app.refreshWorldConversations()
+            await app.connectWorldNetwork()
         }
         .onReceive(tick) { now in
             clock = now
-            Task { await app.refreshWorldConversations() }
+            Task {
+                await app.refreshWorldConversations()
+                await app.refreshWorldFeed()
+            }
         }
         .overlay(alignment: .topTrailing) {
             if app.showWorldFilters {
@@ -109,7 +134,7 @@ private struct WorldMessagesList: View {
                 )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("My World settings")
+            .accessibilityLabel("GojoMessages settings")
 
             Button {
                 withAnimation(.ggSnappy) { app.worldIsEditing.toggle() }
@@ -166,13 +191,25 @@ private struct WorldMessagesList: View {
                 app.showWorldFilters = false
                 app.worldSheet = .newMessage
             }
+            // "Add by Username" removed in Phase 2f — GojoMessages is a
+            // phone-number graph, and there is no username to look anybody up by.
             Divider().background(IMColor.label.opacity(0.1))
-            filterRow("Add by Username", "at") {
+            filterRow("New Post", "square.and.arrow.up") {
                 app.showWorldFilters = false
-                app.worldSheet = .newMessage
+                app.worldSheet = .composer
             }
             Divider().background(IMColor.label.opacity(0.1))
-            filterRow("My World Settings", "gearshape") {
+            filterRow("Circles", "circle.grid.2x2") {
+                app.showWorldFilters = false
+                app.worldSheet = .circles
+            }
+            Divider().background(IMColor.label.opacity(0.1))
+            filterRow("Your Profile", "person.text.rectangle") {
+                app.showWorldFilters = false
+                app.worldSheet = .profile
+            }
+            Divider().background(IMColor.label.opacity(0.1))
+            filterRow("GojoMessages Settings", "gearshape") {
                 app.showWorldFilters = false
                 app.openWorldSettings()
             }
@@ -217,7 +254,7 @@ private struct WorldMessagesList: View {
 
     private var titleRow: some View {
         HStack {
-            Text("My World")
+            Text("GojoMessages")
                 .font(.system(size: 34, weight: .bold))
                 .foregroundStyle(IMColor.label)
             Spacer()
@@ -263,6 +300,12 @@ private struct WorldMessagesList: View {
             LazyVStack(spacing: 0) {
                 titleRow
                 searchBar
+
+                // Phase 2f: the home screen is a feed, not a conversation list —
+                // stories, then posts from people whose number you have, then
+                // the messages below. Renders nothing until the graph has
+                // something in it, so an empty account still opens on Messages.
+                WorldFeedSection()
 
                 if !app.worldPinnedConversations.isEmpty {
                     pinnedGrid
@@ -698,7 +741,7 @@ private struct NewWorldMessageSheet: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(IMColor.label)
                         .lineLimit(1)
-                    Text("Adds them to My World")
+                    Text("Adds them to GojoMessages")
                         .font(.system(size: 13))
                         .foregroundStyle(IMColor.secondary)
                 }

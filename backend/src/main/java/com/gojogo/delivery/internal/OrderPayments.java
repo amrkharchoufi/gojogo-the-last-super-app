@@ -31,16 +31,22 @@ import java.util.UUID;
  *   placement   AVAILABLE ─── total ──▶ ESCROW          (the customer's, still)
  *   delivered   ESCROW ─── food − commission ──▶ merchant
  *               ESCROW ─── commission + service fee ──▶ platform
- *               ESCROW ─── delivery fee ──▶ platform     (the courier's, Phase 4)
- *               ESCROW ─── tip ──▶ platform              (the courier's, Phase 4)
+ *               ESCROW ─── delivery fee ──▶ courier
+ *               ESCROW ─── tip ──▶ courier
  *   cancelled   ESCROW ─── total ──▶ AVAILABLE
  * </pre>
  *
- * <p>The two payees that don't exist yet settle to the platform under their own
- * ledger kinds ({@code COURIER_FEE}, {@code TIP}) rather than being folded into
- * the commission. When Phase 4 M1 gives couriers accounts, redirecting them is
- * one line here and the history stays readable — which it would not be if a
- * year of tips had been recorded as platform revenue.
+ * <p><b>The courier's two lines were the whole point of the arrangement 2e M3
+ * left behind, and Phase 4 M1 is the line that changes.</b> Until couriers
+ * existed, the delivery fee and the tip settled to the platform under their own
+ * kinds ({@code COURIER_FEE}, {@code TIP}) rather than being folded into
+ * commission — so redirecting them is a payee, and a year of tips does not have
+ * to be un-picked out of platform revenue to find out what couriers were owed.
+ *
+ * <p>They still fall back to the platform when an order has no courier, which is
+ * not dead code: every order delivered before this milestone had none, and a
+ * split has to name <em>somebody</em> or the arithmetic below refuses to settle
+ * and the money stays in escrow.
  */
 @Service
 class OrderPayments {
@@ -108,11 +114,11 @@ class OrderPayments {
             merchantBase - commission, LedgerKind.CAPTURE, merchantName));
         splits.add(new WalletApi.Split(AccountRef.platform(), platformTake,
             LedgerKind.FEE, "Service + commission"));
-        // The courier's two lines. Held by the platform until Phase 4 M1 gives
-        // couriers accounts — same kinds, different payee, one line changes.
-        splits.add(new WalletApi.Split(AccountRef.platform(), order.getDeliveryFeeCents(),
+        // The courier's two lines, now that there is a courier.
+        AccountRef courier = courierAccount(order);
+        splits.add(new WalletApi.Split(courier, order.getDeliveryFeeCents(),
             LedgerKind.COURIER_FEE, "Delivery"));
-        splits.add(new WalletApi.Split(AccountRef.platform(), order.getTipCents(),
+        splits.add(new WalletApi.Split(courier, order.getTipCents(),
             LedgerKind.TIP, "Tip"));
 
         long sum = splits.stream().mapToLong(WalletApi.Split::amountMinor).sum();
@@ -150,10 +156,24 @@ class OrderPayments {
     void tipAfterDelivery(CustomerOrder order, int amountCents) {
         if (!required() || amountCents <= 0) return;
         wallet.transfer(AccountRef.user(order.getUserId(), Bucket.AVAILABLE),
-            AccountRef.platform(), amountCents, LedgerKind.TIP,
+            courierAccount(order), amountCents, LedgerKind.TIP,
             WalletApi.Reference.of(REF_KIND, order.getId(), "Tip"),
             key(order, "tip:" + (order.getTipCents() + amountCents)));
         order.tipped(amountCents);
+    }
+
+    /**
+     * Who the delivery fee and the tip belong to.
+     *
+     * <p>The platform fallback is for the orders that predate Phase 4 M1 and had
+     * no courier at all — not a soft failure mode for one that should have. It
+     * cannot be dropped: a split has to name an account, and refusing to settle
+     * an old order would strand its money in escrow rather than surface anything.
+     */
+    private static AccountRef courierAccount(CustomerOrder order) {
+        return order.getCourierUserId() == null
+            ? AccountRef.platform()
+            : AccountRef.user(order.getCourierUserId(), Bucket.AVAILABLE);
     }
 
     /** What the merchant actually earned on an order, for their dashboard. */

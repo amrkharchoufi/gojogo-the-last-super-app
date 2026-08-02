@@ -114,6 +114,32 @@ final class AppState: ObservableObject {
     @Published var worldSettingsError: String? = nil
     @Published var worldSettingsSaved: Bool = false
 
+    // MARK: GojoMessages contact aliases (private per-viewer renames)
+    /// Contacts this account has privately renamed, `contactId -> alias`.
+    ///
+    /// Applied at render time rather than on the wire, because the server
+    /// broadcasts one payload to every participant of a thread — a name baked in
+    /// server-side would be right over REST and wrong over the socket. The alias
+    /// is ours alone: the person renamed never sees it, and neither does anyone
+    /// else. Only pushes are resolved server-side, since a device can't rewrite
+    /// an APNs alert after the fact.
+    @Published var worldAliases: [UUID: String] = [:]
+
+    // MARK: GojoMessages private network (Phase 2f — the graph, its audiences, its content)
+    /// Posts from people whose number you have, newest first.
+    @Published var worldFeedPosts: [WorldPost] = []
+    /// Unexpired stories, grouped by author, for the row above the feed.
+    @Published var worldStories: [WorldStoryRing] = []
+    /// The server-side contacts graph. Distinct from `worldContacts`, which is
+    /// the local SampleData demo roster the composer still falls back to.
+    @Published var worldGraphContacts: [WorldGraphContact] = []
+    /// Your own rich GojoMessages profile (separate from the public one).
+    @Published var worldRichProfile = WorldRichProfile()
+    @Published var worldFeedLoading: Bool = false
+    @Published var worldFeedLoaded: Bool = false
+    /// The story ring currently open full-screen, if any.
+    @Published var openWorldStory: WorldStoryRing?
+
     // MARK: My World setup (WhatsApp-style: own phone-verified identity)
     /// Backend `GET /v1/world/me` — true once phone verified + World name set.
     @Published var worldSetupComplete: Bool = false
@@ -317,6 +343,9 @@ final class AppState: ObservableObject {
     @Published var deliveryEtaMinutes: Int = 0
     /// 0 = courier at restaurant, 1 = courier at your door.
     @Published var deliveryCourierProgress: Double = 0
+    /// NONE / SEARCHING / ASSIGNED / FAILED (Phase 4 M1) — whether anybody is
+    /// actually coming for this order, which the six order statuses cannot say.
+    @Published var deliveryCourierSearch: String? = nil
     @Published var deliveryRating: Int = 0
     @Published var deliveryPastOrders: [DeliveryPastOrder] = []
     /// Restaurant the active order was placed from (kept after cart clears).
@@ -505,6 +534,17 @@ final class AppState: ObservableObject {
     var dispatchPositionTask: Task<Void, Never>?
     var dispatchPollTask: Task<Void, Never>?
     var dispatchDutyTracking: Bool = false
+
+    // Courier Mode's other half (Phase 4 M1). Dispatch finds the work; this is
+    // the delivery it turned out to be — what is in the bag, which restaurant,
+    // and what it pays.
+    @Published var courierJob: CourierJobDTO? = nil
+    @Published var courierDeliveries: [CourierJobDTO] = []
+
+    // The kitchen's queue (Phase 4 M1). Empty for anybody who doesn't run a
+    // restaurant, which is almost everybody.
+    @Published var merchantOrders: [MerchantOrderDTO] = []
+    @Published var merchantOrdersLoading: Bool = false
 
     // Driver/courier onboarding against the real `partner` application.
     @Published var driverApplication: DriverApplicationDTO? = nil
@@ -974,11 +1014,15 @@ final class AppState: ObservableObject {
         openWorldConversation(convo.id)
     }
 
-    /// Adds a contact reached by phone number or username, then opens the thread.
+    /// Adds a contact reached by phone number, then opens the thread.
+    ///
+    /// Number only, by design: GojoMessages is a phone-number graph, so a
+    /// username is a name here and never a way to find somebody. A non-numeric
+    /// entry is only ever a local demo contact.
     func addWorldContact(_ raw: String) {
         let entry = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !entry.isEmpty else { return }
-        // Comma-separated handles/numbers → a real backend group conversation.
+        // Comma-separated phone numbers → a real backend group conversation.
         let recipients = entry.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         if backendConnected, recipients.count >= 2 {
@@ -992,15 +1036,12 @@ final class AppState: ObservableObject {
             return
         }
         let isPhone = entry.allSatisfy { "+0123456789 -()".contains($0) }
-        // On a connected backend, resolve a real My World account — by phone
-        // number (WhatsApp-style) or by @handle — and open a live thread; fall
-        // back to a local demo contact when there's no match.
-        if backendConnected {
+        // On a connected backend, resolve a real GojoMessages account by phone
+        // number (WhatsApp-style) and open a live thread; fall back to a local
+        // demo contact when there's no match.
+        if backendConnected, isPhone {
             Task {
-                let opened = isPhone
-                    ? await startLiveConversation(phone: entry)
-                    : await startLiveConversation(handle: entry)
-                if opened {
+                if await startLiveConversation(phone: entry) {
                     worldSheet = nil
                     showWorldFilters = false
                     worldSearch = ""
@@ -2081,6 +2122,7 @@ final class AppState: ObservableObject {
         WorldSocket.shared.disconnect()
         MessagingStore.shared.reset()
         PushRegistrar.shared.reset()
+        worldAliases = [:]
         worldSetupComplete = false
         worldSetupLoaded = false
         worldConversationsLoading = true
@@ -3417,11 +3459,11 @@ final class AppState: ObservableObject {
     func acceptPartnerJob() {
         guard partnerJob != nil else { return }
         if let live = liveOffer {
-            // A real acceptance ends here on purpose. Dispatch's job is to find
-            // somebody; what happens next belongs to the vertical that asked,
-            // and no vertical publishes one yet (rides are Phase 3 M3, real
-            // couriers Phase 4 M1). Running the demo's animated route over a
-            // real assignment would be inventing a trip.
+            // A real acceptance ends the *offer* here on purpose, and what
+            // happens next belongs to the vertical that asked: a delivery
+            // becomes the courier card below, driven by `delivery` (Phase 4 M1).
+            // What it must never become is the demo's animated route, which
+            // would be this app inventing a trip over a real assignment.
             withAnimation(.easeInOut(duration: 0.25)) {
                 partnerJob = nil
                 partnerJobPhase = .idle

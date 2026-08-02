@@ -130,6 +130,44 @@ class CustomerOrder {
     @Column(name = "courier_deliveries")
     private Integer courierDeliveries;
 
+    /**
+     * The dispatch registration carrying this, and the profile behind it. Both
+     * copied onto the order at assignment rather than looked up on every read:
+     * a receipt names whoever actually brought the food, and it goes on naming
+     * them after they stop working here.
+     */
+    @Column(name = "courier_worker_id")
+    private UUID courierWorkerId;
+
+    @Column(name = "courier_user_id")
+    private UUID courierUserId;
+
+    /** When the restaurant said yes — the first thing in this order's life that
+     *  a person rather than a clock decides. */
+    @Column(name = "accepted_at")
+    private OffsetDateTime acceptedAt;
+
+    /** What the kitchen said it needed. Null until they accept. */
+    @Column(name = "prep_minutes")
+    private Integer prepMinutes;
+
+    /** {@code acceptedAt + prepMinutes}: when the food is expected to be ready,
+     *  and therefore when — minus the pickup lead — a courier is looked for. */
+    @Column(name = "ready_at")
+    private OffsetDateTime readyAt;
+
+    @Column(name = "picked_up_at")
+    private OffsetDateTime pickedUpAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "courier_search", nullable = false)
+    private CourierSearch courierSearch = CourierSearch.NONE;
+
+    /** Why it ended, when it ended badly. Shown to the customer verbatim, so it
+     *  is written for them and not for a log. */
+    @Column(name = "cancel_reason", nullable = false)
+    private String cancelReason = "";
+
     @Column(name = "rating")
     private Integer rating;
 
@@ -231,11 +269,51 @@ class CustomerOrder {
         }
     }
 
-    void assignCourier(String name, String vehicle, BigDecimal courierRating, int deliveries) {
+    void cancelledBecause(String reason) {
+        this.cancelReason = reason == null ? "" : reason;
+    }
+
+    /** The restaurant took it, and said how long it needs. */
+    void accepted(OffsetDateTime at, int prepMinutes, OffsetDateTime etaAt) {
+        this.acceptedAt = at;
+        this.prepMinutes = prepMinutes;
+        this.readyAt = at.plusMinutes(prepMinutes);
+        this.etaAt = etaAt;
+    }
+
+    /**
+     * The food is ready — earlier or later than the kitchen guessed. Moving
+     * {@code readyAt} matters even though the courier has usually been found by
+     * now: it is what the pickup ETA on their screen is drawn from, and a
+     * courier told the wrong time waits at a counter or arrives at cold food.
+     */
+    void readyNow(OffsetDateTime at, OffsetDateTime etaAt) {
+        this.readyAt = at;
+        this.etaAt = etaAt;
+    }
+
+    void searchingForCourier() {
+        this.courierSearch = CourierSearch.SEARCHING;
+    }
+
+    void noCourierFound() {
+        this.courierSearch = CourierSearch.FAILED;
+    }
+
+    /** A real person, from a dispatch {@code Assignment}. */
+    void assignCourier(UUID workerId, UUID userId, String name, String vehicle,
+                       BigDecimal courierRating, int deliveries) {
+        this.courierWorkerId = workerId;
+        this.courierUserId = userId;
         this.courierName = name;
         this.courierVehicle = vehicle;
         this.courierRating = courierRating;
         this.courierDeliveries = deliveries;
+        this.courierSearch = CourierSearch.ASSIGNED;
+    }
+
+    void pickedUp(OffsetDateTime at) {
+        this.pickedUpAt = at;
     }
 
     void rate(int stars) {
@@ -344,6 +422,38 @@ class CustomerOrder {
 
     Integer getCourierDeliveries() {
         return courierDeliveries;
+    }
+
+    UUID getCourierWorkerId() {
+        return courierWorkerId;
+    }
+
+    UUID getCourierUserId() {
+        return courierUserId;
+    }
+
+    OffsetDateTime getAcceptedAt() {
+        return acceptedAt;
+    }
+
+    Integer getPrepMinutes() {
+        return prepMinutes;
+    }
+
+    OffsetDateTime getReadyAt() {
+        return readyAt;
+    }
+
+    OffsetDateTime getPickedUpAt() {
+        return pickedUpAt;
+    }
+
+    CourierSearch getCourierSearch() {
+        return courierSearch;
+    }
+
+    String getCancelReason() {
+        return cancelReason;
     }
 
     Integer getRating() {

@@ -13,9 +13,12 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * My World setup surface (WhatsApp-style): phone verification + the phone-keyed
- * World profile (its own name/avatar). All Bearer-authed; the caller is the app
- * profile behind the JWT, and the World identity is attached to it.
+ * GojoMessages setup surface (WhatsApp-style): phone verification + the
+ * phone-keyed World profile (its own name/avatar). All Bearer-authed; the caller
+ * is the app profile behind the JWT, and the World identity is attached to it.
+ *
+ * <p>The {@code /v1/world/**} paths keep the old name deliberately — renaming a
+ * live URL costs a client release and buys nothing (ARCHITECTURE Phase 2f).
  */
 @RestController
 class WorldController {
@@ -55,5 +58,23 @@ class WorldController {
     @GetMapping("/v1/world/by-phone/{phone}")
     WorldUserDto byPhone(@AuthenticationPrincipal Jwt jwt, @PathVariable String phone) {
         return world.byPhone(current.require(jwt).id(), phone);
+    }
+
+    // ---- contact aliases (private per-viewer renames) ----------------------
+
+    /** Every rename the caller has made. Clients cache this and apply it at
+     *  render time, which is how a rename reaches surfaces the server broadcasts
+     *  to everyone at once (the socket payload, a stored reply snippet). */
+    @GetMapping("/v1/world/aliases")
+    java.util.List<ContactAliasDto> aliases(@AuthenticationPrincipal Jwt jwt) {
+        return world.listAliases(current.require(jwt).id());
+    }
+
+    /** Rename a contact for yourself only. A blank alias clears the rename. */
+    @PutMapping("/v1/world/aliases/{contactId}")
+    ContactAliasDto setAlias(@AuthenticationPrincipal Jwt jwt,
+                             @PathVariable java.util.UUID contactId,
+                             @Valid @RequestBody SetContactAliasRequest request) {
+        return world.setAlias(current.require(jwt).id(), contactId, request.alias());
     }
 }

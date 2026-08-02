@@ -27,11 +27,14 @@ class MessageNotificationListener {
 
     @EventListener
     void onMessage(MessageSent event) {
-        String title = event.senderName() != null ? event.senderName() : "New message";
         String body = event.preview() != null && !event.preview().isBlank()
             ? event.preview() : "Sent you a message";
         for (UUID recipient : event.recipientIds()) {
-            apns.notifyMessage(recipient, title, body, event.conversationId());
+            // Resolved per recipient: whoever privately renamed the sender sees
+            // the name they chose, not the one the sender set.
+            String title = event.titleFor(recipient);
+            apns.notifyMessage(recipient, title != null ? title : "New message",
+                body, event.conversationId());
         }
     }
 }

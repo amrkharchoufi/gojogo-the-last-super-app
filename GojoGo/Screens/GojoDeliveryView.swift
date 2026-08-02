@@ -1440,6 +1440,21 @@ private struct DeliveryTrackingView: View {
                 .glass(cornerRadius: 16)
             }
 
+            // The one thing the six order statuses cannot say (Phase 4 M1): the
+            // kitchen is cooking and nobody has taken the delivery. Silence here
+            // would leave somebody watching a countdown that has stopped meaning
+            // anything, and the honest thing to offer alongside it is the way out.
+            if app.deliveryCourierSearch == "FAILED" {
+                Text("No courier picked this one up. The restaurant knows — cancel "
+                     + "for a full refund if you'd rather not wait.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .glass(cornerRadius: 16, tint: GGColor.ink(0.10))
+            }
+
             if let r = app.deliveryOrderRestaurant {
                 HStack {
                     Text(r.name)
