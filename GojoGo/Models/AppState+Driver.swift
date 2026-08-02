@@ -24,6 +24,26 @@ extension AppState {
     /// window is a button that ends in a 409.
     var driverApplicationIsOpen: Bool { driverApplication?.canEdit ?? true }
 
+    /// Sent back to be fixed. Not a dead end and not a fresh start: the same
+    /// application, keeping its documents and its stake, reopened for editing.
+    var driverApplicationWasRejected: Bool { driverApplication?.status == "REJECTED" }
+
+    /// Approved once, switched off since.
+    var driverApplicationIsSuspended: Bool { driverApplication?.status == "SUSPENDED" }
+
+    /// The reviewer's own sentence about this application, when there is one.
+    ///
+    /// Only ever set on a rejection or a suspension — the server clears it on
+    /// resubmission and on approval, so it can't turn up as yesterday's verdict
+    /// beside an application currently in the queue. Blank notes are treated as
+    /// no note: a reviewer who pressed the button without typing has said
+    /// nothing, and an empty bubble is worse than the app's own wording.
+    var driverReviewNote: String? {
+        guard let note = driverApplication?.reviewNote?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty else { return nil }
+        return note
+    }
+
     var driverStake: PartnerStakeDTO? { driverApplication?.stake }
 
     /// What the server would refuse a submission with — rendered as the
@@ -95,10 +115,22 @@ extension AppState {
     /// is the one true thing there is to show and the only thing left to do
     /// about it (wait).
     ///
-    /// `REJECTED` deliberately does *not* land here: the server reopens that one
-    /// for editing, and the fix is a re-upload on the page they came for.
+    /// A rejection is the other direction and lands on the form: the server
+    /// reopens that one, the reviewer's note says what to fix, and the fix is a
+    /// re-upload. Rules they have already agreed to and a stake they have
+    /// already paid would stand between a returning applicant and the sentence
+    /// telling them what was wrong, so both are skipped — and the stake only
+    /// where the server says it is already held, because that page is the one
+    /// with something left to do if it isn't.
     private func resumePartnerStep(for application: DriverApplicationDTO) async {
-        guard !application.canEdit else { return }
+        if application.canEdit {
+            // A stake that isn't required counts as settled: that page has
+            // nothing left on it either.
+            let stakeSettled = application.stake.map { $0.isPaid || !$0.required } ?? false
+            guard application.status == "REJECTED", stakeSettled else { return }
+            withAnimation(.easeInOut(duration: 0.32)) { partnerStep = .kyc }
+            return
+        }
         // An approval that landed while the app was closed makes them a driver,
         // and the completion page reads that from the registry — so ask it
         // before showing the page rather than telling somebody they are still

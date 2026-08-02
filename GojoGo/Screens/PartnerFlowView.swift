@@ -491,6 +491,7 @@ private struct PartnerKYCPage: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
                     intro
+                    if app.driverApplicationWasRejected { rejectionNote }
                     identitySection
                     if role == .driver { driverSection }
                     if role == .courier { courierSection }
@@ -534,6 +535,40 @@ private struct PartnerKYCPage: View {
                 .foregroundStyle(GGColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// What the reviewer said, when they sent it back.
+    ///
+    /// A rejected application reopens with everything still on it, so the only
+    /// thing separating it from a resubmission is knowing what was wrong — and
+    /// the app used to know and not say. Their sentence, not a paraphrase of it:
+    /// "the back of your licence is out of focus" is a five-second fix, and
+    /// "we couldn't verify this" is a person giving up.
+    private var rejectionNote: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(GGColor.ink(0.08)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Sent back for a fix")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Text(app.driverReviewNote
+                     ?? "A reviewer couldn't accept this as it was. Check your photos are sharp and your details match your papers.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Nothing is lost — fix what's below and send it again. Your stake stays where it is.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .glass(cornerRadius: 18, tint: GGColor.ink(0.10))
     }
 
     // MARK: Identity — the vendor's half
@@ -1200,7 +1235,12 @@ private struct PartnerKYCPage: View {
                     if app.partnerSubmitting {
                         ProgressView().tint(GGColor.onAccent)
                     }
-                    Text(app.partnerSubmitting ? "Submitting…" : "Submit for review")
+                    // "Send it again" over a rejection, matching the note at the
+                    // top of the page: this is the same application going back
+                    // to the same queue, not a second one being started.
+                    Text(app.partnerSubmitting ? "Submitting…"
+                         : app.driverApplicationWasRejected ? "Send it again"
+                         : "Submit for review")
                 }
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(GGColor.onAccent)
@@ -1394,6 +1434,37 @@ private struct PartnerDonePage: View {
     /// registry existing, not this app deciding.
     private var approved: Bool { app.partnerRoles.contains(role) }
 
+    /// Approved once and switched off since. Kept apart from "in review" on
+    /// purpose: this page is now also where somebody lands when they re-open
+    /// the flow, and a suspended partner told "we're checking your application"
+    /// would be waiting for a verdict that has already been reached.
+    private var suspended: Bool { app.driverApplicationIsSuspended }
+
+    /// Whether there is a dashboard worth opening behind the button.
+    private var canWork: Bool { approved && !suspended }
+
+    private var headline: String {
+        if suspended { return "Your account is on hold" }
+        return canWork ? "You're on the road" : "Sent for review"
+    }
+
+    /// The reviewer's own sentence for a suspension, because a paused account
+    /// with no reason given is a support ticket. Submitting is not being
+    /// approved, and the middle case says so: a person reviews this — the same
+    /// queue a restaurant waits in — and telling somebody they are a driver
+    /// before anybody has read their application would be the app lying on its
+    /// own behalf.
+    private var explanation: String {
+        if suspended {
+            return app.driverReviewNote
+                ?? "Your \(role.title.lowercased()) account is paused while we look into something. Your stake stays yours."
+        }
+        if canWork {
+            return "You're a GojoGo \(role.title.lowercased()). Go online whenever you're ready."
+        }
+        return "A person checks every \(role.title.lowercased()) application, including your papers and your vehicle. We'll let you know as soon as it's decided — your stake stays yours either way."
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -1408,24 +1479,17 @@ private struct PartnerDonePage: View {
                         .fill(GGColor.white)
                         .frame(width: 88, height: 88)
                         .overlay(
-                            Image(systemName: "checkmark")
+                            Image(systemName: suspended ? "pause.fill" : "checkmark")
                                 .font(.system(size: 38, weight: .bold))
                                 .foregroundStyle(GGColor.onAccent))
                         .scaleEffect(appear ? 1 : 0.6)
                 }
 
                 VStack(spacing: 10) {
-                    // Submitting is not being approved, and the screen says so.
-                    // A person reviews this — the same queue a restaurant waits
-                    // in — and telling somebody they are a driver before anybody
-                    // has read their application would be the app lying on its
-                    // own behalf.
-                    Text(approved ? "You're on the road" : "Sent for review")
+                    Text(headline)
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(GGColor.textPrimary)
-                    Text(approved
-                         ? "You're a GojoGo \(role.title.lowercased()). Go online whenever you're ready."
-                         : "A person checks every \(role.title.lowercased()) application, including your papers and your vehicle. We'll let you know as soon as it's decided — your stake stays yours either way.")
+                    Text(explanation)
                         .explanatory(15)
                         .foregroundStyle(GGColor.textSecondary)
                         .multilineTextAlignment(.center)
@@ -1436,8 +1500,12 @@ private struct PartnerDonePage: View {
                 HStack(spacing: 10) {
                     doneBadge(icon: "checkmark.seal.fill", label: "ID verified")
                     doneBadge(icon: "lock.shield.fill", label: "Stake held")
-                    doneBadge(icon: approved ? role.icon : "clock.fill",
-                              label: approved ? role.title : "In review")
+                    if suspended {
+                        doneBadge(icon: "pause.circle.fill", label: "On hold")
+                    } else {
+                        doneBadge(icon: canWork ? role.icon : "clock.fill",
+                                  label: canWork ? role.title : "In review")
+                    }
                 }
             }
             .opacity(appear ? 1 : 0)
@@ -1445,9 +1513,9 @@ private struct PartnerDonePage: View {
 
             VStack(spacing: 10) {
                 Button {
-                    app.finishPartnerOnboarding(openDashboard: approved)
+                    app.finishPartnerOnboarding(openDashboard: canWork)
                 } label: {
-                    Text(approved ? "Go to \(role.title) mode" : "Done")
+                    Text(canWork ? "Go to \(role.title) mode" : "Done")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(GGColor.onAccent)
                         .frame(maxWidth: .infinity)
@@ -1456,7 +1524,7 @@ private struct PartnerDonePage: View {
                 }
                 .buttonStyle(PressableStyle())
 
-                if approved {
+                if canWork {
                     Button {
                         app.finishPartnerOnboarding(openDashboard: false)
                     } label: {
