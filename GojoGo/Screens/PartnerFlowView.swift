@@ -7,9 +7,15 @@ import PhotosUI
 /// flow, or the working dashboard once the user is onboarded for the role.
 struct PartnerHeaderButton: View {
     @EnvironmentObject var app: AppState
+    @Environment(\.colorScheme) private var scheme
     let role: PartnerRole
 
     private var isPartner: Bool { app.isPartner(role) }
+
+    /// The capsule turns frosted white in light mode (see `GlassCapsule`), so
+    /// its writing is black there — stated outright rather than inherited, so
+    /// the chip and the glass behind it can never disagree about the theme.
+    private var ink: Color { scheme == .light ? Color.black : GGColor.textPrimary }
 
     var body: some View {
         Button {
@@ -17,15 +23,15 @@ struct PartnerHeaderButton: View {
         } label: {
             HStack(spacing: 7) {
                 if isPartner && app.partnerOnline {
-                    Circle().fill(GGColor.white).frame(width: 7, height: 7)
+                    Circle().fill(ink).frame(width: 7, height: 7)
                 } else {
                     Image(systemName: role == .driver ? "steeringwheel" : "bag.fill")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
+                        .foregroundStyle(ink)
                 }
                 Text(label)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(GGColor.textPrimary)
+                    .foregroundStyle(ink)
             }
             .padding(.horizontal, 13)
             .frame(height: 36)
@@ -66,19 +72,25 @@ struct PartnerOnboardingView: View {
                         .padding(.bottom, 10)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                Group {
-                    switch app.partnerStep {
-                    case .rules: PartnerRulesPage(role: role)
-                    case .stake: PartnerStakePage(role: role)
-                    case .kyc:   PartnerKYCPage(role: role)
-                    case .done:  PartnerDonePage(role: role)
+                if app.partnerResolving {
+                    resolvingPage
+                        .transition(.opacity)
+                } else {
+                    Group {
+                        switch app.partnerStep {
+                        case .rules: PartnerRulesPage(role: role)
+                        case .stake: PartnerStakePage(role: role)
+                        case .kyc:   PartnerKYCPage(role: role)
+                        case .done:  PartnerDonePage(role: role)
+                        }
                     }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)))
                 }
-                .transition(.asymmetric(
-                    insertion: .move(edge: .trailing).combined(with: .opacity),
-                    removal: .move(edge: .leading).combined(with: .opacity)))
             }
             .animation(.easeInOut(duration: 0.32), value: app.partnerStep)
+            .animation(.easeInOut(duration: 0.22), value: app.partnerResolving)
             .animation(.ggOverlay, value: app.partnerNotice)
         }
     }
@@ -110,13 +122,32 @@ struct PartnerOnboardingView: View {
                 }
             }
 
-            if app.partnerStep != .done {
+            // Nothing to fill in yet, so nothing to be three steps along.
+            if app.partnerStep != .done && !app.partnerResolving {
                 stepBar
             }
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 6)
+    }
+
+    /// Held while the server says where this application stands. Deliberately
+    /// says nothing about rules or stakes: a returning applicant whose form is
+    /// closed for review never sees one, and this page is the only thing
+    /// between the tap and the truth.
+    private var resolvingPage: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(GGColor.textSecondary)
+            Text("Checking where you're up to…")
+                .font(.system(size: 14))
+                .foregroundStyle(GGColor.textTertiary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var stepBar: some View {

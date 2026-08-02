@@ -85,6 +85,13 @@ struct CommentsSheet: View {
             MentionSuggestionBar(autocomplete: autocomplete) { candidate in
                 app.draftComment = autocomplete.complete(app.draftComment, with: candidate)
             }
+            // Scoped to the bar rather than run as a `withAnimation` around the
+            // state change: a global transaction also caught the reply banner
+            // below, which is inserted in the same frame (tapping Reply seeds
+            // the draft with "@handle"). The banner's text then animated from
+            // the composer's old position — it appeared under the text field
+            // and slid up into place.
+            .animation(.easeOut(duration: 0.15), value: autocomplete.candidates.count)
 
             if let handle = app.replyingToHandle {
                 HStack(spacing: 8) {
@@ -104,6 +111,11 @@ struct CommentsSheet: View {
                 }
                 .padding(.horizontal, 16).padding(.vertical, 8)
                 .background(GGColor.ink(0.04))
+                // Belt and braces with the scoped animation above: whatever
+                // transaction is in flight when a reply begins — the keyboard
+                // rising, a suggestion bar collapsing — this row is a label for
+                // a state that is already true, so it is simply there.
+                .transaction { $0.animation = nil }
             }
 
             HStack(spacing: 10) {
@@ -131,9 +143,7 @@ struct CommentsSheet: View {
             .padding(.vertical, 12)
         }
         .onChange(of: app.draftComment) { _, text in
-            withAnimation(.easeOut(duration: 0.15)) {
-                autocomplete.update(for: text, connected: app.backendConnected)
-            }
+            autocomplete.update(for: text, connected: app.backendConnected)
         }
     }
 

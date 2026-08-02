@@ -9,6 +9,16 @@ struct GojoTravelView: View {
     )
     @State private var pulse = false
     @FocusState private var searchFocused: Bool
+    @Environment(\.colorScheme) private var scheme
+
+    /// The fade the header sits on. It exists to keep dark chrome legible over
+    /// whatever the map is showing — so in light mode, where the wordmark and
+    /// the Drive chip are near-black, it has to fade from white. A black band
+    /// under black text was the light-mode bug: the chip read as a dark pill
+    /// with dark writing on it.
+    private var headerScrim: Color {
+        scheme == .light ? Color.white : Color.black
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -27,7 +37,7 @@ struct GojoTravelView: View {
             // Top fade + brand chrome
             VStack(spacing: 0) {
                 LinearGradient(
-                    colors: [Color.black.opacity(0.72), Color.black.opacity(0)],
+                    colors: [headerScrim.opacity(0.72), headerScrim.opacity(0)],
                     startPoint: .top, endPoint: .bottom
                 )
                 .frame(height: 120)

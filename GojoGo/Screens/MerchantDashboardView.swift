@@ -317,11 +317,10 @@ struct MerchantDashboardBody: View {
                         .explanatory(11)
                         .foregroundStyle(GGColor.textTertiary)
                 } else if !wallet.payoutsReady {
-                    // Stripe's own words about what is still missing — only the
-                    // owner can act on them, so only they are shown them.
-                    Text(wallet.payoutsRequirement.isEmpty
-                         ? "Stripe is still reviewing your details."
-                         : "Stripe still needs: \(wallet.payoutsRequirement)")
+                    // What is still missing, in the owner's language rather than
+                    // Stripe's field keys — only the owner can act on it, so
+                    // only they are shown it.
+                    Text(wallet.payoutsNeedSentence)
                         .font(.system(size: 12))
                         .foregroundStyle(GGColor.textSecondary)
                     Button { app.startPayoutOnboarding() } label: {

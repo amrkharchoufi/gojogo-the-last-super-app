@@ -19,7 +19,7 @@ struct ProfileHomeTab: View {
             if isOwn { customizeBar }
 
             if blocks.isEmpty {
-                emptyState
+                if isOwn { ownerEmptyState } else { visitorEmptyState }
             } else {
                 ForEach(blocks) { block in
                     blockRow(block)
@@ -449,7 +449,10 @@ struct ProfileHomeTab: View {
         .buttonStyle(PressableStyle())
     }
 
-    private var emptyState: some View {
+    /// The pitch for the canvas, and the button that starts it. Only the owner
+    /// sees any of it: a visitor can't add a block, so an invitation to arrange
+    /// this space reads as somebody else's tooling left on screen.
+    private var ownerEmptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "square.on.square.dashed")
                 .font(.system(size: 34))
@@ -462,25 +465,33 @@ struct ProfileHomeTab: View {
                 .foregroundStyle(GGColor.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            if isOwn {
-                Button {
-                    if !app.profileHomeEditing { app.toggleProfileHomeEditing() }
-                    app.showHomeBlockPicker = true
-                } label: {
-                    Text("Add your first block")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(GGColor.onAccent)
-                        .padding(.horizontal, 22)
-                        .frame(height: 46)
-                        .background(Capsule().fill(GGColor.white))
-                }
-                .buttonStyle(PressableStyle())
-                .padding(.top, 4)
+            Button {
+                if !app.profileHomeEditing { app.toggleProfileHomeEditing() }
+                app.showHomeBlockPicker = true
+            } label: {
+                Text("Add your first block")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(GGColor.onAccent)
+                    .padding(.horizontal, 22)
+                    .frame(height: 46)
+                    .background(Capsule().fill(GGColor.white))
             }
+            .buttonStyle(PressableStyle())
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
         .padding(.horizontal, 20)
+    }
+
+    /// What somebody else's unfilled Home says. The same sentence the other
+    /// profile tabs use when they have nothing in them, in the same place.
+    private var visitorEmptyState: some View {
+        Text("Nothing here yet.")
+            .font(.system(size: 14))
+            .foregroundStyle(GGColor.textTertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 56)
     }
 }
 

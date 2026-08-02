@@ -20,6 +20,10 @@ import SwiftUI
 /// The chip in the GojoDelivery header, shown only to a restaurant's owner.
 struct MerchantHeaderButton: View {
     @EnvironmentObject var app: AppState
+    @Environment(\.colorScheme) private var scheme
+
+    /// Matches the partner chip it sits beside — black on the light-mode glass.
+    private var ink: Color { scheme == .light ? Color.black : GGColor.textPrimary }
 
     var body: some View {
         if app.showsMerchantEntry {
@@ -28,15 +32,15 @@ struct MerchantHeaderButton: View {
             } label: {
                 HStack(spacing: 7) {
                     if app.isMerchantPartner, app.merchantStorefront?.isOpen == true {
-                        Circle().fill(GGColor.white).frame(width: 7, height: 7)
+                        Circle().fill(ink).frame(width: 7, height: 7)
                     } else {
                         Image(systemName: app.merchantChipIcon)
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(GGColor.textPrimary)
+                            .foregroundStyle(ink)
                     }
                     Text(app.merchantChipLabel)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
+                        .foregroundStyle(ink)
                 }
                 .padding(.horizontal, 13)
                 .frame(height: 36)

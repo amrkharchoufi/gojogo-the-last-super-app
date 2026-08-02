@@ -505,6 +505,12 @@ final class AppState: ObservableObject {
     /// Non-nil while the become-a-partner flow is presented.
     @Published var partnerOnboardingRole: PartnerRole? = nil
     @Published var partnerStep: PartnerOnboardingStep = .rules
+    /// True from the moment the cover opens until the server has said where
+    /// this application already stands. The step it resolves to is only known
+    /// after that round-trip, so the pages wait behind it rather than opening on
+    /// the rules and then jumping — an applicant already in the queue was shown
+    /// a form to fill in for as long as the network took to say otherwise.
+    @Published var partnerResolving: Bool = false
     @Published var partnerApplication = PartnerApplication(role: .driver)
     @Published var partnerAgreedToTerms: Bool = false
     @Published var partnerStakeProcessing: Bool = false
@@ -2892,6 +2898,17 @@ final class AppState: ObservableObject {
 
     func openUserProfile(handle: String, name: String? = nil,
                          avatarURL: String? = nil, avatarGradient: [Color]? = nil) {
+        // A profile is a page hosted under the root, and everything a profile
+        // gets opened *from* sits above it — so a tapped author or a tapped
+        // @tag pushed the profile in behind the still-open comments drawer, or
+        // behind the long-form player it was embedded in. Nothing had gone
+        // wrong, but the tap looked like it had half-worked. Whatever is
+        // covering the destination is a place the user has now left.
+        if showWatching {
+            closeWatching()          // takes the embedded comments drawer with it
+        } else if commentingPostID != nil {
+            closeComments()
+        }
         let cleaned = handle.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
         if cleaned.lowercased() == user.handle.lowercased() {
             openOwnProfile()
@@ -3305,13 +3322,17 @@ final class AppState: ObservableObject {
         partnerAgreedToTerms = false
         partnerStakeProcessing = false
         partnerStep = .rules
+        partnerResolving = backendConnected
         withAnimation(.easeInOut(duration: 0.28)) { partnerOnboardingRole = role }
         // All fetched here rather than on connect: only this flow needs any of
         // it, and by the time the rules page has been read the answers are
         // waiting. The application has to exist before the stake page can name
-        // an amount, so it is opened (or created) first.
+        // an amount, so it is opened (or created) first — and it is also what
+        // decides which page opens at all, which is why the cover holds until
+        // it answers.
         Task {
             await loadDriverApplication(role)
+            withAnimation(.easeInOut(duration: 0.22)) { partnerResolving = false }
             await refreshWallet()
             await refreshIdentity()
         }
@@ -3319,6 +3340,7 @@ final class AppState: ObservableObject {
 
     func cancelPartnerOnboarding() {
         partnerStakeProcessing = false
+        partnerResolving = false
         withAnimation(.easeInOut(duration: 0.28)) { partnerOnboardingRole = nil }
     }
 
