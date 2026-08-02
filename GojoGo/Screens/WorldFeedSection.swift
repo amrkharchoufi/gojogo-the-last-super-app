@@ -18,14 +18,35 @@ struct WorldFeedSection: View {
                 storiesRow
             }
             if !app.worldFeedPosts.isEmpty {
-                ForEach(app.worldFeedPosts) { post in
-                    WorldPostCard(post: post)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 14)
-                }
+                postsRow
                 sectionDivider("Messages")
             }
         }
+    }
+
+    // MARK: Posts
+
+    /// Posts swipe sideways rather than stacking, so the feed costs one screen
+    /// of height however many there are and the messages list stays in reach.
+    ///
+    /// Cards are sized against the scroll view rather than a fixed width so they
+    /// keep the same inset on every device, and snap one at a time.
+    private var postsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(app.worldFeedPosts) { post in
+                    WorldPostCard(post: post, pagedHorizontally: true)
+                        .containerRelativeFrame(.horizontal)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        // The inset lives on the scroll view, not inside it: that way a card is
+        // measured against the *visible* width, so it lands on the same margin
+        // it started from when the swipe settles.
+        .safeAreaPadding(.horizontal, 16)
+        .scrollTargetBehavior(.viewAligned)
+        .padding(.bottom, 14)
     }
 
     // MARK: Stories
@@ -173,6 +194,10 @@ struct WorldFeedSection: View {
 struct WorldPostCard: View {
     @EnvironmentObject var app: AppState
     let post: WorldPost
+    /// Set when the card itself sits in a horizontally swiping row. A second
+    /// scroll view on the same axis would eat the swipe that pages the posts,
+    /// so a multi-image post tiles rather than scrolls.
+    var pagedHorizontally = false
 
     private var isMine: Bool { post.authorID == SocialStore.shared.myProfileId }
 
@@ -205,7 +230,7 @@ struct WorldPostCard: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(IMColor.label)
                 HStack(spacing: 5) {
-                    Text(post.createdAt, style: .relative)
+                    WorldPostAge(date: post.createdAt)
                         .font(.system(size: 12))
                         .foregroundStyle(IMColor.secondary)
                     // Shown only on your own posts — a reader is never told
@@ -244,6 +269,17 @@ struct WorldPostCard: View {
                 .frame(height: 240)
                 .frame(maxWidth: .infinity)
                 .clipped()
+        } else if pagedHorizontally {
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 8),
+                          GridItem(.flexible(), spacing: 8)],
+                spacing: 8) {
+                ForEach(post.imageURLs, id: \.self) { url in
+                    MediaImage(url: url, cornerRadius: 14)
+                        .frame(height: 116)
+                        .clipped()
+                }
+            }
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -254,6 +290,47 @@ struct WorldPostCard: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Post age
+
+/// How long ago a post went up, counting up while it's on screen.
+///
+/// Seconds are only worth reading while a post is brand new. SwiftUI's
+/// `.relative` style always spells out two units — "6 min, 8 secs" — so past a
+/// minute the label drops to a single one, and the tick slows to match: a card
+/// that reads "6 min" has nothing to say for another 60 seconds.
+struct WorldPostAge: View {
+    let date: Date
+
+    var body: some View {
+        let fresh = Date().timeIntervalSince(date) < 60
+        // Anchored to the post rather than to now, so the label turns over on
+        // the boundary itself instead of somewhere in the middle of the minute.
+        TimelineView(.periodic(from: date, by: fresh ? 1 : 60)) { context in
+            Text(Self.label(for: date, now: context.date))
+        }
+    }
+
+    /// Abbreviated units past the first minute — "min", "hr" and "wk" read the
+    /// same singular or plural, so only "sec" and "day" take an s.
+    static func label(for date: Date, now: Date) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        switch seconds {
+        case ..<60:
+            let n = max(1, Int(seconds))
+            return "\(n) sec\(n == 1 ? "" : "s")"
+        case ..<3600:
+            return "\(Int(seconds / 60)) min"
+        case ..<86_400:
+            return "\(Int(seconds / 3600)) hr"
+        case ..<604_800:
+            let n = Int(seconds / 86_400)
+            return "\(n) day\(n == 1 ? "" : "s")"
+        default:
+            return "\(Int(seconds / 604_800)) wk"
         }
     }
 }
