@@ -54,9 +54,12 @@ enum PartnerKind {
      * kinds drop out and what remains is what a vendor cannot answer: whether
      * this business is licensed to trade.
      *
-     * <p>A {@code DRIVER} or {@code COURIER} is therefore left needing no
-     * uploads at all, which is correct — their entire check is the vendor's.
-     * Vehicle papers arrive with Phase 3 (SPECS §4) and are a different claim.
+     * <p>A {@code COURIER} is therefore left needing no uploads at all, which is
+     * correct — their entire identity check is the vendor's. A {@code DRIVER}
+     * still owes a driving licence, added per-application rather than here
+     * because whether one is needed depends on the vehicle rather than the kind
+     * (see {@code PartnerService.requiredDocuments}). Vehicle papers arrive with
+     * Phase 3 (SPECS §4) and are a different claim again.
      */
     Set<DocumentKind> requiredDocuments(boolean identityVerifiedByVendor) {
         Set<DocumentKind> required = EnumSet.copyOf(requiredDocuments());
@@ -97,7 +100,19 @@ enum DocumentKind {
     BUSINESS_LICENSE,
     TAX_CERTIFICATE,
     FOOD_PERMIT,
-    BANK_DETAILS;
+    BANK_DETAILS,
+    /**
+     * A driving licence — the entitlement to drive, which is a different claim
+     * from who somebody is.
+     *
+     * <p>Deliberately not {@link #isIdentity()}: an IDV vendor matches a face to
+     * an ID document and says nothing whatever about whether that person may
+     * drive a car, so this one survives the vendor filter and a driver uploads
+     * it however identity is being proved. Required only when the vehicle needs
+     * one — see {@code PartnerService.requiredDocuments} — because a trottinette
+     * doesn't.
+     */
+    DRIVER_LICENSE;
 
     /**
      * Whether this paper proves <em>a person</em> rather than a business.

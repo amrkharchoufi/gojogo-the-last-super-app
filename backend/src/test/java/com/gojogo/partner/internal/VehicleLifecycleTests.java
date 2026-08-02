@@ -231,6 +231,48 @@ class VehicleLifecycleTests {
         assertThat(service.whatBlocksSubmission(account)).isEmpty();
     }
 
+    // MARK: Trottinettes, which have no paperwork to have
+
+    @Test
+    @DisplayName("a trottinette needs no plate, no carte grise and no insurance — "
+        + "demanding them is a submission nobody riding one can finish")
+    void trottinettesCarryNoPapers() {
+        Vehicle trottinette = activeTrottinette();
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.of(trottinette));
+        when(documents.findByVehicleIdOrderByKindAsc(trottinette.getId())).thenReturn(List.of());
+
+        assertThat(service.whatBlocksSubmission(account)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("nor a driving licence, which is why the requirement asks the "
+        + "vehicle rather than the kind")
+    void trottinettesNeedNoLicence() {
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT))
+            .thenReturn(Optional.of(activeTrottinette()));
+
+        assertThat(service.isDriverLicenseRequired(account)).isFalse();
+    }
+
+    @Test
+    @DisplayName("a car does, and so does an application with no vehicle on file "
+        + "yet — the common case, and the safe way to be wrong")
+    void carsAndUnknownsNeedALicence() {
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.of(activeCar()));
+        assertThat(service.isDriverLicenseRequired(account)).isTrue();
+
+        when(vehicles.findByAccountIdAndActiveTrue(ACCOUNT)).thenReturn(Optional.empty());
+        assertThat(service.isDriverLicenseRequired(account)).isTrue();
+    }
+
+    @Test
+    @DisplayName("a courier needs no driving licence from us — they may be walking")
+    void couriersNeedNoLicence() {
+        PartnerAccount courier = new PartnerAccount(OWNER, PartnerKind.COURIER, "Amina delivers");
+
+        assertThat(service.isDriverLicenseRequired(courier)).isFalse();
+    }
+
     // MARK: What dispatch is told
 
     @Test
@@ -269,6 +311,15 @@ class VehicleLifecycleTests {
 
     private Vehicle activeCar() {
         Vehicle vehicle = approvedCar();
+        vehicle.setActive(true);
+        return vehicle;
+    }
+
+    /** BIKE under a driver account is the app's "trottinette" — no plate, no
+     *  papers, and nothing to expire. */
+    private Vehicle activeTrottinette() {
+        Vehicle vehicle = new Vehicle(ACCOUNT, OWNER, VehicleCategory.BIKE.name());
+        setField(vehicle, "id", UUID.randomUUID());
         vehicle.setActive(true);
         return vehicle;
     }

@@ -687,9 +687,15 @@ private struct PartnerKYCPage: View {
             formCard(title: "Driver's licence", icon: "creditcard.fill") {
                 fieldRow(title: "Licence number", placeholder: "Licence number",
                          text: $app.partnerApplication.licenseNumber, autocaps: .characters)
-                captureTile(title: "Licence photo", subtitle: "Both sides",
-                            icon: "creditcard.fill",
-                            captured: $app.partnerApplication.licenseCaptured)
+                // Hangs off the application rather than off the car: the licence
+                // is the driver's, and it outlives the Yaris.
+                // "Both sides" is gone with the placeholder that promised it:
+                // one upload is one image, and telling somebody to photograph
+                // two would be asking for something this can't keep.
+                uploadTile(kind: PartnerDocumentKind.driverLicense,
+                           title: "Licence photo", subtitle: "The front, clearly readable",
+                           icon: "creditcard.fill",
+                           uploaded: app.driverLicenseUploaded)
             }
             formCard(title: "Your vehicle", icon: "car.fill") {
                 HStack(spacing: 10) {
@@ -721,10 +727,12 @@ private struct PartnerKYCPage: View {
                 // place an ID card goes, and never a public URL. A driver has to
                 // have saved the vehicle first, because a document belongs to a
                 // car rather than to an application.
-                documentTile(kind: "REGISTRATION", title: "Vehicle registration",
+                documentTile(kind: VehicleDocumentKind.registration,
+                             title: "Vehicle registration",
                              subtitle: "Carte grise — matching the plate above",
                              icon: "doc.text.fill")
-                documentTile(kind: "INSURANCE", title: "Insurance certificate",
+                documentTile(kind: VehicleDocumentKind.insurance,
+                             title: "Insurance certificate",
                              subtitle: "Current, and expiring after today",
                              icon: "shield.lefthalf.filled")
             }
@@ -821,21 +829,27 @@ private struct PartnerKYCPage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// A vehicle paper, uploaded for real.
-    ///
-    /// The tile it replaces toggled a Bool and checked nothing — the same
-    /// pattern the identity half lost when Sumsub arrived, for the same reason:
-    /// a checkbox that claims a photo was taken is worse than no photo, because
-    /// it looks like evidence.
-    ///
-    /// It saves the vehicle first when there isn't one yet. A document belongs
-    /// to a car, and asking somebody to press "add vehicle" before they can
-    /// attach its registration is a step whose only product is confusion.
-    @ViewBuilder
+    /// A vehicle paper — a claim about the car, so whether it has arrived is
+    /// read off the car.
     private func documentTile(kind: String, title: String, subtitle: String,
                               icon: String) -> some View {
-        let uploaded = !(app.driverApplication?.activeVehicle?
-            .missingDocuments?.contains(kind) ?? true)
+        uploadTile(kind: kind, title: title, subtitle: subtitle, icon: icon,
+                   uploaded: !(app.driverApplication?.activeVehicle?
+                       .missingDocuments?.contains(kind) ?? true))
+    }
+
+    /// One upload, whatever it hangs off — a car's papers or the driver's own
+    /// licence.
+    ///
+    /// The tiles this replaces toggled a Bool and checked nothing — the same
+    /// pattern the identity half lost when Sumsub arrived, for the same reason:
+    /// a checkbox that claims a photo was taken is worse than no photo, because
+    /// it looks like evidence. So `uploaded` is always somebody else's answer —
+    /// the server's `missingDocuments` — and never a flag this screen sets on
+    /// itself the moment it is tapped.
+    @ViewBuilder
+    private func uploadTile(kind: String, title: String, subtitle: String,
+                            icon: String, uploaded: Bool) -> some View {
         PhotosPicker(selection: binding(for: kind), matching: .images) {
             HStack(spacing: 12) {
                 Image(systemName: uploaded ? "checkmark.circle.fill" : icon)
@@ -884,66 +898,52 @@ private struct PartnerKYCPage: View {
         guard let data = try? await item.loadTransferable(type: Data.self) else { return }
         uploadingDocument = kind
         defer { uploadingDocument = nil }
-        // The vehicle has to exist before its papers can hang off it.
+        guard kind != PartnerDocumentKind.driverLicense else {
+            // The licence belongs to the applicant, so it needs no vehicle —
+            // and asking for one first would be a car standing between somebody
+            // and photographing their own licence.
+            await app.uploadDriverLicense(image: data)
+            return
+        }
+        // A car's papers do: the vehicle has to exist before they can hang off it.
         if app.driverApplication?.activeVehicle == nil,
            !(await app.saveDriverVehicle()) { return }
         await app.uploadVehicleDocument(kind: kind, image: data)
     }
 
-    private func captureTile(title: String, subtitle: String, icon: String,
-                             captured: Binding<Bool>) -> some View {
-        Button {
-            UIImpactFeedbackGenerator(style: captured.wrappedValue ? .light : .medium).impactOccurred()
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                captured.wrappedValue.toggle()
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: captured.wrappedValue ? "checkmark" : icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(captured.wrappedValue ? GGColor.onAccent : GGColor.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(captured.wrappedValue ? GGColor.white : GGColor.ink(0.08)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
-                    Text(captured.wrappedValue ? "Captured" : subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(captured.wrappedValue ? GGColor.textSecondary : GGColor.textTertiary)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: captured.wrappedValue ? "arrow.counterclockwise" : "camera.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(GGColor.textTertiary)
-            }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(GGColor.ink(0.05)))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(captured.wrappedValue ? GGColor.ink(0.2) : GGColor.ink(0.08),
-                                  lineWidth: captured.wrappedValue ? 1 : 0.5))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     private var submitButton: some View {
-        Button {
-            app.submitDriverApplication()
-        } label: {
-            Text("Submit for review")
+        VStack(spacing: 8) {
+            // A greyed-out button that won't say why is the thing people report
+            // as broken, so the server's own sentence goes underneath it.
+            if let hint = app.partnerSubmitHint, !app.partnerKYCComplete {
+                Text(hint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
+                    .transition(.opacity)
+            }
+            Button {
+                app.submitDriverApplication()
+            } label: {
+                HStack(spacing: 8) {
+                    if app.partnerSubmitting {
+                        ProgressView().tint(GGColor.onAccent)
+                    }
+                    Text(app.partnerSubmitting ? "Submitting…" : "Submit for review")
+                }
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(GGColor.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
                 .background(Capsule().fill(GGColor.white))
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(!app.partnerKYCComplete || app.partnerSubmitting)
+            .opacity(app.partnerKYCComplete && !app.partnerSubmitting ? 1 : 0.4)
         }
-        .buttonStyle(PressableStyle())
-        .disabled(!app.partnerKYCComplete || app.partnerSubmitting)
-        .opacity(app.partnerKYCComplete && !app.partnerSubmitting ? 1 : 0.4)
+        .animation(.easeInOut(duration: 0.2), value: app.partnerSubmitHint)
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 12)

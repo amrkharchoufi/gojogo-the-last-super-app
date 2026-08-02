@@ -195,6 +195,11 @@ struct DriverApplicationDTO: Decodable, Equatable {
     let stake: PartnerStakeDTO?
     let vehicles: [PartnerVehicleDTO]?
     let vehicleRequired: Bool?
+    /// The papers this application still owes — a driving licence, for a driver
+    /// of anything that needs one. Computed by the server, because which kinds
+    /// are required depends on the vehicle and on whether an IDV vendor is
+    /// answering the identity half, and neither is the app's rule to re-implement.
+    let missingDocuments: [String]?
     /// The one sentence the server would refuse a submission with, answered in
     /// advance — so the app renders a checklist rather than discovering the
     /// rules one 400 at a time.
@@ -206,6 +211,10 @@ struct DriverApplicationDTO: Decodable, Equatable {
     var submittedAtDate: Date? { submittedAt.flatMap { BackendDate.parse($0) } }
 
     var activeVehicle: PartnerVehicleDTO? { (vehicles ?? []).first(where: \.active) }
+
+    func needsDocument(_ kind: String) -> Bool {
+        (missingDocuments ?? []).contains(kind)
+    }
 }
 
 struct MyDriverApplicationDTO: Decodable {

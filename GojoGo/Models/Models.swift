@@ -1526,13 +1526,11 @@ struct PartnerApplication: Equatable {
     // Driver — vehicle type + (for car/motorcycle) papers
     var driverVehicle: DriverVehicle = .car
     var licenseNumber: String = ""
-    var licenseCaptured: Bool = false
     var vehicleMake: String = ""
     var vehicleModel: String = ""
     var vehicleYear: String = ""
     var vehicleColor: String = ""
     var plate: String = ""
-    var registrationCaptured: Bool = false   // "carte grise" — vehicle registration
     /// Plates are unique per region, never globally — the same string is a
     /// different car in another country.
     var vehicleRegion: String = ""
@@ -1540,25 +1538,33 @@ struct PartnerApplication: Equatable {
     /// whose earlier date has passed (plus a grace period).
     var registrationExpiresOn: String = ""
     var insuranceExpiresOn: String = ""
-    var insuranceCaptured: Bool = false
 
     // Courier — vehicle type
     var vehicleType: CourierVehicle = .motorbike
 
-    /// Whether the vehicle half is filled in. The identity half is the vendor's
-    /// answer, not a field on this struct — `AppState.partnerKYCComplete`
-    /// combines the two.
+    /// Whether the fields somebody *types* on this form are filled in.
+    ///
+    /// Documents are deliberately not part of this. They used to be — three
+    /// `…Captured` booleans that a tile toggled and nothing ever set once the
+    /// tiles became real uploads, which left this property permanently false and
+    /// the Submit button permanently grey however carefully the form was filled
+    /// in. Whether a paper exists is the server's answer now (`missingDocuments`
+    /// on the application and on the vehicle), and `AppState.partnerKYCComplete`
+    /// is where the two halves meet.
     var vehicleDetailsComplete: Bool {
         switch role {
         case .driver:
             // Trottinettes are identity-only — no licence or vehicle papers.
             guard driverVehicle.requiresLicense else { return true }
             return !licenseNumber.trimmingCharacters(in: .whitespaces).isEmpty
-                && licenseCaptured
                 && !vehicleMake.trimmingCharacters(in: .whitespaces).isEmpty
                 && !vehicleModel.trimmingCharacters(in: .whitespaces).isEmpty
                 && !plate.trimmingCharacters(in: .whitespaces).isEmpty
-                && registrationCaptured
+                // The server refuses a vehicle whose papers have no end date —
+                // it can't tell a current registration from a lapsed one — so
+                // the two date fields are as required as the plate is.
+                && !registrationExpiresOn.trimmingCharacters(in: .whitespaces).isEmpty
+                && !insuranceExpiresOn.trimmingCharacters(in: .whitespaces).isEmpty
         case .courier:
             return true
         }

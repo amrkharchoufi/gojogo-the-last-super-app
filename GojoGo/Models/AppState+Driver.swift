@@ -34,6 +34,12 @@ extension AppState {
         do {
             if let existing = try await DispatchStore.shared.application(kind: role.partnerKind) {
                 driverApplication = existing
+                // Somebody coming back to an application they started should
+                // find their car where they left it. The form is local state
+                // that `startPartnerOnboarding` blanks on every entry, so
+                // without this a returning driver sees an empty vehicle card
+                // over a vehicle the server already has — and re-types it.
+                hydrateVehicleForm(from: existing)
                 return
             }
             // A name and a phone are all `partner` needs to open one. The
@@ -69,6 +75,25 @@ extension AppState {
             print("Driver application refresh failed: \(error)")
             #endif
         }
+    }
+
+    /// Fills the local vehicle form in from the one the server is holding.
+    ///
+    /// Only ever called when the flow opens — a refresh mid-typing must not
+    /// reach in and rewrite the field somebody is halfway through.
+    private func hydrateVehicleForm(from application: DriverApplicationDTO) {
+        guard let vehicle = application.activeVehicle else { return }
+        partnerApplication.driverVehicle =
+            DriverVehicle.allCases.first { $0.dispatchCategory == vehicle.category }
+            ?? partnerApplication.driverVehicle
+        partnerApplication.vehicleMake = vehicle.make
+        partnerApplication.vehicleModel = vehicle.model
+        partnerApplication.vehicleYear = vehicle.year.map { String($0) } ?? ""
+        partnerApplication.vehicleColor = vehicle.color
+        partnerApplication.plate = vehicle.plate
+        partnerApplication.vehicleRegion = vehicle.region
+        partnerApplication.registrationExpiresOn = vehicle.registrationExpiresOn ?? ""
+        partnerApplication.insuranceExpiresOn = vehicle.insuranceExpiresOn ?? ""
     }
 
     // MARK: The stake
@@ -168,6 +193,36 @@ extension AppState {
             showPartnerNotice(Self.message(from: error, fallback: "Couldn't save your vehicle."))
             return false
         }
+    }
+
+    /// The driving licence, uploaded against the *application* rather than
+    /// against a car — it is a fact about the person holding it, and it stays
+    /// theirs when they sell the Yaris.
+    ///
+    /// This tile spent a milestone as a boolean somebody tapped: it turned
+    /// "Captured" on the first press, uploaded nothing, and put a tick where a
+    /// reviewer expected a licence. The vehicle papers stopped doing that when
+    /// `documentTile` arrived; this is the same correction for the same reason.
+    func uploadDriverLicense(image: Data) async {
+        guard let application = driverApplication else {
+            showPartnerNotice("Your application isn't open yet.")
+            return
+        }
+        do {
+            driverApplication = try await DispatchStore.shared.uploadApplicationDocument(
+                application.id, kind: PartnerDocumentKind.driverLicense, data: image,
+                contentType: APIClient.imageContentType(for: image))
+        } catch {
+            showPartnerNotice(Self.message(from: error, fallback: "That upload didn't stick."))
+        }
+    }
+
+    /// Whether the licence is on file — asked of the server, which is the only
+    /// thing that knows, and which also decides whether one is needed at all
+    /// (a trottinette needs none).
+    var driverLicenseUploaded: Bool {
+        guard let application = driverApplication else { return false }
+        return !application.needsDocument(PartnerDocumentKind.driverLicense)
     }
 
     /// Uploads a registration or insurance certificate against the active

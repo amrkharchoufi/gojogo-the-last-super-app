@@ -73,6 +73,23 @@ final class DispatchStore {
         try await APIClient.shared.post("/v1/partner/applications/\(applicationID)/withdraw")
     }
 
+    /// Uploads a paper that belongs to the *applicant* rather than to a car —
+    /// their driving licence. Same private prefix and the same two-step presign
+    /// as a vehicle document; a different owner, which is why it hangs off the
+    /// application and survives selling the car.
+    func uploadApplicationDocument(_ applicationID: UUID, kind: String, data: Data,
+                                   contentType: String) async throws -> DriverApplicationDTO {
+        let presign: DocumentUploadDTO = try await APIClient.shared.post(
+            "/v1/partner/applications/\(applicationID)/documents/presign",
+            body: DocumentPresignBody(kind: kind, contentType: contentType))
+        try await APIClient.shared.upload(to: presign.uploadUrl, data: data,
+                                          contentType: presign.contentType)
+        return try await APIClient.shared.put(
+            "/v1/partner/applications/\(applicationID)/documents",
+            body: AttachDocumentBody(kind: kind, objectKey: presign.objectKey,
+                                     contentType: presign.contentType))
+    }
+
     // MARK: Onboarding — the vehicle
 
     func addVehicle(_ applicationID: UUID,
@@ -114,6 +131,20 @@ final class DispatchStore {
 }
 
 // MARK: - Private-upload wire types
+
+/// The wire names for the papers this app uploads. Strings rather than enums
+/// because the server owns both lists — a build that doesn't know a kind should
+/// ignore it, not fail to decode an application because of it.
+enum PartnerDocumentKind {
+    /// Hangs off the application rather than off a vehicle: a licence belongs
+    /// to the person holding it, and stays theirs when the car is sold.
+    static let driverLicense = "DRIVER_LICENSE"
+}
+
+enum VehicleDocumentKind {
+    static let registration = "REGISTRATION"
+    static let insurance = "INSURANCE"
+}
 
 struct DocumentPresignBody: Encodable {
     let kind: String
