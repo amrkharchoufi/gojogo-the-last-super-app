@@ -46,6 +46,12 @@ class WorldGraphService {
                 "That's your own number");
         }
         repo.addContact(ownerId, contactId, phone);
+        // Adding somebody joins their audience, and an audience you joined a
+        // minute ago should not start empty. Content is fanned out on write, so
+        // without this the add delivers only what they publish *next* — they
+        // read as somebody who has never posted, indefinitely, while whoever
+        // added *you* first has been seeing your posts all along.
+        repo.deliverBacklog(ownerId, contactId);
         if (alias != null && !alias.isBlank()) {
             repo.putAlias(ownerId, contactId, alias.trim());
         }
@@ -60,6 +66,10 @@ class WorldGraphService {
 
     void removeContact(UUID ownerId, UUID contactId) {
         repo.removeContact(ownerId, contactId);
+        // What the add handed over goes back with it: keeping their posts in a
+        // feed built out of a number you no longer have would leave the graph
+        // and the feed disagreeing about who is in the audience.
+        repo.withdrawBacklog(ownerId, contactId);
         // The rename goes with the contact: keeping it would resurrect a private
         // name for somebody you deliberately dropped.
         repo.deleteAlias(ownerId, contactId);
@@ -172,17 +182,36 @@ class WorldGraphService {
      * Somebody else's identity as a viewer sees it. The rich half is returned
      * only to an actual contact — knowing a number is how you reach someone, not
      * a licence to read where they went to school.
+     *
+     * <p>The number itself goes further, to anyone <em>they</em> reached first
+     * (see {@link #reachedMeFirst}), and that is what makes adding somebody back
+     * possible at all. A number is the only way into this graph, so somebody who
+     * has yours and is messaging you is somebody you cannot add — the one person
+     * it is most obviously right to add. Handing their number over is also even:
+     * they already have yours, which is how they got here.
      */
     WorldContactProfileDto contactProfile(UUID viewerId, UUID contactId) {
         WorldProfile p = repo.getWorldProfile(contactId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
         boolean contact = repo.isContact(viewerId, contactId);
+        boolean mayHaveTheNumber = contact || reachedMeFirst(viewerId, contactId);
         return new WorldContactProfileDto(
             contactId, p.displayName(), p.avatarUrl(),
-            contact ? p.phone() : null,
+            mayHaveTheNumber ? p.phone() : null,
             repo.getAlias(viewerId, contactId).orElse(null),
             contact,
             contact ? myProfile(contactId) : null);
+    }
+
+    /**
+     * Whether they came to you — they have you as a contact, or they have a
+     * thread with you. Either one means they had your number, since a number is
+     * the only way to reach anybody here. Nothing else counts: a group thread
+     * would make everyone in a room a source of everyone else's number.
+     */
+    private boolean reachedMeFirst(UUID viewerId, UUID contactId) {
+        return repo.isContact(contactId, viewerId)
+            || repo.findDirectConversation(viewerId, contactId).isPresent();
     }
 
     private static List<String> orEmpty(List<String> in) {

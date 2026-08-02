@@ -248,11 +248,12 @@ enum SampleData {
         }
     }
 
-    // MARK: My World
-
-    static let worldContacts: [WorldContact] = []
-    static let worldCircles: [WorldCircle] = []
-    static let worldConversations: [WorldConversation] = []
+    // MARK: GojoMessages
+    //
+    // Nothing. The demo roster, circles and threads were emptied when the real
+    // graph landed and the placeholders went with them on 2026-08-02 —
+    // GojoMessages is server-backed end to end, and an empty list here is a
+    // statement about your account rather than a fixture nobody replaced.
 
     // MARK: Delivery
 

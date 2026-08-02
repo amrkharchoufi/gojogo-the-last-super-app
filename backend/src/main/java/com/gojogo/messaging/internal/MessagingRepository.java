@@ -894,6 +894,73 @@ class MessagingRepository {
         return Optional.empty();
     }
 
+    /**
+     * How much history a new contact is handed. Bounds the write burst on an
+     * add, and is well past what anybody scrolls back to on a first look.
+     */
+    private static final int BACKLOG = 100;
+
+    /**
+     * Hands somebody the content an author had <em>already</em> published to
+     * their contacts, at the moment they become one.
+     *
+     * <p>Fan-out happens on write, so adding a contact on its own only ever
+     * delivers their <em>next</em> post. Without this, the person you just added
+     * reads as somebody who has never posted anything and stays that way until
+     * they post again — while their side, who added you earlier, sees everything
+     * you have written since. That asymmetry is what an add looked like from the
+     * outside, and it is not the graph being one-directional (it is, by design):
+     * it is history never being delivered at all.
+     *
+     * <p>The new viewer is recorded on the author's copy as each one goes out,
+     * because that stored list is what a delete walks — a copy handed out here
+     * and not recorded there would outlive the post it came from.
+     *
+     * <p>Circle posts are deliberately left behind. A circle is an audience the
+     * author picked by hand, and being added to somebody's contacts is not being
+     * picked.
+     */
+    void deliverBacklog(UUID viewerId, UUID authorId) {
+        for (String kind : List.of("post", "story")) {
+            for (StoredContent c : readContentPage("WORLDPOST#" + authorId, contentPrefix(kind), BACKLOG)) {
+                if (!WorldAudience.CONTACTS.name().equals(c.audience())) continue;
+                if (c.viewers().contains(viewerId)) continue;
+                db().putItem(r -> r.tableName(table).item(
+                    contentItem("WORLDFEED#" + viewerId, contentSk(c), c, false)));
+                List<UUID> viewers = new ArrayList<>(c.viewers());
+                viewers.add(viewerId);
+                recordViewers(c, viewers);
+            }
+        }
+    }
+
+    /**
+     * The inverse: takes back what {@link #deliverBacklog} handed out, when the
+     * contact is dropped. Only the contacts-audience copies — a post the author
+     * sent a named circle was addressed to this person by hand, and dropping
+     * their number is not the author taking that back.
+     */
+    void withdrawBacklog(UUID viewerId, UUID authorId) {
+        for (String kind : List.of("post", "story")) {
+            for (StoredContent c : readContentPage("WORLDPOST#" + authorId, contentPrefix(kind), BACKLOG)) {
+                if (!WorldAudience.CONTACTS.name().equals(c.audience())) continue;
+                if (!c.viewers().contains(viewerId)) continue;
+                db().deleteItem(r -> r.tableName(table).key(Map.of(
+                    "pk", s("WORLDFEED#" + viewerId), "sk", s(contentSk(c)))));
+                recordViewers(c, c.viewers().stream().filter(v -> !v.equals(viewerId)).toList());
+            }
+        }
+    }
+
+    /** Rewrites who a post was fanned out to, on the author's copy. */
+    private void recordViewers(StoredContent c, List<UUID> viewers) {
+        String viewerJson = writeJson(viewers);
+        db().updateItem(r -> r.tableName(table)
+            .key(Map.of("pk", s("WORLDPOST#" + c.authorId()), "sk", s(contentSk(c))))
+            .updateExpression("SET viewerJson = :v")
+            .expressionAttributeValues(Map.of(":v", s(viewerJson))));
+    }
+
     /** Removes the author's copy and every copy it was actually fanned out to. */
     void deleteContent(StoredContent content) {
         String sk = contentSk(content);

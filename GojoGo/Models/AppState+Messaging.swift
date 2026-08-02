@@ -3,10 +3,11 @@ import SwiftUI
 // MARK: - My World live messaging (Phase 2)
 //
 // Bridges AppState's existing My World surface onto the deployed `messaging`
-// backend. Live threads (MessagingStore.liveConversationIds) send over REST and
-// receive over the WebSocket; SampleData demo threads keep the local iMessage
-// simulation (canned auto-reply) untouched. The existing view code is unchanged
-// — these methods reuse the same `worldConversations` model the views observe.
+// backend. Threads send over REST and receive over the WebSocket. There is no
+// second kind any more: the local iMessage simulation — demo threads and their
+// canned auto-reply — was removed on 2026-08-02, so every thread on screen is
+// one the server owns. The view code is unchanged; these methods reuse the same
+// `worldConversations` model the views observe.
 
 extension AppState {
 
@@ -173,7 +174,8 @@ extension AppState {
     // MARK: GojoMessages setup (phone-verified identity)
 
     /// True once the backend has answered and the caller hasn't finished setup.
-    /// Only gates when connected — offline falls back to the local demo.
+    /// Only gates when connected: with no backend there is nothing to gate, and
+    /// nothing behind it either.
     var needsWorldSetup: Bool {
         backendConnected && worldSetupLoaded && !worldSetupComplete
     }
@@ -335,15 +337,22 @@ extension AppState {
 
     /// Resolves a verified phone to a World user and opens a live 1:1 thread.
     ///
-    /// Also puts them in the contacts graph: reaching somebody by number *is*
-    /// adding them, and the graph is what audiences resolve against — a thread
-    /// with somebody who isn't a contact would leave them unable to see anything
-    /// you post.
+    /// Opening a thread is **not** adding them any more. It used to be — the
+    /// theory was that reaching somebody by number is the same act as putting
+    /// them in your graph — but the two are not the same act at all, and this
+    /// one runs from a sheet whose button says *Start a chat*. Messaging
+    /// somebody once is not a decision to carry their posts in your feed, and
+    /// it certainly isn't one made here, silently, on their behalf.
+    ///
+    /// So both sides of a new thread now sit in the same place: neither is a
+    /// contact, and either can become one by tapping Add on the bar in the
+    /// thread. Note which way that runs — a GojoMessages post goes to *everyone
+    /// who has the author's number*, so adding them is what lets **you** see
+    /// **their** posts, and them seeing yours is their own tap to make.
     func startLiveConversation(phone raw: String) async -> Bool {
         guard backendConnected,
               let user = try? await MessagingStore.shared.worldByPhone(raw),
               user.profileId != SocialStore.shared.myProfileId else { return false }
-        _ = await addWorldGraphContact(phone: raw)
         do {
             // No title: a 1:1 is named after the other participant, and each side
             // resolves that for itself. Sending one would store *this* viewer's
@@ -390,8 +399,9 @@ extension AppState {
         }
     }
 
-    /// Live threads become the source of truth for the Messages list; SampleData
-    /// threads (no server id) stay below so the demo/composer still works.
+    /// The server's list *is* the Messages list. Anything not in it that isn't
+    /// live keeps its place only until the next refresh describes otherwise —
+    /// there are no local-only threads left to protect.
     ///
     /// Merges *field by field* rather than replacing the array: a refresh that
     /// swapped in the server's row wholesale would drop the loaded `messages`
@@ -420,7 +430,7 @@ extension AppState {
     }
 
     /// Fetches messages for a live thread the first time it's opened, then marks
-    /// it read on the server. No-op for SampleData threads.
+    /// it read on the server.
     func loadLiveConversationIfNeeded(_ id: UUID) {
         guard MessagingStore.shared.isLive(id) else { return }
         Task { await reloadLiveConversation(id) }
@@ -434,6 +444,11 @@ extension AppState {
         do {
             let page = try await MessagingStore.shared.fetchMessages(id)
             guard let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
+            let scrolledBack = worldOlderPages[id] ?? []
+            // The cursor tracks the newest page's far edge only until something
+            // older has been pulled — after that the loaded pages own everything
+            // before it, and taking this cursor again would re-ask for them.
+            if scrolledBack.isEmpty { worldOlderCursor[id] = page.nextBefore }
             let localByID = Dictionary(
                 worldConversations[i].messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let serverIds = Set(page.messages.map(\.id))
@@ -445,7 +460,10 @@ extension AppState {
             let pendingLocal = worldConversations[i].messages.filter {
                 !serverIds.contains($0.id) && $0.fromUser && $0.kind != .timestamp
             }
-            var next = reconciled + pendingLocal
+            // History that was scrolled back to survives the refresh, minus
+            // anything the newest page now covers.
+            var next = scrolledBack.filter { !serverIds.contains($0.id) }
+                + reconciled + pendingLocal
             // Persisted "Read" high-water mark: the receipt survives a reload even
             // if we were offline when the peer read it (the live event only fires
             // for connected senders).
@@ -459,6 +477,38 @@ extension AppState {
         } catch {
             #if DEBUG
             print("Live message load failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Whether this thread has history the app hasn't pulled yet.
+    func hasOlderWorldMessages(_ id: UUID) -> Bool {
+        MessagingStore.shared.isLive(id) && worldOlderCursor[id] != nil
+    }
+
+    /// Pulls one page further back and prepends it.
+    ///
+    /// Messages have no TTL — a thread is kept in full, forever — but the app
+    /// only ever asked for the newest page, so anything older than that was on
+    /// the server and unreachable from the screen. The cursor the fetch already
+    /// returned is all it took; this is the caller it never had.
+    ///
+    /// A page that comes back empty (or entirely known) still clears the cursor,
+    /// so the top of a thread is reached rather than asked for forever.
+    func loadOlderWorldMessages(_ id: UUID) async {
+        guard MessagingStore.shared.isLive(id), let cursor = worldOlderCursor[id] else { return }
+        do {
+            let page = try await MessagingStore.shared.fetchMessages(id, before: cursor)
+            worldOlderCursor[id] = page.nextBefore
+            guard let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
+            let known = Set(worldConversations[i].messages.map(\.id))
+            let older = page.messages.filter { !known.contains($0.id) }
+            guard !older.isEmpty else { return }
+            worldOlderPages[id] = older + (worldOlderPages[id] ?? [])
+            worldConversations[i].messages.insert(contentsOf: older, at: 0)
+        } catch {
+            #if DEBUG
+            print("Older message load failed: \(error.localizedDescription)")
             #endif
         }
     }
@@ -687,7 +737,7 @@ extension AppState {
     }
 
     /// Sends a typing ping on a live thread, throttled to once per ~3s. Called
-    /// from the composer's onChange; SampleData threads ignore it.
+    /// from the composer's onChange.
     func worldTypingChanged() {
         guard worldTypingIndicatorsEnabled,
               let id = selectedWorldConversationID, MessagingStore.shared.isLive(id),

@@ -101,6 +101,10 @@ record UpdateRichProfileRequest(
  * Somebody else's GojoMessages identity, as one of their contacts sees it. The
  * rich half is present only when the viewer is actually a contact — a phone
  * number you happen to know is not an entitlement to read somebody's profile.
+ *
+ * <p>{@code phone} is present one step wider: to a contact, and to anyone this
+ * person reached first. It is what an add is made of, so a null here is the
+ * client's answer to "can I add them?" as much as it is a hidden number.
  */
 record WorldContactProfileDto(UUID profileId, String displayName, String avatarUrl,
                               String phone, String alias, boolean isContact,

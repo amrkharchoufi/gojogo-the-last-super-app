@@ -22,6 +22,12 @@ struct WorldChatView: View {
     /// Own-message receipt revealed by tap (auto-hides).
     @State private var revealedReceiptID: UUID?
     @State private var revealDismissTask: Task<Void, Never>?
+    /// In flight for the add-to-contacts bar.
+    @State private var addingContact = false
+    /// Paging back through history: the request in flight, and the bubble whose
+    /// position has to survive the prepend.
+    @State private var loadingOlder = false
+    @State private var anchorAfterPrepend: UUID?
 
     private var live: WorldConversation {
         app.worldConversations.first(where: { $0.id == conversationID })
@@ -58,6 +64,7 @@ struct WorldChatView: View {
                 if let ctx = live.listingContext {
                     listingContextBar(ctx)
                 }
+                addToContactsBar
                 Spacer(minLength: 0)
                     .allowsHitTesting(false)
             }
@@ -508,6 +515,68 @@ struct WorldChatView: View {
         .padding(.bottom, 2)
     }
 
+    /// The person you're talking to, when there is exactly one, they're real,
+    /// and the thread is a conversation rather than a transaction — an order's
+    /// courier thread is not an invitation into anybody's private network.
+    private var otherPersonID: UUID? {
+        guard !live.isGroup, live.listingContext == nil,
+              MessagingStore.shared.isLive(conversationID) else { return nil }
+        return MessagingStore.shared.otherParticipant(in: conversationID)?.id
+    }
+
+    /// A thread makes nobody a contact — not the person who opened it and not
+    /// the person who answered. That's deliberate: in a graph where a post goes
+    /// to *everyone who has the author's number*, being added is being handed
+    /// somebody's posts, and neither side should have that decided for them by a
+    /// message. So the decision lives here, on the one screen where the person
+    /// is unambiguously in front of you, and it costs one tap. The thread is
+    /// also the proof that lets the server hand over the number an add is made
+    /// of. Read from the loaded graph, so the bar itself costs nothing and never
+    /// guesses before the graph is in.
+    @ViewBuilder
+    private var addToContactsBar: some View {
+        if app.worldGraphLoaded, let id = otherPersonID,
+           !app.worldGraphContacts.contains(where: { $0.id == id }) {
+            HStack(spacing: 10) {
+                Image(systemName: "person.badge.plus")
+                    .font(.system(size: 15))
+                    .foregroundStyle(IMColor.blue)
+                Text("Not in your contacts — you won't see their posts")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(IMColor.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                Button {
+                    guard !addingContact else { return }
+                    addingContact = true
+                    Task {
+                        _ = await app.addWorldGraphContact(profileId: id)
+                        addingContact = false
+                    }
+                } label: {
+                    if addingContact {
+                        ProgressView().tint(IMColor.blue).scaleEffect(0.8)
+                    } else {
+                        Text("Add")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(IMColor.blue)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(addingContact)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(IMColor.chrome.opacity(0.55))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(IMColor.separator).frame(height: 0.5)
+            }
+            .background(IMColor.bg)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 2)
+        }
+    }
+
     @ViewBuilder
     private func avatar(size: CGFloat) -> some View {
         if live.isGroup {
@@ -535,6 +604,17 @@ struct WorldChatView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 2) {
+                    // Reaching the top of a thread asks for the page before it.
+                    // Inside the lazy stack on purpose: it only appears — and so
+                    // only fires — once the reader has actually scrolled back
+                    // that far.
+                    if app.hasOlderWorldMessages(conversationID) {
+                        ProgressView()
+                            .tint(IMColor.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .onAppear { loadOlder() }
+                    }
                     ForEach(Array(live.messages.enumerated()), id: \.element.id) { index, msg in
                         messageRow(msg, index: index)
                             .id(msg.id)
@@ -552,7 +632,15 @@ struct WorldChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: live.messages.count) { _, _ in
-                scrollToEnd(proxy)
+                // A page prepended above what you're reading must not throw you
+                // back to the newest message — hold the bubble that was on top
+                // in place instead, so scrolling back feels like scrolling.
+                if let anchor = anchorAfterPrepend {
+                    anchorAfterPrepend = nil
+                    DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) }
+                } else {
+                    scrollToEnd(proxy)
+                }
             }
             .onChange(of: isTyping) { _, typing in
                 if typing {
@@ -562,6 +650,23 @@ struct WorldChatView: View {
                 }
             }
             .onAppear { scrollToEnd(proxy) }
+        }
+    }
+
+    /// One page further back. The anchor is set *before* the await so the
+    /// prepend can't land between the fetch and the flag being read.
+    private func loadOlder() {
+        guard !loadingOlder, app.hasOlderWorldMessages(conversationID) else { return }
+        loadingOlder = true
+        let before = live.messages.count
+        anchorAfterPrepend = live.messages.first?.id
+        Task {
+            await app.loadOlderWorldMessages(conversationID)
+            // Nothing arrived (a page of already-known messages, or a failure) —
+            // drop the anchor, or the next real message would land on it instead
+            // of scrolling to the bottom.
+            if live.messages.count == before { anchorAfterPrepend = nil }
+            loadingOlder = false
         }
     }
 

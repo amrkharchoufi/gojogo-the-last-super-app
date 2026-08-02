@@ -101,7 +101,10 @@ extension AppState {
         async let contacts = try? WorldContentStore.shared.contacts()
         async let circles = try? WorldContentStore.shared.circles()
         async let profile = try? WorldContentStore.shared.myProfile()
-        if let contacts = await contacts { worldGraphContacts = contacts }
+        if let contacts = await contacts {
+            worldGraphContacts = contacts
+            worldGraphLoaded = true
+        }
         if let circles = await circles { worldCircles = circles }
         if let profile = await profile { worldRichProfile = profile }
     }
@@ -115,6 +118,11 @@ extension AppState {
             if !worldGraphContacts.contains(where: { $0.id == contact.id }) {
                 worldGraphContacts.append(contact)
             }
+            // The server hands a new contact's existing posts over on the add, so
+            // there is something to show the moment this returns. Off the caller's
+            // thread of control: the tap that gets here is usually made from a
+            // chat, and that screen should not wait on a feed.
+            Task { await refreshWorldFeed() }
             return contact.id
         } catch {
             #if DEBUG
@@ -122,6 +130,21 @@ extension AppState {
             #endif
             return nil
         }
+    }
+
+    /// Adds somebody you're already talking to — the tap behind every Add button
+    /// in a thread, on either side of it. Still by number, because a number is
+    /// the only way into this graph; theirs is fetched rather than typed, since
+    /// the server shows it to whoever the other person reached, which is exactly
+    /// the person entitled to add them.
+    ///
+    /// Returns false when the server won't hand the number over, which is its
+    /// way of saying this isn't somebody you may add.
+    func addWorldGraphContact(profileId contactId: UUID) async -> Bool {
+        guard backendConnected else { return false }
+        guard let profile = try? await WorldContentStore.shared.contactProfile(contactId),
+              let phone = profile.phone, !phone.isEmpty else { return false }
+        return await addWorldGraphContact(phone: phone) != nil
     }
 
     func removeWorldGraphContact(_ contactId: UUID) {

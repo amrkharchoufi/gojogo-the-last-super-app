@@ -3,7 +3,7 @@ import SwiftUI
 /// Messaging-module API surface (My World) plus DTO→UI-model mapping. Server
 /// UUIDs are reused as WorldConversation/WorldMessage ids, so a mutation can
 /// address the backend directly. `liveConversationIds` lets AppState route a
-/// send to the API (live thread) or the local simulator (SampleData thread).
+/// send to the API. Every thread is a live one now.
 @MainActor
 final class MessagingStore {
 
@@ -11,7 +11,7 @@ final class MessagingStore {
 
     var myProfileId: UUID?
 
-    /// Conversations that exist on the backend (vs. SampleData demo threads).
+    /// Conversations confirmed to exist on the backend.
     private(set) var liveConversationIds: Set<UUID> = []
     /// Cached participants per conversation — used to name poll voters / senders.
     private var participantsByConversation: [UUID: [ParticipantDTO]] = [:]

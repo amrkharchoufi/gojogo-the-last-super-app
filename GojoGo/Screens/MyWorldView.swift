@@ -660,10 +660,25 @@ private struct NewWorldMessageSheet: View {
     @State private var query = ""
     @FocusState private var focused: Bool
 
+    /// Who this sheet offers. On a real account that's your GojoMessages
+    /// contacts, mapped into the row model; the SampleData roster is offered
+    /// only with no backend behind it, where it is the prototype rather than a
+    /// list of people who don't exist. Picking one of *those* opened a thread
+    /// that answered by itself, which is the same invented conversation a
+    /// mistyped number used to produce.
+    private var roster: [WorldContact] {
+        guard app.backendConnected else { return app.worldContacts }
+        return app.worldContactsForPicker.map {
+            WorldContact(id: $0.id, name: $0.effectiveName,
+                         username: "", phone: $0.phone ?? "",
+                         avatarURL: $0.avatarURL)
+        }
+    }
+
     private var results: [WorldContact] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return app.worldContacts }
-        return app.worldContacts.filter {
+        guard !q.isEmpty else { return roster }
+        return roster.filter {
             $0.name.lowercased().contains(q)
                 || $0.username.lowercased().contains(q)
                 || $0.phone.replacingOccurrences(of: " ", with: "").contains(q.replacingOccurrences(of: " ", with: ""))
@@ -679,6 +694,18 @@ private struct NewWorldMessageSheet: View {
         VStack(spacing: 0) {
             header
             toField
+            // A number that reached nobody says so here. The alternative the app
+            // used to take — opening a thread with an invented person — reads as
+            // success and hides the typo that caused it.
+            if let error = app.worldNewMessageError {
+                Text(error)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color(hex: "FF7A7A"))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+            }
 
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 0) {
@@ -696,9 +723,14 @@ private struct NewWorldMessageSheet: View {
             }
         }
         .background(IMColor.sheetBG.ignoresSafeArea())
+        .animation(.easeInOut(duration: 0.2), value: app.worldNewMessageError)
         .onAppear {
+            app.worldNewMessageError = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { focused = true }
         }
+        // Editing the number is the retry, so the last failure stops applying
+        // the moment the field changes.
+        .onChange(of: query) { app.worldNewMessageError = nil }
     }
 
     private var header: some View {
@@ -732,7 +764,7 @@ private struct NewWorldMessageSheet: View {
                 .textInputAutocapitalization(.never)
                 .onSubmit {
                     if canAddNew { app.addWorldContact(query) }
-                    else if let first = results.first { app.startWorldConversation(with: first) }
+                    else if let first = results.first { open(first) }
                 }
         }
         .padding(.horizontal, 16)
@@ -758,7 +790,10 @@ private struct NewWorldMessageSheet: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(IMColor.label)
                         .lineLimit(1)
-                    Text("Adds them to GojoMessages")
+                    // Not "adds them" any more: opening a thread doesn't put
+                    // anybody in your contacts, and the number has to actually
+                    // be on GojoMessages for this to reach a person at all.
+                    Text("If they're on GojoMessages")
                         .font(.system(size: 13))
                         .foregroundStyle(IMColor.secondary)
                 }
@@ -771,10 +806,20 @@ private struct NewWorldMessageSheet: View {
         .buttonStyle(.plain)
     }
 
+    /// Everybody in this sheet is reached the one way anybody is reached here —
+    /// by their number, through the live path.
+    private func open(_ contact: WorldContact) {
+        guard !contact.phone.isEmpty else {
+            app.worldNewMessageError = "No number on file for \(contact.name)."
+            return
+        }
+        app.addWorldContact(contact.phone)
+    }
+
     private func contactRow(_ contact: WorldContact) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            app.startWorldConversation(with: contact)
+            open(contact)
         } label: {
             HStack(spacing: 12) {
                 UserAvatar(

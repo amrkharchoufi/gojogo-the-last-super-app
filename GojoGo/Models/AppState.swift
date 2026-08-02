@@ -41,9 +41,14 @@ final class AppState: ObservableObject {
     @Published var selectedWorldConversationID: UUID? = nil
     @Published var worldDraft: String = ""
     @Published var worldSearch: String = ""
-    @Published var worldContacts: [WorldContact] = SampleData.worldContacts
-    @Published var worldCircles: [WorldCircle] = SampleData.worldCircles
-    @Published var worldConversations: [WorldConversation] = SampleData.worldConversations
+    // GojoMessages starts empty and fills from the server. It seeded a demo
+    // roster, demo circles and demo threads until 2026-08-02; they went with the
+    // canned auto-reply, because a made-up contact you can message is the same
+    // fiction as a made-up person answering. An empty Messages list on a fresh
+    // account is the honest state, and it is the state the server describes.
+    @Published var worldContacts: [WorldContact] = []
+    @Published var worldCircles: [WorldCircle] = []
+    @Published var worldConversations: [WorldConversation] = []
     @Published var showWorldAppsMenu: Bool = false
     @Published var showWorldContact: Bool = false
     @Published var worldIsEditing: Bool = false
@@ -55,7 +60,15 @@ final class AppState: ObservableObject {
     @Published var worldPendingAttachments: [WorldPendingAttachment] = []
     /// Conversation currently showing the "…" typing indicator.
     @Published var worldTypingConversationID: UUID? = nil
-    private var worldReplyTasks: [UUID: Task<Void, Never>] = [:]
+    /// Where the next page of *older* messages starts, per thread. Nil means the
+    /// thread has been read back to its first message — messages are kept
+    /// forever server-side, so without a cursor a long history simply sat there
+    /// unasked for behind the newest thirty.
+    @Published var worldOlderCursor: [UUID: String] = [:]
+    /// Pages already pulled back, oldest-first. Held apart from the thread's
+    /// messages because a refresh replaces the newest page wholesale and would
+    /// take the scrolled-back history with it.
+    var worldOlderPages: [UUID: [WorldMessage]] = [:]
     /// Message the tapback/action overlay is focused on (long-press target).
     @Published var worldReactionTarget: UUID? = nil
     /// Message the composer is currently quoting as an inline reply.
@@ -71,7 +84,6 @@ final class AppState: ObservableObject {
     }()
     /// When set, the next send is scheduled for this label instead of sent now.
     @Published var worldSendLaterLabel: String? = nil
-    private var worldScheduledTasks: [UUID: Task<Void, Never>] = [:]
     /// Transient status line above the composer ("Getting your location…").
     @Published var worldNotice: String? = nil
     private var worldNoticeTask: Task<Void, Never>? = nil
@@ -131,10 +143,18 @@ final class AppState: ObservableObject {
     /// Unexpired stories, grouped by author, for the row above the feed.
     @Published var worldStories: [WorldStoryRing] = []
     /// The server-side contacts graph. Distinct from `worldContacts`, which is
-    /// the local SampleData demo roster the composer still falls back to.
+    /// the picker's row model — no longer seeded with anybody.
     @Published var worldGraphContacts: [WorldGraphContact] = []
+    /// Whether the graph above has actually been fetched. An empty list is a
+    /// real answer as well as a not-yet, and telling somebody they haven't added
+    /// the person they're talking to is only fair once the difference is known.
+    @Published var worldGraphLoaded: Bool = false
     /// Your own rich GojoMessages profile (separate from the public one).
     @Published var worldRichProfile = WorldRichProfile()
+    /// Why the last "New Message" attempt reached nobody. Shown in that sheet:
+    /// a number that isn't on GojoMessages has to say so, because the only other
+    /// honest outcome is nothing happening at all.
+    @Published var worldNewMessageError: String?
     @Published var worldFeedLoading: Bool = false
     @Published var worldFeedLoaded: Bool = false
     /// Which tab the composer opens on. Set by whoever opens it — the "Your
@@ -1011,9 +1031,9 @@ final class AppState: ObservableObject {
     }
 
     func deleteWorldConversation(_ id: UUID) {
-        worldReplyTasks[id]?.cancel()
-        worldReplyTasks[id] = nil
         if worldTypingConversationID == id { worldTypingConversationID = nil }
+        worldOlderCursor[id] = nil
+        worldOlderPages[id] = nil
         if selectedWorldConversationID == id { closeWorldConversation() }
         showWorldContact = false
         let wasLive = MessagingStore.shared.isLive(id)
@@ -1034,90 +1054,67 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Opens the existing 1:1 thread for a contact, creating it if needed.
-    /// Always lands the thread in the main Messages list (unpinned, most recent).
-    func startWorldConversation(with contact: WorldContact) {
-        worldSheet = nil
-        showWorldFilters = false
-        worldFilterUnreadOnly = false
-        worldSearch = ""
+    // Removed 2026-08-02: `startWorldConversation(with:)` — it opened a thread
+    // that existed only on this phone. Every way into a conversation now goes
+    // through the server (`startLiveConversation`, `startLiveGroup`,
+    // `openWorldCircle`), because a thread the server never heard of is one that
+    // takes your messages and does nothing with them.
 
-        if let i = worldConversations.firstIndex(where: { $0.contactID == contact.id }) {
-            worldConversations[i].pinned = false
-            worldConversations[i].title = contact.name
-            worldConversations[i].avatarURL = contact.avatarURL
-            worldConversations[i].avatarGradient = contact.avatarGradient
-            bumpWorldConversationActivity(at: i)
-            // Move to front of the array so the list update is obvious.
-            let convo = worldConversations.remove(at: i)
-            worldConversations.insert(convo, at: 0)
-            openWorldConversation(convo.id)
-            return
-        }
-
-        let convo = WorldConversation(
-            contactID: contact.id, title: contact.name,
-            preview: "Say hi 👋", timeAgo: "now",
-            avatarURL: contact.avatarURL, avatarGradient: contact.avatarGradient,
-            messages: [WorldMessage(kind: .timestamp, text: "Today")],
-            lastActivityAt: Date()
-        )
-        worldConversations.insert(convo, at: 0)
-        openWorldConversation(convo.id)
-    }
-
-    /// Adds a contact reached by phone number, then opens the thread.
+    /// Opens a thread with somebody reached by phone number.
     ///
     /// Number only, by design: GojoMessages is a phone-number graph, so a
-    /// username is a name here and never a way to find somebody. A non-numeric
-    /// entry is only ever a local demo contact.
+    /// username is a name here and never a way to find somebody.
+    ///
+    /// Every outcome that isn't a real thread now **says why**. This used to
+    /// fall through to a locally invented contact, which put you in a thread
+    /// with a stranger who answered — canned replies, from a person who does not
+    /// exist, on a number you may well have mistyped. Nothing is fabricated
+    /// here any more: the person is on GojoMessages or you are told they aren't.
     func addWorldContact(_ raw: String) {
         let entry = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !entry.isEmpty else { return }
+        worldNewMessageError = nil
+        guard backendConnected else {
+            worldNewMessageError = "You're offline — GojoMessages needs a connection "
+                + "to reach anybody."
+            return
+        }
         // Comma-separated phone numbers → a real backend group conversation.
         let recipients = entry.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        if backendConnected, recipients.count >= 2 {
+        if recipients.count >= 2 {
             Task {
                 if await startLiveGroup(recipients: recipients) {
                     worldSheet = nil; showWorldFilters = false; worldSearch = ""
                 } else {
-                    addLocalWorldContact(entry, isPhone: false)
+                    worldNewMessageError = "At least two of those numbers need to be on "
+                        + "GojoMessages to start a group."
                 }
             }
             return
         }
-        let isPhone = entry.allSatisfy { "+0123456789 -()".contains($0) }
-        // On a connected backend, resolve a real GojoMessages account by phone
-        // number (WhatsApp-style) and open a live thread; fall back to a local
-        // demo contact when there's no match.
-        if backendConnected, isPhone {
-            Task {
-                if await startLiveConversation(phone: entry) {
-                    worldSheet = nil
-                    showWorldFilters = false
-                    worldSearch = ""
-                } else {
-                    addLocalWorldContact(entry, isPhone: isPhone)
-                }
-            }
+        guard entry.allSatisfy({ "+0123456789 -()".contains($0) }) else {
+            worldNewMessageError = "GojoMessages finds people by phone number — "
+                + "a name or username won't reach anybody here."
             return
         }
-        addLocalWorldContact(entry, isPhone: isPhone)
-    }
-
-    private func addLocalWorldContact(_ entry: String, isPhone: Bool) {
-        let cleaned = entry.hasPrefix("@") ? String(entry.dropFirst()) : entry
-        let contact = WorldContact(
-            name: isPhone ? entry : cleaned.capitalized,
-            username: isPhone ? cleaned.filter(\.isNumber) : cleaned.lowercased(),
-            phone: isPhone ? entry : ""
-        )
-        worldContacts.append(contact)
-        startWorldConversation(with: contact)
+        Task {
+            if await startLiveConversation(phone: entry) {
+                worldSheet = nil
+                showWorldFilters = false
+                worldSearch = ""
+            } else {
+                worldNewMessageError = "Nobody on GojoMessages has that number yet."
+            }
+        }
     }
 
     /// Opens the group thread for a circle, creating it if needed — always visible in Messages.
+    /// A circle's thread is a real group conversation on the server, created on
+    /// first open. It used to be assembled locally, which was survivable while a
+    /// canned reply made every thread look alive — now a thread the server
+    /// doesn't know about is one that silently swallows what you send, so there
+    /// is no such thing here any more.
     func openWorldCircle(_ circle: WorldCircle) {
         if let existing = worldConversations.first(where: { $0.circleID == circle.id }) {
             if let i = worldConversations.firstIndex(where: { $0.id == existing.id }) {
@@ -1130,23 +1127,27 @@ final class AppState: ObservableObject {
             openWorldConversation(existing.id)
             return
         }
-        let members = worldContacts.filter { circle.memberIDs.contains($0.id) }
-        let preview = members.isEmpty
-            ? "New circle"
-            : members.prefix(3).map { $0.name.components(separatedBy: " ").first ?? $0.name }.joined(separator: ", ")
-        let convo = WorldConversation(
-            circleID: circle.id, title: circle.name,
-            preview: preview, timeAgo: "now", isGroup: true,
-            messages: [
-                WorldMessage(kind: .timestamp, text: "Today"),
-                WorldMessage(kind: .system, text: "You created \(circle.name)")
-            ],
-            lastActivityAt: Date()
-        )
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
-            worldConversations.insert(convo, at: 0)
+        guard backendConnected, !circle.memberIDs.isEmpty else {
+            showWorldNotice(circle.memberIDs.isEmpty
+                            ? "Add somebody to \(circle.name) first."
+                            : "You're offline — that circle's chat needs a connection.")
+            return
         }
-        openWorldConversation(convo.id)
+        Task {
+            do {
+                let convo = try await MessagingStore.shared.createConversation(
+                    participantIds: circle.memberIDs, title: circle.name,
+                    circleId: circle.id, background: worldDefaultBackground)
+                if worldConversations.firstIndex(where: { $0.id == convo.id }) == nil {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                        worldConversations.insert(convo, at: 0)
+                    }
+                }
+                openWorldConversation(convo.id)
+            } catch {
+                showWorldNotice("Couldn't open that circle's chat.")
+            }
+        }
     }
 
     // MARK: My World — sending
@@ -1323,38 +1324,11 @@ final class AppState: ObservableObject {
         bumpWorldConversationActivity(at: i)
         showWorldAppsMenu = false
 
-        // Live thread: send to the backend; the real reply (or a scheduled
-        // send's delivery) arrives over the socket. SampleData threads keep the
-        // local canned-reply / demo send-later simulation.
+        // Every thread is the server's now. A message that can't be sent isn't
+        // pretended into existence — the bubble stays without a receipt rather
+        // than being answered by nobody.
         if MessagingStore.shared.isLive(id) {
             liveSend(msg, in: id, replyToId: replyToId, scheduledAt: scheduled ? scheduledAt : nil)
-            return
-        }
-
-        if scheduled {
-            scheduleWorldSendLater(messageID: msg.id, in: id, preview: preview)
-        } else {
-            scheduleWorldReply(for: id)
-        }
-    }
-
-    /// Fires a scheduled (Send Later) message a few seconds after it's queued.
-    private func scheduleWorldSendLater(messageID: UUID, in convoID: UUID, preview: String) {
-        worldScheduledTasks[messageID]?.cancel()
-        worldScheduledTasks[messageID] = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard let self, !Task.isCancelled,
-                  let i = self.worldConversations.firstIndex(where: { $0.id == convoID }),
-                  let j = self.worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
-            else { return }
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                self.worldConversations[i].messages[j].scheduledLabel = nil
-                self.worldConversations[i].messages[j].readLabel = "Delivered"
-                self.worldConversations[i].preview = preview
-            }
-            self.bumpWorldConversationActivity(at: i)
-            self.scheduleWorldReply(for: convoID)
         }
     }
 
@@ -1398,8 +1372,6 @@ final class AppState: ObservableObject {
     func deleteWorldMessage(_ messageID: UUID) {
         guard let id = selectedWorldConversationID,
               let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
-        worldScheduledTasks[messageID]?.cancel()
-        worldScheduledTasks[messageID] = nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             worldConversations[i].messages.removeAll { $0.id == messageID }
         }
@@ -1480,67 +1452,13 @@ final class AppState: ObservableObject {
         worldConversations[index].pinned = false
     }
 
-    private static let worldReplyPool: [String] = [
-        "haha yes 😄", "omg wait really?", "love that", "on it 👌", "say less",
-        "can't wait!!", "sending you something later", "lol okay okay",
-        "let's do it 🔥", "miss you btw", "perfect timing", "you read my mind",
-    ]
-
-    /// Fakes the other side: typing indicator, then a reply + read receipt.
-    private func scheduleWorldReply(for id: UUID) {
-        worldReplyTasks[id]?.cancel()
-        worldReplyTasks[id] = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
-            guard let self, !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { self.worldTypingConversationID = id }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard !Task.isCancelled else {
-                if self.worldTypingConversationID == id { self.worldTypingConversationID = nil }
-                return
-            }
-            self.receiveWorldReply(in: id)
-        }
-    }
-
-    private func receiveWorldReply(in id: UUID) {
-        if worldTypingConversationID == id { worldTypingConversationID = nil }
-        guard let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
-        // Mark every outgoing bubble as read (demo stand-in for a real receipt).
-        let now = Date()
-        for j in worldConversations[i].messages.indices
-        where worldConversations[i].messages[j].fromUser
-              && worldConversations[i].messages[j].scheduledLabel == nil {
-            worldConversations[i].messages[j].readLabel = "Read"
-            if worldConversations[i].messages[j].readAt == nil {
-                worldConversations[i].messages[j].readAt = now
-            }
-        }
-        // Sometimes the other side tapbacks the last thing you sent, like iMessage.
-        if Int.random(in: 0..<3) == 0,
-           let last = worldConversations[i].messages.lastIndex(where: { $0.fromUser }),
-           !worldConversations[i].messages[last].reactions.contains(where: { !$0.fromUser }) {
-            let tb = WorldTapback.allCases.randomElement() ?? .heart
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.6)) {
-                worldConversations[i].messages[last].reactions.append(
-                    WorldReaction(tapback: tb, fromUser: false))
-            }
-        }
-        let reply = Self.worldReplyPool.randomElement() ?? "❤️"
-        let members = worldCircleMembers(of: worldConversations[i])
-        let sender = worldConversations[i].isGroup
-            ? worldContacts.filter { members.contains($0.id) }.randomElement()?
-                .name.components(separatedBy: " ").first
-            : nil
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.68)) {
-            worldConversations[i].messages.append(
-                WorldMessage(text: reply, fromUser: false, senderName: sender))
-            worldConversations[i].preview = sender.map { "\($0): \(reply)" } ?? reply
-            if selectedWorldConversationID != id {
-                worldConversations[i].unread += 1
-            }
-        }
-        bumpWorldConversationActivity(at: worldConversations.firstIndex(where: { $0.id == id }) ?? i)
-    }
+    // Removed 2026-08-02: `worldReplyPool` / `scheduleWorldReply` /
+    // `receiveWorldReply` — the canned other side. A typing indicator, a random
+    // reply and a read receipt, all invented locally on any thread the server
+    // didn't own. It was the prototype's whole messaging illusion, and with
+    // GojoMessages live it had become a liability: nobody could tell an invented
+    // reply from a real one, and a mistyped number answered you like a friend.
+    // Read receipts and typing now come from the socket or not at all.
 
     private func worldCircleMembers(of convo: WorldConversation) -> [UUID] {
         guard let cid = convo.circleID,
@@ -2114,6 +2032,61 @@ final class AppState: ObservableObject {
         block.postIDs.compactMap { id in posts.first(where: { $0.id == id }) }
     }
 
+    /// Everything GojoMessages holds about whoever is signed in.
+    ///
+    /// A private network is exactly the kind of thing that must not be waiting
+    /// for the next person to open the app on this phone — the block list and
+    /// the emergency contacts below already say so, and threads, their previews
+    /// and a contacts graph are more personal than either. It survived until
+    /// 2026-08-02 because the demo seeds made leftovers look like fixtures;
+    /// with every thread real, a leftover is somebody's actual conversation.
+    ///
+    /// Sign-out is the only caller today. If a second way to switch accounts
+    /// ever appears, it belongs here too.
+    private func clearGojoMessages() {
+        worldConversations = []
+        worldOlderCursor = [:]
+        worldOlderPages = [:]
+        worldContacts = []
+        worldCircles = []
+        worldGraphContacts = []
+        worldGraphLoaded = false
+        worldFeedPosts = []
+        worldStories = []
+        worldRichProfile = WorldRichProfile()
+        worldAliases = [:]
+        // Muting is a device preference rather than account state, but the ids
+        // in it name the last account's threads — written through, or the next
+        // launch reads them back.
+        worldMutedConversations = []
+        WorldPreference.mutedConversations = []
+        selectedWorldConversationID = nil
+        worldContactProfile = nil
+        openWorldStory = nil
+        worldSheet = nil
+        showWorldContact = false
+        worldDraft = ""
+        worldSearch = ""
+        worldPendingAttachments = []
+        worldReplyingTo = nil
+        worldReactionTarget = nil
+        worldTypingConversationID = nil
+        worldMediaViewerItems = []
+        worldNewMessageError = nil
+        worldNotice = nil
+        worldFeedLoading = false
+        worldFeedLoaded = false
+        worldSetupComplete = false
+        worldSetupLoaded = false
+        worldConversationsLoading = true
+        worldConversationsLoaded = false
+        worldSetupStep = .intro
+        worldSetupPhone = ""; worldSetupCode = ""; worldSetupName = ""
+        worldSetupAvatarData = nil; worldSetupAvatarURL = nil; worldPhone = nil
+        worldSettingsName = ""; worldSettingsAvatarData = nil
+        worldSettingsError = nil; worldSettingsSaved = false
+    }
+
     func signOut() {
         persistTask?.cancel()
         travelMatchTask?.cancel()
@@ -2174,14 +2147,7 @@ final class AppState: ObservableObject {
         WorldSocket.shared.disconnect()
         MessagingStore.shared.reset()
         PushRegistrar.shared.reset()
-        worldAliases = [:]
-        worldSetupComplete = false
-        worldSetupLoaded = false
-        worldConversationsLoading = true
-        worldConversationsLoaded = false
-        worldSetupStep = .intro
-        worldSetupPhone = ""; worldSetupCode = ""; worldSetupName = ""
-        worldSetupAvatarData = nil; worldSetupAvatarURL = nil; worldPhone = nil
+        clearGojoMessages()
         backendConnected = false
         pendingOnboarding = false
         authPassword = ""
