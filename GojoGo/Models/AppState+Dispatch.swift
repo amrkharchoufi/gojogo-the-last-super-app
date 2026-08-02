@@ -52,7 +52,7 @@ extension AppState {
         // drawing it is not an offer. Filtering here rather than in the view
         // keeps one definition of "live".
         let now = Date()
-        dispatchOffers = mine.offers.filter { $0.expiresAt > now }
+        dispatchOffers = mine.offers.filter { $0.expiresAtDate > now }
         dispatchOnline = mine.workers.contains { $0.status != "OFFLINE" }
         presentLiveOffer()
         // A delivery assignment is only half an answer: dispatch says which job,

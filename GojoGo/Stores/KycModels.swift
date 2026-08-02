@@ -18,8 +18,14 @@ struct IdentityVerificationDTO: Decodable, Equatable {
     /// offer a button that can only fail.
     let available: Bool
     let canStart: Bool
-    let verifiedAt: Date?
-    let updatedAt: Date?
+    /// Strings, not `Date`s — the shared decoder has no date strategy, and
+    /// `verifiedAt` is populated by exactly the response that says somebody
+    /// passed. See the DTO-date note in PROGRESS.md.
+    let verifiedAt: String?
+    let updatedAt: String?
+
+    var verifiedAtDate: Date? { verifiedAt.flatMap { BackendDate.parse($0) } }
+    var updatedAtDate: Date? { updatedAt.flatMap { BackendDate.parse($0) } }
 }
 
 /// The short-lived token the SDK launches with, plus the state it launches into.

@@ -61,7 +61,11 @@ struct CourierDTO: Decodable {
     let deliveries: Int
     let latitude: Double?
     let longitude: Double?
-    let positionAt: Date?
+    /// A `String`, not a `Date`: the shared decoder has no date strategy, so a
+    /// `Date` here would fail the moment a courier actually reported a position.
+    let positionAt: String?
+
+    var positionAtDate: Date? { positionAt.flatMap { BackendDate.parse($0) } }
 }
 
 struct OrderLineDTO: Decodable {

@@ -227,8 +227,13 @@ struct VerificationInviteDTO: Decodable, Equatable, Identifiable {
     let driverFirstName: String
     let rewardMinor: Int
     let currency: String
-    let expiresAt: Date?
-    let createdAt: Date?
+    /// Strings, not `Date`s — the shared decoder has no date strategy, and the
+    /// server always populates both, so a `Date` here never decodes at all.
+    let expiresAt: String?
+    let createdAt: String?
+
+    var expiresAtDate: Date? { expiresAt.flatMap { BackendDate.parse($0) } }
+    var createdAtDate: Date? { createdAt.flatMap { BackendDate.parse($0) } }
 }
 
 struct AnswerVerificationBody: Encodable {

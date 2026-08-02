@@ -47,6 +47,6 @@ final class KycStore {
             rejectLabels: dto.rejectLabels,
             isAvailable: dto.available,
             canStart: dto.canStart,
-            verifiedAt: dto.verifiedAt)
+            verifiedAt: dto.verifiedAtDate)
     }
 }

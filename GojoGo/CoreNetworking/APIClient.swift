@@ -20,7 +20,26 @@ final class APIClient {
         }
     }
 
-    private let decoder = JSONDecoder()
+    /// Timestamps in DTOs are `String` by convention and parsed with
+    /// `BackendDate` at the point of use — but the decoder is taught the
+    /// backend's format anyway, because the default (`.deferredToDate`, which
+    /// wants a *number*) turns any `Date` field somebody adds later into a
+    /// decode failure that only fires once the server has a value to send. That
+    /// is exactly how the $30 stake broke: `paidAt` was null right up until the
+    /// response that said the money had moved.
+    private let decoder: JSONDecoder = {
+        let json = JSONDecoder()
+        json.dateDecodingStrategy = .custom { element in
+            let raw = try element.singleValueContainer().decode(String.self)
+            guard let date = BackendDate.parse(raw) else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: element.codingPath,
+                    debugDescription: "Not a backend timestamp: \(raw)"))
+            }
+            return date
+        }
+        return json
+    }()
     private let encoder = JSONEncoder()
 
     func get<T: Decodable>(_ path: String) async throws -> T {

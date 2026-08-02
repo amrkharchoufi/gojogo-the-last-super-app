@@ -51,9 +51,24 @@ extension AppState {
         }
     }
 
+    /// Re-reads the application, and **keeps the last good one when that fails.**
+    ///
+    /// The `try?` this used to be assigned `nil` on any failure, which turned a
+    /// refresh that didn't answer into "you have no application": the stake page
+    /// fell back to its hardcoded $30, the shortfall read as zero, and a person
+    /// whose stake was already locked was shown a Lock button forever. A refresh
+    /// that fails has learned nothing, and nothing is what it should overwrite.
     func refreshDriverApplication(_ role: PartnerRole) async {
         guard backendConnected else { return }
-        driverApplication = try? await DispatchStore.shared.application(kind: role.partnerKind)
+        do {
+            if let fresh = try await DispatchStore.shared.application(kind: role.partnerKind) {
+                driverApplication = fresh
+            }
+        } catch {
+            #if DEBUG
+            print("Driver application refresh failed: \(error)")
+            #endif
+        }
     }
 
     // MARK: The stake
@@ -87,9 +102,26 @@ extension AppState {
                     + WalletStore.money(shortfall) + ".")
                 await refreshWallet()
             } catch {
+                // Everything else. The server's stake movement is
+                // idempotency-keyed off the application, so "the request failed"
+                // and "the money didn't move" are different statements — a
+                // response this app can't read is the obvious case, and it is
+                // the one that stranded people on this page. Ask what actually
+                // happened before telling somebody it didn't work.
+                await refreshDriverApplication(role(of: application))
+                if driverStake?.isPaid == true {
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    withAnimation(.easeInOut(duration: 0.32)) { partnerStep = .kyc }
+                    return
+                }
                 showPartnerNotice(Self.message(from: error, fallback: "Couldn't take the stake."))
             }
         }
+    }
+
+    /// The role an application belongs to, so a recovery path can re-read it.
+    private func role(of application: DriverApplicationDTO) -> PartnerRole {
+        PartnerRole.allCases.first { $0.partnerKind == application.kind } ?? .driver
     }
 
     /// Tops the wallet up by exactly what the stake is short, then retries it.

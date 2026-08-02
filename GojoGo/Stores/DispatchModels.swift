@@ -6,6 +6,12 @@ import Foundation
 // shipped is optional, which is the same forward-compat discipline the rest of
 // this app decodes with: a phone on a motorbike does not get to fail on a field
 // it has never seen.
+//
+// Timestamps are `String`, never `Date`, and are parsed with `BackendDate` at
+// the point of use. That is the codebase convention and it is load-bearing:
+// `APIClient`'s shared decoder has no `dateDecodingStrategy`, so a `Date` field
+// throws the moment the server actually sends a value — which is precisely the
+// moment the thing being timestamped *succeeded*.
 
 /// One registration — a person's place in the driver or the courier registry.
 /// The same human may hold both; accepting anything in either makes them busy in
@@ -28,8 +34,10 @@ struct DispatchWorkerDTO: Decodable, Equatable {
     let cancelledCount: Int
     let latitude: Double?
     let longitude: Double?
-    let positionAt: Date?
+    let positionAt: String?
     let last30Days: DispatchPerformanceDTO?
+
+    var positionAtDate: Date? { positionAt.flatMap { BackendDate.parse($0) } }
 }
 
 /// The rolling window. Rates are `nil` — not zero — until something has been
@@ -58,8 +66,13 @@ struct DispatchOfferDTO: Decodable, Equatable, Identifiable {
     let note: String
     /// How far the pickup is from where this worker last reported being.
     let distanceKm: Double
-    let expiresAt: Date
-    let offeredAt: Date
+    let expiresAt: String
+    let offeredAt: String
+
+    /// An unparseable expiry is treated as already gone rather than as forever:
+    /// a stuck card on a driver's screen is worse than a missed offer.
+    var expiresAtDate: Date { BackendDate.parse(expiresAt) ?? .distantPast }
+    var offeredAtDate: Date? { BackendDate.parse(offeredAt) }
 }
 
 /// The job they took. Everything after "who is doing this" belongs to the
@@ -77,7 +90,9 @@ struct DispatchAssignmentDTO: Decodable, Equatable {
     let dropoffLatitude: Double?
     let dropoffLongitude: Double?
     let note: String
-    let assignedAt: Date
+    let assignedAt: String
+
+    var assignedAtDate: Date? { BackendDate.parse(assignedAt) }
 }
 
 struct MyDispatchDTO: Decodable, Equatable {
@@ -108,13 +123,19 @@ struct PartnerStakeDTO: Decodable, Equatable {
     let paidMinor: Int
     let kycFeeMinor: Int
     let remainingMinor: Int
-    let paidAt: Date?
-    let releasedAt: Date?
+    /// Set the instant the ledger movement lands — which made this the field
+    /// that broke staking: as a `Date` it decoded fine while it was null and
+    /// threw on the very response that reported success.
+    let paidAt: String?
+    let releasedAt: String?
     let currency: String
     let walletAvailableMinor: Int
     /// What is still missing from the wallet — which is what turns "you can't
     /// afford this" into a top-up button for the right amount.
     let shortfallMinor: Int
+
+    var paidAtDate: Date? { paidAt.flatMap { BackendDate.parse($0) } }
+    var releasedAtDate: Date? { releasedAt.flatMap { BackendDate.parse($0) } }
 
     var isPaid: Bool { paidAt != nil && releasedAt == nil }
 }
@@ -180,7 +201,9 @@ struct DriverApplicationDTO: Decodable, Equatable {
     let submitBlocker: String?
     let canEdit: Bool
     let canSubmit: Bool
-    let submittedAt: Date?
+    let submittedAt: String?
+
+    var submittedAtDate: Date? { submittedAt.flatMap { BackendDate.parse($0) } }
 
     var activeVehicle: PartnerVehicleDTO? { (vehicles ?? []).first(where: \.active) }
 }

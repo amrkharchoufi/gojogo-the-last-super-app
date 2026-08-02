@@ -31,8 +31,15 @@ struct RideOfferDTO: Decodable, Equatable, Identifiable {
     let driverId: UUID?
     let driverName: String?
     let driverAvatarUrl: String?
-    let expiresAt: Date
-    let createdAt: Date
+    /// Strings, not `Date`s — the shared decoder has no date strategy. Both are
+    /// always populated, so a `Date` here means no counteroffer ever decodes.
+    let expiresAt: String
+    let createdAt: String
+
+    /// An unparseable expiry reads as already gone: a counteroffer stuck on
+    /// screen is worse than one that vanishes a moment early.
+    var expiresAtDate: Date { BackendDate.parse(expiresAt) ?? .distantPast }
+    var createdAtDate: Date? { BackendDate.parse(createdAt) }
 }
 
 /// The ride, from whichever side is looking at it.
@@ -73,7 +80,7 @@ struct RideDTO: Decodable, Equatable, Identifiable {
     /// never be a stale copy.
     let driverLatitude: Double?
     let driverLongitude: Double?
-    let driverPositionAt: Date?
+    let driverPositionAt: String?
     let conversationId: UUID?
     let offers: [RideOfferDTO]?
     let myRating: Int?
@@ -83,13 +90,23 @@ struct RideDTO: Decodable, Equatable, Identifiable {
     /// When somebody raised an alarm on this trip. Shown to **both** parties —
     /// a driver whose passenger has pressed it needs to know, and an app that
     /// hid it would be pretending nothing happened.
-    let sosAt: Date?
-    let expiresAt: Date?
-    let requestedAt: Date?
-    let confirmedAt: Date?
-    let startedAt: Date?
-    let completedAt: Date?
+    let sosAt: String?
+    let expiresAt: String?
+    let requestedAt: String?
+    let confirmedAt: String?
+    let startedAt: String?
+    let completedAt: String?
     let cancelReason: String?
+
+    // Parsed on demand. Every timestamp on a ride is set by the event that
+    // *advances* it, so as `Date`s these broke the trip one state at a time.
+    var driverPositionAtDate: Date? { driverPositionAt.flatMap { BackendDate.parse($0) } }
+    var sosAtDate: Date? { sosAt.flatMap { BackendDate.parse($0) } }
+    var expiresAtDate: Date? { expiresAt.flatMap { BackendDate.parse($0) } }
+    var requestedAtDate: Date? { requestedAt.flatMap { BackendDate.parse($0) } }
+    var confirmedAtDate: Date? { confirmedAt.flatMap { BackendDate.parse($0) } }
+    var startedAtDate: Date? { startedAt.flatMap { BackendDate.parse($0) } }
+    var completedAtDate: Date? { completedAt.flatMap { BackendDate.parse($0) } }
 
     /// Still looking for somebody.
     var isSearching: Bool { state == "REQUESTED" || state == "NEGOTIATING" }
@@ -103,7 +120,7 @@ struct RideDTO: Decodable, Equatable, Identifiable {
     /// Live counteroffers, freshest first. A rider sees all of them; a driver
     /// sees only their own.
     var liveOffers: [RideOfferDTO] {
-        (offers ?? []).filter { $0.state == "PENDING" && $0.expiresAt > Date() }
+        (offers ?? []).filter { $0.state == "PENDING" && $0.expiresAtDate > Date() }
     }
 }
 
@@ -293,7 +310,7 @@ final class TravelStore {
 /// A public link to a live trip.
 struct ShareTripDTO: Decodable, Equatable {
     let url: String
-    let expiresAt: Date?
+    let expiresAt: String?
     /// Whether anybody actually opened it — the one question a person who
     /// shared a trip asks.
     let viewCount: Int
@@ -301,6 +318,8 @@ struct ShareTripDTO: Decodable, Equatable {
     /// than here because the wording of a safety message is not a place for
     /// every client to have its own idea.
     let message: String
+
+    var expiresAtDate: Date? { expiresAt.flatMap { BackendDate.parse($0) } }
 }
 
 /// What comes back from pressing SOS.
@@ -316,7 +335,9 @@ struct SosDTO: Decodable, Equatable {
     /// How many were reached by push — the contacts who are also GojoGo
     /// accounts, and usually fewer than the list.
     let notifiedCount: Int
-    let raisedAt: Date?
+    let raisedAt: String?
+
+    var raisedAtDate: Date? { raisedAt.flatMap { BackendDate.parse($0) } }
 
     /// The ones nobody could push to, which is who the message composer is for.
     var unreachable: [EmergencyContactDTO] { contacts.filter { $0.linkedProfileId == nil } }
