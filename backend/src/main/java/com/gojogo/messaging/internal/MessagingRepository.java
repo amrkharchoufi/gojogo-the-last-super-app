@@ -16,6 +16,8 @@ import software.amazon.awssdk.services.dynamodb.model.Delete;
 import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryResponse;
+import software.amazon.awssdk.services.dynamodb.model.ScanRequest;
+import software.amazon.awssdk.services.dynamodb.model.ScanResponse;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 import software.amazon.awssdk.services.dynamodb.model.Update;
@@ -958,12 +960,55 @@ class MessagingRepository {
     }
 
     /** Rewrites who a post was fanned out to, on the author's copy. */
-    private void recordViewers(StoredContent c, List<UUID> viewers) {
+    void recordViewers(StoredContent c, List<UUID> viewers) {
         String viewerJson = writeJson(viewers);
         db().updateItem(r -> r.tableName(table)
             .key(Map.of("pk", s("WORLDPOST#" + c.authorId()), "sk", s(contentSk(c))))
             .updateExpression("SET viewerJson = :v")
             .expressionAttributeValues(Map.of(":v", s(viewerJson))));
+    }
+
+    // ---- one-off reconciliation (see WorldAudienceReconciler) --------------
+
+    /** Every author's own copy of everything they ever published. */
+    List<StoredContent> scanAllAuthorContent() {
+        List<StoredContent> out = new ArrayList<>();
+        Map<String, AttributeValue> start = null;
+        do {
+            ScanRequest.Builder q = ScanRequest.builder()
+                .tableName(table)
+                .filterExpression("begins_with(pk, :p)")
+                .expressionAttributeValues(Map.of(":p", s("WORLDPOST#")));
+            if (start != null && !start.isEmpty()) q.exclusiveStartKey(start);
+            ScanResponse resp = db().scan(q.build());
+            for (var it : resp.items()) out.add(readContent(it));
+            start = resp.lastEvaluatedKey();
+        } while (start != null && !start.isEmpty());
+        return out;
+    }
+
+    /** One reader's copy of one post — the unit this whole model is made of. */
+    void putFeedCopy(UUID viewerId, StoredContent c) {
+        db().putItem(r -> r.tableName(table).item(
+            contentItem("WORLDFEED#" + viewerId, contentSk(c), c, false)));
+    }
+
+    void deleteFeedCopy(UUID viewerId, StoredContent c) {
+        db().deleteItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDFEED#" + viewerId), "sk", s(contentSk(c)))));
+    }
+
+    boolean migrationDone(String id) {
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("WORLDMIGRATION#" + id), "sk", s("DONE")))).item();
+        return item != null && !item.isEmpty();
+    }
+
+    void markMigrationDone(String id, String summary) {
+        db().putItem(r -> r.tableName(table).item(Map.of(
+            "pk", s("WORLDMIGRATION#" + id), "sk", s("DONE"),
+            "ranAt", s(Instant.now().toString()),
+            "summary", s(summary))));
     }
 
     /** Removes the author's copy and every copy it was actually fanned out to. */
