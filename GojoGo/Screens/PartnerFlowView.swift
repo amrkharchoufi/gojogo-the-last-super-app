@@ -198,8 +198,13 @@ private struct PartnerRulesPage: View {
                  detail: "Never work impaired. Follow all local traffic and safety laws at all times."),
         ]
         if role == .driver {
-            base.insert(Rule(icon: "car.fill", title: "Valid car & papers",
-                             detail: "A roadworthy vehicle, a valid licence, and up-to-date registration (carte grise)."),
+            // "(carte grise)" used to be in here, which is what the document is
+            // called in Morocco and in France and nowhere else. The rule is the
+            // same everywhere; the name on the paper is not, so the name is left
+            // to the form — where the country is known — and the rule says what
+            // it means.
+            base.insert(Rule(icon: "car.fill", title: "Valid vehicle & papers",
+                             detail: "A roadworthy vehicle, a valid driving licence, and current registration and insurance."),
                         at: 1)
         }
         return base
@@ -227,6 +232,18 @@ private struct PartnerRulesPage: View {
         .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
     }
 
+    /// The stake in the currency the server actually charges it in.
+    ///
+    /// This page hardcoded "$30" twice while the page after it read the amount
+    /// and the currency off the application — so a driver in a market billed in
+    /// dirhams or naira agreed to one number on the rules screen and was asked
+    /// for a different one on the next. The constant survives only as the value
+    /// to show before the application has loaded.
+    private var stakeLabel: String {
+        guard let stake = app.driverStake else { return "$\(Int(PartnerRole.stakeAmount))" }
+        return WalletStore.money(stake.requiredMinor, currency: stake.currency)
+    }
+
     private var stakeNote: some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: "lock.shield.fill")
@@ -235,7 +252,7 @@ private struct PartnerRulesPage: View {
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(GGColor.white))
             VStack(alignment: .leading, spacing: 3) {
-                Text("A $\(Int(PartnerRole.stakeAmount)) refundable stake")
+                Text("A \(stakeLabel) refundable stake")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(GGColor.textPrimary)
                 Text("Held as a good-conduct deposit. If a \(role.earner.dropLast()) is wronged, it can be released to them as compensation. You get it back when you leave in good standing.")
@@ -258,7 +275,7 @@ private struct PartnerRulesPage: View {
                 Image(systemName: app.partnerAgreedToTerms ? "checkmark.square.fill" : "square")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(app.partnerAgreedToTerms ? GGColor.white : GGColor.textTertiary)
-                Text("I've read and agree to the Partner Terms, the community rules, and the $\(Int(PartnerRole.stakeAmount)) stake policy.")
+                Text("I've read and agree to the Partner Terms, the community rules, and the \(stakeLabel) stake policy.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(GGColor.textPrimary)
                     .multilineTextAlignment(.leading)
@@ -466,6 +483,9 @@ private struct PartnerKYCPage: View {
     @State private var showLibrary = false
     @State private var showCamera = false
     @State private var libraryItem: PhotosPickerItem?
+    /// Where the vehicle is registered, and which expiry date is being set.
+    @State private var choosingCountry = false
+    @State private var editingDate: DateField?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -495,6 +515,12 @@ private struct PartnerKYCPage: View {
                 pendingDocument = nil
                 Task { await upload(data, kind: kind) }
             }))
+        .sheet(isPresented: $choosingCountry) {
+            CountryPickerSheet(selected: $app.partnerApplication.vehicleCountry)
+        }
+        .sheet(item: $editingDate) { field in
+            ExpiryDateSheet(title: field.title, iso: binding(for: field))
+        }
     }
 
     private var intro: some View {
@@ -688,7 +714,7 @@ private struct PartnerKYCPage: View {
                 Text("You're all set")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(GGColor.textPrimary)
-                Text("Trottinettes don't need a driver's licence or vehicle registration — just your verified ID.")
+                Text("E-scooters don't need a driving licence or vehicle papers anywhere we operate — just your verified ID.")
                     .font(.system(size: 13))
                     .foregroundStyle(GGColor.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -733,18 +759,23 @@ private struct PartnerKYCPage: View {
                     fieldRow(title: "Colour", placeholder: "White",
                              text: $app.partnerApplication.vehicleColor)
                 }
-                fieldRow(title: "Licence plate", placeholder: "12345 - أ - 6",
+                // Country first, because it decides what the two fields under it
+                // are called and whether the second one exists at all.
+                countryRow
+                fieldRow(title: "Licence plate", placeholder: plateRules.plateExample,
                          text: $app.partnerApplication.plate, autocaps: .characters)
-                // Plates are unique per *region*, never globally — the same
-                // string is a different car in another country, which is why
-                // the server refuses a duplicate only within one.
-                fieldRow(title: "Registered in", placeholder: "Casablanca",
-                         text: $app.partnerApplication.vehicleRegion)
+                // Asked only where a plate is issued by a state or a province.
+                // Everywhere else plates are national, and a city here would be
+                // an address pretending to be part of an identifier — two
+                // spellings of one town landing in two uniqueness scopes.
+                if let subdivision = plateRules.subdivisionLabel {
+                    fieldRow(title: subdivision,
+                             placeholder: plateRules.subdivisionExample ?? subdivision,
+                             text: $app.partnerApplication.vehicleRegion)
+                }
                 HStack(spacing: 10) {
-                    fieldRow(title: "Registration expires", placeholder: "2027-04-30",
-                             text: $app.partnerApplication.registrationExpiresOn)
-                    fieldRow(title: "Insurance expires", placeholder: "2027-01-15",
-                             text: $app.partnerApplication.insuranceExpiresOn)
+                    dateRow(title: "Registration expires", field: .registration)
+                    dateRow(title: "Insurance expires", field: .insurance)
                 }
                 // These two are real uploads into the private prefix — the same
                 // place an ID card goes, and never a public URL. A driver has to
@@ -752,7 +783,7 @@ private struct PartnerKYCPage: View {
                 // car rather than to an application.
                 documentTile(kind: VehicleDocumentKind.registration,
                              title: "Vehicle registration",
-                             subtitle: "Carte grise — matching the plate above",
+                             subtitle: registrationHint,
                              icon: "doc.text.fill")
                 documentTile(kind: VehicleDocumentKind.insurance,
                              title: "Insurance certificate",
@@ -760,6 +791,56 @@ private struct PartnerKYCPage: View {
                              icon: "shield.lefthalf.filled")
             }
         }
+    }
+
+    private var plateRules: VehicleRegistry.Rules {
+        VehicleRegistry.rules(for: app.partnerApplication.vehicleCountry)
+    }
+
+    /// "Carte grise — matching the plate above" where that is what the document
+    /// is called, and just the plain instruction where the local name for it is
+    /// the plain one. Repeating "vehicle registration" under a tile titled
+    /// "Vehicle registration" says nothing.
+    private var registrationHint: String {
+        let local = plateRules.registrationName
+        guard local != "vehicle registration" else { return "Matching the plate above" }
+        return "\(local.prefix(1).uppercased())\(local.dropFirst()) — matching the plate above"
+    }
+
+    private var countryRow: some View {
+        let code = app.partnerApplication.vehicleCountry
+        return VStack(alignment: .leading, spacing: 5) {
+            Text("REGISTERED IN")
+                .font(.ggMono(9, .semibold))
+                .tracking(0.4)
+                .foregroundStyle(GGColor.textTertiary)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                choosingCountry = true
+            } label: {
+                HStack(spacing: 8) {
+                    Text(code.isEmpty ? "Choose a country"
+                         : "\(VehicleRegistry.flag(code))  \(VehicleRegistry.name(of: code))")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(code.isEmpty ? GGColor.textTertiary : GGColor.textPrimary)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(GGColor.ink(0.06)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(GGColor.ink(0.08), lineWidth: 0.5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // Courier — vehicle type
@@ -851,6 +932,93 @@ private struct PartnerKYCPage: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// A date on a document, picked rather than typed.
+    ///
+    /// These two were text fields asking for `2027-04-30`, which is a format
+    /// almost nobody writes by hand: most of the world types 30/04/2027 and much
+    /// of the Americas types 04/30/2027. Both were refused, and the refusal
+    /// arrived at submit — long after the mistake, with no clue which of the two
+    /// fields was wrong.
+    ///
+    /// A picker cannot produce an invalid date and shows it in the reader's own
+    /// calendar and language, while what travels stays the ISO string the API
+    /// speaks. It reads "Select a date" until one is actually chosen, because
+    /// this whole screen's original sin was controls that looked answered
+    /// before anybody had answered them.
+    private func dateRow(title: String, field: DateField) -> some View {
+        let iso = binding(for: field).wrappedValue
+        return VStack(alignment: .leading, spacing: 5) {
+            Text(title.uppercased())
+                .font(.ggMono(9, .semibold))
+                .tracking(0.4)
+                .foregroundStyle(GGColor.textTertiary)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                editingDate = field
+            } label: {
+                HStack(spacing: 6) {
+                    Text(iso.isEmpty ? "Select a date" : Self.readable(iso))
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(iso.isEmpty ? GGColor.textTertiary : GGColor.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 0)
+                    Image(systemName: "calendar")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(GGColor.ink(0.06)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(GGColor.ink(0.08), lineWidth: 0.5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Which of the two expiry dates a sheet is editing. An enum rather than the
+    /// binding itself because `sheet(item:)` needs something identifiable, and
+    /// two dates is not enough to justify anything cleverer.
+    enum DateField: String, Identifiable {
+        case registration, insurance
+        var id: String { rawValue }
+        var title: String {
+            self == .registration ? "Registration expires" : "Insurance expires"
+        }
+    }
+
+    private func binding(for field: DateField) -> Binding<String> {
+        switch field {
+        case .registration: return $app.partnerApplication.registrationExpiresOn
+        case .insurance:    return $app.partnerApplication.insuranceExpiresOn
+        }
+    }
+
+    /// The stored `yyyy-MM-dd` as the reader would write it — their calendar,
+    /// their month names, their order.
+    private static func readable(_ iso: String) -> String {
+        guard let date = isoFormatter.date(from: iso) else { return iso }
+        return date.formatted(.dateTime.day().month(.abbreviated).year())
+    }
+
+    /// Fixed POSIX locale, Gregorian, UTC — never the device's. The wire format
+    /// is a Gregorian ISO date, and formatting one through a Persian, Buddhist
+    /// or Japanese-era calendar would send the server a year it cannot read.
+    static let isoFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 
     /// A vehicle paper — a claim about the car, so whether it has arrived is
     /// read off the car.
@@ -977,6 +1145,114 @@ private struct PartnerKYCPage: View {
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+}
+
+// MARK: - Where the car is registered
+
+/// Every country, searchable, in the reader's own language and sort order.
+///
+/// A full list rather than the handful the platform launched in: a driver whose
+/// country isn't on a list can't correct it, and "we only know about these
+/// eleven places" is precisely the assumption this screen was carrying.
+private struct CountryPickerSheet: View {
+    @Binding var selected: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var matches: [VehicleRegistry.Country] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return VehicleRegistry.countries }
+        return VehicleRegistry.countries.filter {
+            $0.name.localizedCaseInsensitiveContains(trimmed)
+                || $0.code.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(matches) { country in
+                Button {
+                    selected = country.code
+                    dismiss()
+                } label: {
+                    HStack(spacing: 12) {
+                        Text(VehicleRegistry.flag(country.code))
+                        Text(country.name)
+                            .foregroundStyle(GGColor.textPrimary)
+                        Spacer(minLength: 0)
+                        if country.code == selected {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(GGColor.textPrimary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .listRowBackground(Color.clear)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(GGColor.sheetBG.ignoresSafeArea())
+            .searchable(text: $query, prompt: "Search countries")
+            .navigationTitle("Registered in")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// One expiry date, on a wheel that cannot produce an invalid one.
+///
+/// The range starts today: a registration that expired last month is not an
+/// expiry date somebody is entering on purpose, and the server refuses it
+/// anyway — better to make it unreachable than to reject it two screens later.
+private struct ExpiryDateSheet: View {
+    let title: String
+    @Binding var iso: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var date = Date()
+
+    var body: some View {
+        NavigationStack {
+            DatePicker(title, selection: $date, in: Date()...,
+                       displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .tint(GGColor.white)
+                .labelsHidden()
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(GGColor.sheetBG.ignoresSafeArea())
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            iso = PartnerKYCPage.isoFormatter.string(from: date)
+                            dismiss()
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+        .onAppear {
+            // Opens on what's already recorded, or a year out — roughly when
+            // papers renewed today would lapse, so the first spin is a short one.
+            // Clamped forward, because a date already recorded may have expired
+            // since, and starting the wheel outside its own range is undefined.
+            let stored = PartnerKYCPage.isoFormatter.date(from: iso)
+                ?? Calendar(identifier: .gregorian)
+                    .date(byAdding: .year, value: 1, to: Date()) ?? Date()
+            date = max(stored, Date())
+        }
     }
 }
 

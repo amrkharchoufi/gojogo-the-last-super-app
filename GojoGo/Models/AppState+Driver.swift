@@ -92,6 +92,12 @@ extension AppState {
         partnerApplication.vehicleYear = vehicle.year.map { String($0) } ?? ""
         partnerApplication.vehicleColor = vehicle.color
         partnerApplication.plate = vehicle.plate
+        // Falls back to the device rather than to blank: a vehicle saved before
+        // the country field existed is one the old app could only have meant
+        // locally, and an empty picker is a step backwards from a good guess.
+        partnerApplication.vehicleCountry = vehicle.country.flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? partnerApplication.vehicleCountry
         partnerApplication.vehicleRegion = vehicle.region
         partnerApplication.registrationExpiresOn = vehicle.registrationExpiresOn ?? ""
         partnerApplication.insuranceExpiresOn = vehicle.insuranceExpiresOn ?? ""
@@ -177,7 +183,14 @@ extension AppState {
             year: Int(form.vehicleYear.trimmingCharacters(in: .whitespaces)),
             color: form.vehicleColor.trimmingCharacters(in: .whitespaces),
             plate: form.plate.trimmingCharacters(in: .whitespaces),
-            region: form.vehicleRegion.trimmingCharacters(in: .whitespaces),
+            country: form.vehicleCountry,
+            // Sent only where it is part of the plate. Everywhere else it stays
+            // empty on purpose — the server scopes plate uniqueness by country
+            // and subdivision, so a city typed into it would put two spellings
+            // of the same town into two different scopes and let one car be
+            // registered twice.
+            region: VehicleRegistry.rules(for: form.vehicleCountry).asksForSubdivision
+                ? form.vehicleRegion.trimmingCharacters(in: .whitespaces) : "",
             registrationExpiresOn: Self.trimmedOrNil(form.registrationExpiresOn),
             insuranceExpiresOn: Self.trimmedOrNil(form.insuranceExpiresOn),
             photoUrls: nil)

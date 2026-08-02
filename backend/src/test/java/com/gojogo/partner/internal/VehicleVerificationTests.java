@@ -84,7 +84,7 @@ class VehicleVerificationTests {
 
         vehicle = new Vehicle(account.getId(), DRIVER, "CAR");
         set(vehicle, "id", UUID.randomUUID());
-        vehicle.apply("CAR", "Dacia", "Logan", 2021, "White", "12345-A-6", "Casablanca",
+        vehicle.apply("CAR", "Dacia", "Logan", 2021, "White", "12345-A-6", "MA", "Casablanca",
             null, null);
         vehicle.approve("Papers look right");
 

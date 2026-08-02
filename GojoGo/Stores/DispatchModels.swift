@@ -148,6 +148,10 @@ struct PartnerVehicleDTO: Decodable, Equatable, Identifiable {
     let year: Int?
     let color: String
     let plate: String
+    /// ISO 3166-1 alpha-2 — where the plate was issued, which is what makes it
+    /// unique. Optional so an application written before the field existed still
+    /// decodes.
+    let country: String?
     let region: String
     /// SUBMITTED | APPROVED | COMMUNITY_VERIFIED | FLAGGED | RETIRED
     let state: String
@@ -172,6 +176,7 @@ struct SaveVehicleBody: Encodable {
     var year: Int?
     var color: String
     var plate: String
+    var country: String
     var region: String
     /// `yyyy-MM-dd`, because a certificate expires on a day.
     var registrationExpiresOn: String?

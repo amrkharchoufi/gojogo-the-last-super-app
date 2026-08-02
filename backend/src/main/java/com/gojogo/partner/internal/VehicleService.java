@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -46,6 +47,8 @@ class VehicleService {
 
     private static final Set<VehicleState> ROADWORTHY =
         EnumSet.of(VehicleState.APPROVED, VehicleState.COMMUNITY_VERIFIED);
+
+    private static final Set<String> ISO_COUNTRIES = Set.of(Locale.getISOCountries());
 
     private final VehicleRepository vehicles;
     private final VehicleDocumentRepository documents;
@@ -114,6 +117,12 @@ class VehicleService {
         if (!requiresPapers(active)) return Optional.empty();
         if (active.getPlate().isBlank()) {
             return Optional.of("add your number plate");
+        }
+        // A plate without the country that issued it is not an identifier: the
+        // uniqueness index is scoped by country, so a blank one would let the
+        // same car be registered twice under two different countries of nothing.
+        if (active.getCountry().isBlank()) {
+            return Optional.of("say where your vehicle is registered");
         }
         Set<VehicleDocumentKind> have = documents
             .findByVehicleIdOrderByKindAsc(active.getId()).stream()
@@ -234,7 +243,7 @@ class VehicleService {
                 "That vehicle has been retired");
         }
         vehicle.apply(category.name(), request.make(), request.model(), request.year(),
-            request.color(), request.plate(), request.region(),
+            request.color(), request.plate(), parseCountry(request.country()), request.region(),
             parseDate(request.registrationExpiresOn(), "registration"),
             parseDate(request.insuranceExpiresOn(), "insurance"));
         // The first vehicle somebody adds is the one they're driving. Making
@@ -429,6 +438,26 @@ class VehicleService {
         return Optional.empty();
     }
 
+    /**
+     * The country a plate was issued in, ISO 3166-1 alpha-2.
+     *
+     * <p>Checked against the JDK's own list rather than a hand-written one: the
+     * point of this field is that the platform works everywhere, and a hardcoded
+     * set of countries somebody thought of on a Tuesday is exactly the shape of
+     * the assumption being removed. Blank is allowed — a trottinette has no
+     * plate to have issued anywhere, and {@link #whatBlocksSubmission} is where
+     * a car without one is refused.
+     */
+    private static String parseCountry(String code) {
+        if (code == null || code.isBlank()) return "";
+        String wanted = code.trim().toUpperCase();
+        if (!ISO_COUNTRIES.contains(wanted)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "That isn't a country code — use two letters, like MA or FR");
+        }
+        return wanted;
+    }
+
     private static VehicleDocumentKind parseDocumentKind(String name) {
         try {
             return VehicleDocumentKind.valueOf(name.trim().toUpperCase());
@@ -465,7 +494,8 @@ class VehicleService {
         missing.removeAll(have);
         return new VehicleDto(vehicle.getId(), vehicle.getCategory(), vehicle.getMake(),
             vehicle.getModel(), vehicle.getYear(), vehicle.getColor(), vehicle.getPlate(),
-            vehicle.getRegion(), vehicle.getState().name(), vehicle.isActive(),
+            vehicle.getCountry(), vehicle.getRegion(),
+            vehicle.getState().name(), vehicle.isActive(),
             vehicle.getRegistrationExpiresOn() == null ? null
                 : vehicle.getRegistrationExpiresOn().toString(),
             vehicle.getInsuranceExpiresOn() == null ? null

@@ -55,6 +55,26 @@ class Vehicle {
     @Column(nullable = false, length = 20)
     private String plate = "";
 
+    /**
+     * Where the plate was issued, ISO 3166-1 alpha-2.
+     *
+     * <p>This, not {@link #region}, is what makes a plate unique. A city misses
+     * duplicates within one country (a plate issued nationally is the same car
+     * whichever city you type) and invents them across borders (Rabat is in both
+     * Morocco and Malta).
+     */
+    @Column(nullable = false, length = 2)
+    private String country = "";
+
+    /**
+     * The state or province that issued the plate, where one did — empty
+     * everywhere plates are national, which is most of the world.
+     *
+     * <p>Part of the plate's identity only in the countries that subdivide it:
+     * Texas ABC-1234 is genuinely not California ABC-1234. The app asks for it
+     * exactly there and leaves it blank otherwise, so the uniqueness index reads
+     * the same either way.
+     */
     @Column(nullable = false, length = 60)
     private String region = "";
 
@@ -101,10 +121,14 @@ class Vehicle {
      * old verdict is the whole shape of the fraud this check exists to catch.
      */
     void apply(String category, String make, String model, Integer year, String color,
-               String plate, String region, LocalDate registrationExpiresOn,
-               LocalDate insuranceExpiresOn) {
+               String plate, String country, String region,
+               LocalDate registrationExpiresOn, LocalDate insuranceExpiresOn) {
+        // Country belongs in here with the plate: "ABC-123, Morocco" and
+        // "ABC-123, France" are two cars, so changing it describes a different
+        // one and the old verdict cannot follow.
         boolean identityChanged = !this.category.equals(category)
             || !this.plate.equalsIgnoreCase(orEmpty(plate))
+            || !this.country.equalsIgnoreCase(orEmpty(country))
             || !this.region.equalsIgnoreCase(orEmpty(region));
         this.category = category;
         this.make = orEmpty(make);
@@ -112,6 +136,7 @@ class Vehicle {
         this.year = year;
         this.color = orEmpty(color);
         this.plate = orEmpty(plate);
+        this.country = orEmpty(country).toUpperCase();
         this.region = orEmpty(region);
         this.registrationExpiresOn = registrationExpiresOn;
         this.insuranceExpiresOn = insuranceExpiresOn;
@@ -210,6 +235,7 @@ class Vehicle {
     Integer getYear() { return year; }
     String getColor() { return color; }
     String getPlate() { return plate; }
+    String getCountry() { return country; }
     String getRegion() { return region; }
     VehicleState getState() { return state; }
     boolean isActive() { return active; }

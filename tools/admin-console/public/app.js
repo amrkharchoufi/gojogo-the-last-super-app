@@ -257,7 +257,11 @@ function partnerDetail(row) {
     card.append(el('dl', { className: 'kv' },
       el('dt', {}, 'vehicle'), el('dd', {},
         [v.color, v.make, v.model, v.year].filter(Boolean).join(' ') || '—'),
-      el('dt', {}, 'plate'), el('dd', { className: 'mono' }, `${v.plate || '—'} (${v.region || 'no region'})`),
+      // Country, then the subdivision where the plate has one — together they
+      // are what makes the plate unique, and the reviewer is checking it against
+      // a photograph taken somewhere specific.
+      el('dt', {}, 'plate'), el('dd', { className: 'mono' },
+        `${v.plate || '—'} (${[v.country, v.region].filter(Boolean).join(' · ') || 'nowhere given'})`),
       el('dt', {}, 'state'), el('dd', {},
         badge(v.state.toLowerCase(), v.state === 'APPROVED' || v.state === 'COMMUNITY_VERIFIED'
           ? 'badge-ok' : v.state === 'FLAGGED' ? 'badge-bad' : 'badge-pending')),

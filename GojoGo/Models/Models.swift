@@ -1483,7 +1483,11 @@ enum CourierVehicle: String, CaseIterable, Identifiable {
 enum DriverVehicle: String, CaseIterable, Identifiable {
     case car = "Car"
     case motorcycle = "Motorcycle"
-    case trottinette = "Trottinette"
+    /// Called a trottinette in the country this app was written in, and a
+    /// kickscooter, e-scooter or patinete elsewhere. "E-scooter" is the label
+    /// most riders will recognise wherever they are; the case keeps its original
+    /// name because renaming it would say nothing new about the vehicle.
+    case trottinette = "E-scooter"
 
     var id: String { rawValue }
     var icon: String {
@@ -1493,7 +1497,7 @@ enum DriverVehicle: String, CaseIterable, Identifiable {
         case .trottinette: return "scooter"
         }
     }
-    /// Cars & motorcycles need a licence + registration; trottinettes don't.
+    /// Cars & motorcycles need a licence + registration; e-scooters don't.
     var requiresLicense: Bool { self != .trottinette }
 
     /// The same vehicle in `dispatch`'s vocabulary — what the server matches a
@@ -1531,8 +1535,13 @@ struct PartnerApplication: Equatable {
     var vehicleYear: String = ""
     var vehicleColor: String = ""
     var plate: String = ""
-    /// Plates are unique per region, never globally — the same string is a
-    /// different car in another country.
+    /// Where the plate was issued, ISO 3166-1 alpha-2. Defaulted from the device
+    /// and never assumed: somebody who moved still drives a car registered where
+    /// they came from, and a plate belongs to the car rather than to the phone.
+    var vehicleCountry: String = VehicleRegistry.deviceCountry
+    /// The state or province that issued it, where one did. Empty everywhere
+    /// plates are national — which is most of the world, and why the form only
+    /// asks for this in the countries whose plates carry one.
     var vehicleRegion: String = ""
     /// `yyyy-MM-dd`. Papers expire on a day, and the server flags a vehicle
     /// whose earlier date has passed (plus a grace period).
@@ -1560,6 +1569,13 @@ struct PartnerApplication: Equatable {
                 && !vehicleMake.trimmingCharacters(in: .whitespaces).isEmpty
                 && !vehicleModel.trimmingCharacters(in: .whitespaces).isEmpty
                 && !plate.trimmingCharacters(in: .whitespaces).isEmpty
+                // A plate without the country that issued it isn't an
+                // identifier: the same string is a different car elsewhere.
+                && !vehicleCountry.isEmpty
+                // …and in the countries that issue plates by state, which state
+                // is part of the plate rather than an address.
+                && (!VehicleRegistry.rules(for: vehicleCountry).asksForSubdivision
+                    || !vehicleRegion.trimmingCharacters(in: .whitespaces).isEmpty)
                 // The server refuses a vehicle whose papers have no end date —
                 // it can't tell a current registration from a lapsed one — so
                 // the two date fields are as required as the plate is.

@@ -76,7 +76,7 @@ record MyPartnerResponse(PartnerAccountDto account) {
  *                      server's rule rendered rather than a second copy of it
  */
 record VehicleDto(UUID id, String category, String make, String model, Integer year,
-                  String color, String plate, String region,
+                  String color, String plate, String country, String region,
                   String state, boolean active,
                   String registrationExpiresOn, String insuranceExpiresOn,
                   boolean papersExpired, String reviewNote,
@@ -92,6 +92,8 @@ record SaveVehicleRequest(@NotBlank @Size(max = 16) String category,
                           Integer year,
                           @Size(max = 30) String color,
                           @Size(max = 20) String plate,
+                          /** ISO 3166-1 alpha-2, where the plate was issued. */
+                          @Size(max = 2) String country,
                           @Size(max = 60) String region,
                           @Size(max = 10) String registrationExpiresOn,
                           @Size(max = 10) String insuranceExpiresOn,
