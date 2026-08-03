@@ -1692,6 +1692,10 @@ struct PartnerJob: Identifiable, Equatable {
     var pickupLon: Double
     var dropoffLat: Double
     var dropoffLon: Double
+    /// The `travel` ride behind this card, when the job is a real RIDE offer —
+    /// what makes the fare readable and a counteroffer possible. Nil for demo
+    /// jobs and deliveries.
+    var rideId: UUID?
 
     init(id: UUID = UUID(), role: PartnerRole, customerName: String,
          pickupName: String, pickupSubtitle: String,
@@ -1700,7 +1704,8 @@ struct PartnerJob: Identifiable, Equatable {
          customerAvatarURL: String? = nil,
          originLat: Double = 33.5731, originLon: Double = -7.5898,
          pickupLat: Double = 33.5731, pickupLon: Double = -7.5898,
-         dropoffLat: Double = 33.5731, dropoffLon: Double = -7.5898) {
+         dropoffLat: Double = 33.5731, dropoffLon: Double = -7.5898,
+         rideId: UUID? = nil) {
         self.id = id; self.role = role; self.customerName = customerName
         self.pickupName = pickupName; self.pickupSubtitle = pickupSubtitle
         self.dropoffName = dropoffName; self.dropoffSubtitle = dropoffSubtitle
@@ -1709,6 +1714,7 @@ struct PartnerJob: Identifiable, Equatable {
         self.originLat = originLat; self.originLon = originLon
         self.pickupLat = pickupLat; self.pickupLon = pickupLon
         self.dropoffLat = dropoffLat; self.dropoffLon = dropoffLon
+        self.rideId = rideId
     }
 
     /// A dispatch offer carries no fare — the money belongs to the vertical

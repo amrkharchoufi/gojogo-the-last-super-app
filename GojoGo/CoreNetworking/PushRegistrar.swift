@@ -7,8 +7,11 @@ final class PushRegistrar {
 
     static let shared = PushRegistrar()
 
-    /// Set by AppState so an incoming/tapped push can refresh the activity feed.
-    var onPushReceived: (() -> Void)?
+    /// Set by AppState so an incoming/tapped push can refresh what it is about.
+    /// Carries the APNs payload's userInfo: the `type` field is how a dispatch
+    /// offer refreshes the offer book *now* rather than on the next poll —
+    /// without it, the phone rings seconds before the card it announced exists.
+    var onPushReceived: (([AnyHashable: Any]) -> Void)?
 
     private let queue = DispatchQueue(label: "push.registrar")
     private var deviceToken: String?

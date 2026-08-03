@@ -262,6 +262,14 @@ final class TravelStore {
         try await APIClient.shared.get("/v1/travel/tokens")
     }
 
+    /// The ride behind a dispatch offer, from the driver's side — the fare, the
+    /// real distance and duration, and any negotiation already under way.
+    /// Dispatch's own offer carries none of that on purpose; this read is what
+    /// lets the offer card show money and kilometres instead of zeros.
+    func offeredRide(_ rideID: UUID) async throws -> RideDTO {
+        try await APIClient.shared.get("/v1/travel/rides/\(rideID)/offered")
+    }
+
     /// "Not at that price." Posting one is also a decline of the dispatch offer.
     func counter(_ rideID: UUID, amountMinor: Int) async throws -> RideOfferDTO {
         try await APIClient.shared.post("/v1/travel/rides/\(rideID)/offers",

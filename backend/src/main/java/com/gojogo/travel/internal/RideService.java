@@ -19,6 +19,7 @@ import com.gojogo.profile.EmergencyContactDto;
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
 import com.gojogo.share.ShareApi;
+import com.gojogo.travel.RideOfferMade;
 import com.gojogo.travel.RideStatusChanged;
 import com.gojogo.travel.SosRaised;
 import com.gojogo.travel.TripCompleted;
@@ -215,6 +216,10 @@ class RideService {
             OfferParty.DRIVER, amountMinor, round,
             OffsetDateTime.now().plusSeconds(policy.offerTtlSeconds())));
         ride.enterNegotiation();
+        // The rider gets ~30 seconds to answer and is probably not staring at
+        // the matching screen — this is what makes their phone say so.
+        events.publishEvent(new RideOfferMade(ride.getId(), ride.getRiderId(),
+            callerName(driverUserId), amountMinor, ride.getCurrency(), round));
         return toOfferDto(offer);
     }
 
@@ -250,6 +255,8 @@ class RideService {
         RideOffer mine = offers.save(new RideOffer(rideId, theirs.getDriverWorkerId(),
             theirs.getDriverUserId(), OfferParty.RIDER, amountMinor, theirs.getRound() + 1,
             OffsetDateTime.now().plusSeconds(policy.offerTtlSeconds())));
+        events.publishEvent(new RideOfferMade(ride.getId(), theirs.getDriverUserId(),
+            callerName(riderId), amountMinor, ride.getCurrency(), mine.getRound()));
         return toOfferDto(mine);
     }
 
@@ -712,6 +719,26 @@ class RideService {
         return mine.stream().map(ride -> toDto(ride, userId)).toList();
     }
 
+    /**
+     * The ride behind a dispatch offer, seen from the driver's side (fare,
+     * distance, duration, live negotiation rows) — before they are its driver.
+     *
+     * <p>Dispatch deliberately carries no fare, so without this read a driver is
+     * asked "will you do this job" with no way to see what it pays or how far it
+     * goes. Gated on the offer book the same way {@link #counter} is: only
+     * somebody dispatch actually put this trip in front of, 404 for anybody else.
+     */
+    @Transactional(readOnly = true)
+    RideDto offeredRide(UUID driverUserId, UUID rideId) {
+        Ride ride = require(rideId);
+        if (!driverUserId.equals(ride.getDriverUserId())) {
+            dispatch.offeredWorkerId(JobKind.RIDE, rideId, driverUserId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "That trip wasn't offered to you"));
+        }
+        return toDto(ride, driverUserId);
+    }
+
     /** The driver's side: rides they were offered and countered on, plus the one
      *  they are running. */
     @Transactional(readOnly = true)
@@ -921,10 +948,14 @@ class RideService {
 
     private RideDto toDto(Ride ride, UUID viewer) {
         boolean isDriver = viewer.equals(ride.getDriverUserId());
+        // Keyed on "is the rider" rather than "is the driver", because there is
+        // a third viewer: a driver dispatch has offered this ride to, before
+        // anybody is its driver. They look at it from the driver's side.
+        boolean isRider = ride.getRiderId().equals(viewer);
         WorkerPosition position = ride.getState().isLive() && ride.getDriverWorkerId() != null
             ? dispatch.positionOf(ride.getDriverWorkerId()).orElse(null) : null;
         ProfileDto other = null;
-        UUID otherId = isDriver ? ride.getRiderId() : ride.getDriverUserId();
+        UUID otherId = isRider ? ride.getDriverUserId() : ride.getRiderId();
         if (otherId != null) other = profiles.findById(otherId).orElse(null);
         boolean ratingsOut = ride.ratingsVisibleTo(viewer);
         return new RideDto(ride.getId(), ride.getState().name(), ride.getCategory(),
@@ -944,12 +975,15 @@ class RideService {
             ride.getConversationId(),
             offers.findByRideIdAndState(ride.getId(), RideOfferState.PENDING).stream()
                 .filter(o -> !o.isLapsed(OffsetDateTime.now()))
-                .filter(o -> isDriver ? o.getDriverUserId().equals(viewer) : true)
+                // The rider sees every price on the table; anybody looking from
+                // the driver's side sees only the conversation addressed to
+                // them — another driver's counter is not their business.
+                .filter(o -> isRider || o.getDriverUserId().equals(viewer))
                 .map(this::toOfferDto)
                 .toList(),
             // Blind until both are in: see Ride.ratingsVisibleTo.
-            isDriver ? ride.getRiderRating() : ride.getDriverRating(),
-            ratingsOut ? (isDriver ? ride.getDriverRating() : ride.getRiderRating()) : null,
+            isRider ? ride.getDriverRating() : ride.getRiderRating(),
+            ratingsOut ? (isRider ? ride.getRiderRating() : ride.getDriverRating()) : null,
             ride.getSosAt(),
             ride.getExpiresAt(), ride.getRequestedAt(), ride.getConfirmedAt(),
             ride.getStartedAt(), ride.getCompletedAt(), ride.getCancelReason());

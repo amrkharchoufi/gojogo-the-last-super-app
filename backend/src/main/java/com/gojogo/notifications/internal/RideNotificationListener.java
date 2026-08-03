@@ -1,5 +1,6 @@
 package com.gojogo.notifications.internal;
 
+import com.gojogo.travel.RideOfferMade;
 import com.gojogo.travel.RideStatusChanged;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -61,6 +62,23 @@ class RideNotificationListener {
             }
         }
         apns.notifySystem(event.recipientId(), title, body, "ride", event.rideId());
+    }
+
+    /**
+     * A counteroffer, in either direction. The offer lives about thirty
+     * seconds, so this push is most of the reason it can ever be answered —
+     * the person it is addressed to is not staring at the matching screen.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    void onOfferMade(RideOfferMade event) {
+        String from = event.fromName() == null || event.fromName().isBlank()
+            ? "Somebody" : event.fromName();
+        String amount = String.format("%s %.2f", event.currency(),
+            event.amountMinor() / 100d);
+        apns.notifySystem(event.recipientId(),
+            from + " offers " + amount,
+            "Their price for your trip. It expires soon — tap to answer.",
+            "ride", event.rideId());
     }
 
     private static String fare(RideStatusChanged event, String fallback) {

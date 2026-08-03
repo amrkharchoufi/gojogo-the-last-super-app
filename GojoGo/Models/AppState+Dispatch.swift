@@ -62,6 +62,17 @@ extension AppState {
         if mine.assignment?.jobKind == "DELIVERY" || courierJob != nil {
             Task { await refreshCourierJob() }
         }
+        // Same for a ride: dispatch says which job, `travel` says what the trip
+        // is. This is also how a trip accepted on another device — or before
+        // the app was killed — comes back onto the screen.
+        if mine.assignment?.jobKind == "RIDE", driverRide == nil {
+            Task { @MainActor in
+                await refreshDriverRide()
+                if let ride = driverRide, !ride.isOver, driverRidePollTask == nil {
+                    startDriverRidePolling()
+                }
+            }
+        }
     }
 
     /// Puts a real offer into the card the dashboard already draws.
@@ -88,25 +99,55 @@ extension AppState {
         }
         if partnerJob?.id == offer.id { return }
         UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        // What dispatch *can* say about a ride before travel answers: the trip's
+        // length estimated the same way the server prices it. What it must not
+        // do is show 0.0 km for a real trip while the ride read is in flight.
+        let isRide = offer.jobKind == "RIDE"
+        var tripKm = offer.distanceKm
+        var tripMinutes = 0
+        if isRide, let dropLat = offer.dropoffLatitude, let dropLon = offer.dropoffLongitude {
+            tripKm = Self.estimatedTripKm(offer.pickupLatitude, offer.pickupLongitude,
+                                          dropLat, dropLon)
+            tripMinutes = Self.estimatedTripMinutes(km: tripKm)
+        }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
             partnerJob = PartnerJob(
                 id: offer.id,
                 role: role,
-                customerName: offer.jobKind == "RIDE" ? "Rider" : "Customer",
+                customerName: isRide ? "Rider" : "Customer",
                 pickupName: offer.pickupLabel.isEmpty ? "Pickup" : offer.pickupLabel,
                 pickupSubtitle: String(format: "%.1f km away", offer.distanceKm),
                 dropoffName: offer.dropoffLabel.isEmpty ? "Destination" : offer.dropoffLabel,
                 dropoffSubtitle: offer.note,
-                distanceKm: offer.distanceKm,
-                minutes: 0,
+                distanceKm: tripKm,
+                minutes: tripMinutes,
                 fare: 0,
                 originLat: dispatchWorker(role)?.latitude ?? offer.pickupLatitude,
                 originLon: dispatchWorker(role)?.longitude ?? offer.pickupLongitude,
                 pickupLat: offer.pickupLatitude,
                 pickupLon: offer.pickupLongitude,
                 dropoffLat: offer.dropoffLatitude ?? offer.pickupLatitude,
-                dropoffLon: offer.dropoffLongitude ?? offer.pickupLongitude)
+                dropoffLon: offer.dropoffLongitude ?? offer.pickupLongitude,
+                rideId: isRide ? offer.jobRefId : nil)
             partnerJobPhase = .offer
+        }
+        if isRide { enrichRideOffer(offer) }
+    }
+
+    /// Replaces the offer card's estimates with the ride's own numbers — the
+    /// fare, the priced distance and duration, and the rider's name. Dispatch
+    /// deliberately sends none of these; `travel` answers them per ride.
+    private func enrichRideOffer(_ offer: DispatchOfferDTO) {
+        Task { @MainActor in
+            guard let ride = try? await TravelStore.shared.offeredRide(offer.jobRefId) else { return }
+            // Only touch the card if it is still showing this offer.
+            guard partnerJobPhase == .offer, var job = partnerJob, job.id == offer.id else { return }
+            job.fare = Double(ride.agreedFareMinor ?? ride.offeredFareMinor) / 100
+            job.distanceKm = Double(ride.distanceMetres) / 1000
+            job.minutes = max(1, ride.durationSeconds / 60)
+            if let rider = ride.otherPartyName, !rider.isEmpty { job.customerName = rider }
+            job.customerAvatarURL = ride.otherPartyAvatarUrl
+            withAnimation(.easeInOut(duration: 0.2)) { partnerJob = job }
         }
     }
 
@@ -202,6 +243,14 @@ extension AppState {
             // And accepting a delivery is what gives a courier an order to go
             // and collect (Phase 4 M1).
             if offer.jobKind == "DELIVERY" { await refreshCourierJob() }
+            // Accepting a ride starts a trip this screen now has to run:
+            // navigate to the rider, then to the destination, with the status
+            // buttons in between. The confirmation lands a beat after the
+            // accept (an after-commit listener), which is what the poll is for.
+            if offer.jobKind == "RIDE" {
+                await refreshDriverRide()
+                startDriverRidePolling()
+            }
         }
     }
 

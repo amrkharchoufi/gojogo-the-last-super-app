@@ -47,7 +47,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions {
-        PushRegistrar.shared.onPushReceived?()
+        PushRegistrar.shared.onPushReceived?(notification.request.content.userInfo)
         // Stay quiet for a message push about the thread the user is already
         // reading — the bubble is already on screen. Other chats still banner.
         let info = notification.request.content.userInfo
@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     // Tapping a push opens the app and refreshes the activity feed.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse) async {
-        PushRegistrar.shared.onPushReceived?()
+        PushRegistrar.shared.onPushReceived?(response.notification.request.content.userInfo)
     }
 }
 

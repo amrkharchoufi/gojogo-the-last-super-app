@@ -141,6 +141,18 @@ class TravelController {
     }
 
     /**
+     * The ride behind a dispatch offer, from the driver's side — the fare, the
+     * real distance and duration, and any negotiation already under way.
+     * Dispatch's own offer carries none of that on purpose (money belongs to the
+     * vertical), so this is where a driver deciding whether to accept or counter
+     * reads what the job actually is. 404 unless dispatch offered it to them.
+     */
+    @GetMapping("/v1/travel/rides/{rideId}/offered")
+    RideDto offered(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID rideId) {
+        return rides.offeredRide(current.require(jwt).id(), rideId);
+    }
+
+    /**
      * "Not at that price." Posting one is also a decline of the dispatch offer —
      * a driver who wants a different fare is answering no to the question
      * dispatch asked.

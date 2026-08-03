@@ -167,10 +167,27 @@ extension AppState {
 
     /// Requests notification permission and registers for APNs. The device
     /// token is sent to the backend once it arrives (see PushRegistrar); an
-    /// incoming/tapped push refreshes the activity feed.
+    /// incoming/tapped push refreshes the thing it is about, not just the feed.
     func enablePushNotifications() {
-        PushRegistrar.shared.onPushReceived = { [weak self] in
-            Task { @MainActor in await self?.refreshNotifications() }
+        PushRegistrar.shared.onPushReceived = { [weak self] info in
+            Task { @MainActor in
+                guard let self else { return }
+                await self.refreshNotifications()
+                switch info["type"] as? String {
+                case "dispatch":
+                    // A job offer lives ~30 seconds and the duty poll runs every
+                    // 4 — without this, the phone rings before the card exists.
+                    await self.refreshDispatch()
+                case "ride":
+                    // Whichever seat this account is in: the rider's live trip,
+                    // the driver's, or a negotiation waiting on the other side.
+                    if self.ride != nil { await self.refreshRide() }
+                    await self.refreshDriverRide()
+                    await self.refreshDriverNegotiation()
+                default:
+                    break
+                }
+            }
         }
         PushRegistrar.shared.markAuthenticated()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in

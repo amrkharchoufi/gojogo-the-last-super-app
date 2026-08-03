@@ -588,6 +588,18 @@ final class AppState: ObservableObject {
     var dispatchPollTask: Task<Void, Never>?
     var dispatchDutyTracking: Bool = false
 
+    // GojoTravel from the driver's seat (Phase 3 M3, wired to the dashboard).
+    // The ride behind a RIDE assignment — what the driver's trip card, its
+    // status buttons and the map guidance are drawn from.
+    @Published var driverRide: RideDTO? = nil
+    /// A ride this driver countered on, kept on screen while the rider decides.
+    @Published var driverNegotiation: RideDTO? = nil
+    /// True while a trip action (arrived / start / complete / counter) is in
+    /// flight — one at a time, because each one moves a state machine.
+    @Published var driverRideBusy: Bool = false
+    var driverRidePollTask: Task<Void, Never>?
+    var driverNegotiationPollTask: Task<Void, Never>?
+
     // Courier Mode's other half (Phase 4 M1). Dispatch finds the work; this is
     // the delivery it turned out to be — what is in the bag, which restaurant,
     // and what it pays.
@@ -3411,12 +3423,21 @@ final class AppState: ObservableObject {
     // MARK: Partner — working dashboard
 
     func openPartnerDashboard(_ role: PartnerRole) {
-        partnerJobPhase = .idle
-        partnerJob = nil
-        partnerJobProgress = 0
+        // Never reset the stage over a real trip in progress — the ride exists
+        // on the server whether or not this screen was open to watch it.
+        if driverRide == nil {
+            partnerJobPhase = .idle
+            partnerJob = nil
+            partnerJobProgress = 0
+        }
         withAnimation(.easeInOut(duration: 0.3)) { partnerDashboardRole = role }
         Task {
             await refreshDispatch()
+            // A trip picked back up (this device or another): redraw its card.
+            if let ride = driverRide {
+                applyDriverRide(ride)
+                if !ride.isOver, driverRidePollTask == nil { startDriverRidePolling() }
+            }
             // A driver who was already available when the app was killed is
             // still available as far as the server is concerned; pick the duty
             // loops back up rather than leaving them invisible.
@@ -3447,7 +3468,10 @@ final class AppState: ObservableObject {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
                 partnerOnline = goingOnline
             }
-            if !goingOnline { partnerJob = nil; partnerJobPhase = .idle }
+            // Going offline stops new offers; it must not erase a trip already
+            // accepted — that ride exists on the server whether or not the
+            // driver keeps taking work after it.
+            if !goingOnline && driverRide == nil { partnerJob = nil; partnerJobPhase = .idle }
             setDispatchAvailable(goingOnline, role: role)
             return
         }
@@ -3574,13 +3598,20 @@ final class AppState: ObservableObject {
     /// Dismiss the completed-job card and return to waiting for offers.
     func clearCompletedPartnerJob() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if driverRide != nil {
+            // A real trip: clear the ride state too, and never invent a demo
+            // offer for a registered driver — their next job comes from dispatch.
+            clearDriverRide()
+            schedulePersist()
+            return
+        }
         withAnimation(.easeInOut(duration: 0.3)) {
             partnerJob = nil
             partnerJobProgress = 0
             partnerJobPhase = .idle
         }
         schedulePersist()
-        scheduleNextOffer()
+        if !isDispatchRegistered { scheduleNextOffer() }
     }
 
     /// Label describing what the partner is doing right now (dashboard subtitle).

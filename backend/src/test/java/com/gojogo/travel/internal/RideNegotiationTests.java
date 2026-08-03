@@ -135,6 +135,44 @@ class RideNegotiationTests {
     }
 
     @Test
+    @DisplayName("the ride behind an offer is readable by the drivers it was offered to, "
+        + "and nobody else")
+    void offeredRideIsGatedOnTheOfferBook() {
+        UUID stranger = UUID.randomUUID();
+        when(dispatch.offeredWorkerId(JobKind.RIDE, ride.getId(), stranger))
+            .thenReturn(Optional.empty());
+
+        // Dispatch's own offer deliberately carries no fare, so this read is
+        // how a driver learns what the trip pays before answering.
+        RideDto seen = service.offeredRide(DRIVER, ride.getId());
+        assertThat(seen.offeredFareMinor()).isEqualTo(900);
+        assertThat(seen.distanceMetres()).isEqualTo(4_000);
+
+        assertThatThrownBy(() -> service.offeredRide(stranger, ride.getId()))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("wasn't offered to you");
+    }
+
+    @Test
+    @DisplayName("an offered driver sees their own conversation, never a rival's price")
+    void offeredViewHidesRivalCounters() {
+        RideOffer mine = offer(OfferParty.DRIVER, 1_200, 1);
+        RideOffer rivals = new RideOffer(ride.getId(), RIVAL_WORKER, RIVAL,
+            OfferParty.DRIVER, 1_100, 1, OffsetDateTime.now().plusSeconds(45));
+        set(rivals, "id", UUID.randomUUID());
+        when(offers.findByRideIdAndState(ride.getId(), RideOfferState.PENDING))
+            .thenReturn(List.of(mine, rivals));
+
+        // The rider is choosing between prices, so they see both. Each driver
+        // is in a private conversation, so they see only their own — showing a
+        // rival's number would turn the negotiation into an auction.
+        assertThat(service.get(RIDER, ride.getId()).offers()).hasSize(2);
+        assertThat(service.offeredRide(DRIVER, ride.getId()).offers())
+            .extracting(RideOfferDto::id)
+            .containsExactly(mine.getId());
+    }
+
+    @Test
     @DisplayName("a driver's second price replaces their first rather than sitting beside it")
     void aSecondCounterWithdrawsTheFirst() {
         RideOffer first = offer(OfferParty.DRIVER, 1_200, 1);

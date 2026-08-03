@@ -25,11 +25,14 @@ struct PartnerDashboardView: View {
         app.partnerJobPhase == .toPickup || app.partnerJobPhase == .toDropoff
     }
 
-    /// Stable key so we refetch when the leg endpoints change.
+    /// Stable key so we refetch when the leg endpoints change. Three decimals
+    /// (~110 m) on purpose: on a real trip the origin is the driver's live
+    /// position, and a key at GPS precision would call Mapbox Directions on
+    /// every jitter of the antenna.
     private var routeFetchKey: String {
         guard navigating, let job = app.partnerJob else { return "" }
         let a = legFrom(job), b = legTo(job)
-        return String(format: "%.5f,%.5f→%.5f,%.5f", a.latitude, a.longitude, b.latitude, b.longitude)
+        return String(format: "%.3f,%.3f→%.3f,%.3f", a.latitude, a.longitude, b.latitude, b.longitude)
     }
 
     var body: some View {
@@ -111,6 +114,7 @@ struct PartnerDashboardView: View {
                     onlineCard
                     workerWalletCard
                     stageContent
+                    negotiationCard
                     Color.clear.frame(height: 24)
                 }
                 .padding(.horizontal, 16)
@@ -408,6 +412,16 @@ struct PartnerDashboardView: View {
             .padding(20)
             .frame(maxWidth: .infinity)
             .glass(cornerRadius: 24, tint: Color.black.opacity(0.3), floating: true)
+        }
+    }
+
+    // MARK: The price on the table (driver-side negotiation, Phase 3 M3)
+
+    @ViewBuilder
+    private var negotiationCard: some View {
+        if let ride = app.driverNegotiation {
+            DriverNegotiationCard(ride: ride)
+                .id(ride.id)
         }
     }
 
@@ -1020,11 +1034,125 @@ private struct PartnerRadar: View {
     }
 }
 
+// MARK: - The price on the table (driver-side negotiation)
+
+/// What "not at that price" looks like while the rider decides. One card per
+/// negotiation, because a driver has at most one: their own pending price, and
+/// — if the rider comes back — the rider's number with a take-it button.
+private struct DriverNegotiationCard: View {
+    @EnvironmentObject var app: AppState
+    let ride: RideDTO
+
+    /// The driver's own live price on this ride.
+    private var myOffer: RideOfferDTO? {
+        ride.liveOffers.first { $0.party == "DRIVER" }
+    }
+
+    /// The rider's counter, addressed to this driver.
+    private var riderOffer: RideOfferDTO? {
+        ride.liveOffers.first { $0.party == "RIDER" }
+    }
+
+    private func money(_ minor: Int) -> String {
+        WalletStore.money(minor, currency: ride.currency)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label(riderOffer == nil ? "Your price is on the table"
+                                        : "The rider came back",
+                      systemImage: riderOffer == nil ? "hourglass" : "arrow.uturn.left")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Spacer()
+                Button {
+                    app.dismissDriverNegotiation()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(GGColor.ink(0.08)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text("\(ride.pickupLabel) → \(ride.dropoffLabel)")
+                .font(.system(size: 12))
+                .foregroundStyle(GGColor.textSecondary)
+                .lineLimit(2)
+
+            if let mine = myOffer {
+                HStack {
+                    Text("You asked \(money(mine.amountMinor))")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Spacer()
+                    Text("rider asked \(money(ride.offeredFareMinor))")
+                        .font(.ggMono(12, .medium))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+            }
+
+            if let theirs = riderOffer {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(ride.otherPartyName ?? "The rider")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(GGColor.textPrimary)
+                        Text("offers \(money(theirs.amountMinor))")
+                            .font(.system(size: 12))
+                            .foregroundStyle(GGColor.textSecondary)
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        app.takeRiderOffer(theirs)
+                    } label: {
+                        Text("Take it")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(GGColor.onAccent)
+                            .padding(.horizontal, 16).padding(.vertical, 9)
+                            .background(Capsule().fill(GGColor.white))
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(app.driverRideBusy)
+                    .opacity(app.driverRideBusy ? 0.5 : 1)
+                }
+                .padding(10)
+                .glass(cornerRadius: 14, fillOpacity: 0.05, borderOpacity: 0.08)
+            } else {
+                Text("If the rider takes your price, the trip starts here. If they counter, you'll see their number.")
+                    .explanatory(12)
+                    .foregroundStyle(GGColor.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glass(cornerRadius: 20, fillOpacity: 0.05, borderOpacity: 0.08)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
 // MARK: - Incoming request card
 
 private struct PartnerOfferCard: View {
     @EnvironmentObject var app: AppState
     let job: PartnerJob
+
+    /// The counteroffer field, open or not. Local state, reset with the card —
+    /// a price typed for one trip must never survive into the next.
+    @State private var countering = false
+    @State private var counterText = ""
+    @FocusState private var counterFocused: Bool
+
+    /// A real ride can be countered; a delivery or a demo job cannot.
+    private var canCounter: Bool { job.role == .driver && job.rideId != nil }
+
+    private var counterAmountMinor: Int {
+        Int((Double(counterText.replacingOccurrences(of: ",", with: ".")) ?? 0) * 100)
+    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -1039,7 +1167,7 @@ private struct PartnerOfferCard: View {
             }
 
             HStack(spacing: 12) {
-                metric(icon: "location.north.line.fill", value: job.distanceLabel, label: "Distance")
+                metric(icon: "location.north.line.fill", value: job.distanceLabel, label: "Trip")
                 if job.minutes > 0 {
                     metric(icon: "clock.fill", value: "\(job.minutes) min", label: "Est. time")
                 }
@@ -1047,6 +1175,10 @@ private struct PartnerOfferCard: View {
             }
 
             PartnerRouteView(job: job, progress: 0)
+
+            if countering {
+                counterField
+            }
 
             HStack(spacing: 12) {
                 Button {
@@ -1073,9 +1205,59 @@ private struct PartnerOfferCard: View {
                 }
                 .buttonStyle(PressableStyle())
             }
+
+            // The negotiation, driver-side (Phase 3 M3): "not at that price".
+            // Below Accept/Decline because most trips are taken as asked, and a
+            // counter is a decline of the dispatch offer — the server treats it
+            // that way, so the button says what it does.
+            if canCounter && !countering {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    withAnimation(.ggSnappy) { countering = true }
+                    counterFocused = true
+                } label: {
+                    Text("Offer another price")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressableStyle())
+            }
         }
         .padding(18)
         .glass(cornerRadius: 24, tint: Color.black.opacity(0.3), floating: true)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var counterField: some View {
+        HStack(spacing: 10) {
+            Text("$")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(GGColor.textSecondary)
+            TextField("Your price", text: $counterText)
+                .font(.ggMono(16, .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+                .keyboardType(.decimalPad)
+                .focused($counterFocused)
+            Button {
+                app.counterDispatchOffer(amountMinor: counterAmountMinor)
+            } label: {
+                Text("Send")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(GGColor.onAccent)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(Capsule().fill(GGColor.white))
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(counterAmountMinor <= 0 || app.driverRideBusy)
+            .opacity(counterAmountMinor <= 0 || app.driverRideBusy ? 0.45 : 1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.08)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
@@ -1174,19 +1356,89 @@ private struct PartnerActiveJobCard: View {
             .padding(12)
             .glass(cornerRadius: 16)
 
-            // Primary action — arrive / navigate (auto-advances, this is a manual nudge)
-            Text(headingToPickup
-                 ? "Navigating to \(job.pickupName)…"
-                 : "En route to \(job.dropoffName)…")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(GGColor.textSecondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
-                .background(Capsule().fill(GGColor.ink(0.08)))
+            // A real trip advances by the driver saying so — these buttons are
+            // the state machine (arrived → rider aboard → complete), and the
+            // server is the judge of each. The demo keeps its passive line.
+            if let ride = app.driverRide, ride.id == job.rideId {
+                tripActions(ride)
+            } else {
+                // Demo action — the simulation advances itself.
+                Text(headingToPickup
+                     ? "Navigating to \(job.pickupName)…"
+                     : "En route to \(job.dropoffName)…")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(Capsule().fill(GGColor.ink(0.08)))
+            }
         }
         .padding(18)
         .glass(cornerRadius: 24, tint: Color.black.opacity(0.3), floating: true)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    /// One primary action per state, because a driver reads this at a red
+    /// light: CONFIRMED → "I've arrived", ARRIVING → "start trip",
+    /// IN_TRIP → "Complete trip". Cancelling stays available until the rider
+    /// is in the car — after that, the only way out is to end the trip.
+    @ViewBuilder
+    private func tripActions(_ ride: RideDTO) -> some View {
+        VStack(spacing: 10) {
+            switch ride.state {
+            case "CONFIRMED":
+                primaryAction("I've arrived at the pickup", icon: "mappin.and.ellipse") {
+                    app.driverArrived()
+                }
+                secondaryAction("Rider's already aboard — start the trip") {
+                    app.driverStartTrip()
+                }
+            case "ARRIVING":
+                primaryAction("Rider aboard — start the trip", icon: "figure.wave") {
+                    app.driverStartTrip()
+                }
+            case "IN_TRIP":
+                primaryAction("Complete trip", icon: "flag.checkered") {
+                    app.driverCompleteTrip()
+                }
+            default:
+                EmptyView()
+            }
+            if ride.state == "CONFIRMED" || ride.state == "ARRIVING" {
+                secondaryAction("Cancel this trip") {
+                    app.driverCancelTrip()
+                }
+            }
+        }
+    }
+
+    private func primaryAction(_ title: String, icon: String,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(GGColor.onAccent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Capsule().fill(GGColor.white))
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(app.driverRideBusy)
+        .opacity(app.driverRideBusy ? 0.5 : 1)
+    }
+
+    private func secondaryAction(_ title: String,
+                                 action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(GGColor.textSecondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(app.driverRideBusy)
     }
 
     private func contactButton(_ icon: String) -> some View {
