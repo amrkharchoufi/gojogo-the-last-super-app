@@ -32,10 +32,15 @@ The pipeline lives in [codemagic.yaml](codemagic.yaml). Two workflows:
    | `MAPBOX_PUBLIC_TOKEN` | your **public** `pk.…` token — written to `GojoGo/MapboxAccessToken`, which is gitignored and so never reaches the runner from git |
 
 4. **App record.** `com.gojo.gojogo` needs to exist as an App ID in the developer portal *and* as an app
-   in App Store Connect before the first TestFlight upload. Once it does, copy its numeric Apple ID
-   into `APP_STORE_APPLE_ID` in `codemagic.yaml` — the build number is then read from App Store Connect
-   and bumped by one. Until you set it, builds are numbered from Codemagic's own counter, which starts
-   at 1 and can collide with builds you have already uploaded manually.
+   in App Store Connect before the first TestFlight upload. Its numeric Apple ID is already set as
+   `APP_STORE_APPLE_ID` in `codemagic.yaml` (`6762012938`), so the build number is read from App Store
+   Connect and bumped by one. If that number is ever wrong the lookup fails, the build falls back to
+   Codemagic's own counter — which starts at 1 and can collide with builds you have already uploaded —
+   and the step prints a `WARNING:` line saying so. Grep the log for it if a build number looks off.
+
+5. **Capabilities on the App ID.** `GojoGo/GojoGo.entitlements` asks for **Push Notifications** and
+   **Sign in with Apple**. Both have to be enabled on the App ID in the developer portal, otherwise the
+   App Store profile Codemagic fetches won't grant them and the export step fails after a full build.
 
 ## Cutting a version
 
@@ -47,7 +52,8 @@ git tag v1.1.0 && git push origin v1.1.0
 
 The tag only triggers the build — it does not set the version. The version comes from:
 
-- **Build number** — set for you: latest build in App Store Connect + 1 (`CURRENT_PROJECT_VERSION`).
+- **Build number** — set for you: latest build in App Store Connect + 1 (`CURRENT_PROJECT_VERSION`),
+  overriding whatever the project file says.
 - **Marketing version** — whatever is in the project file (currently `1.0.0`), unless you start the
   build manually from the Codemagic UI and add a variable `APP_VERSION=1.1.0` for that run.
 
@@ -74,6 +80,10 @@ take PRs from forks, whose pushes Codemagic doesn't see.
 - **Team ID mismatch.** The target uses `DEVELOPMENT_TEAM = T8348X4CNY`, the project-level Release
   config uses `ZUKS346NF6`. On CI it doesn't matter — `xcode-project use-profiles` overwrites both from
   the fetched profile — but it's worth reconciling in Xcode so local archives match.
+- **Export compliance is pre-answered.** The target sets
+  `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO`, so uploads don't land in TestFlight as *Missing
+  Compliance* waiting on a manual answer. If the app ever ships non-exempt encryption, remove it and
+  answer the question in App Store Connect instead.
 - **No test target exists**, so no test step is wired up. When you add one, add a `run-tests` step to
   `ios-check` (`xcode-project run-tests --project GojoGo.xcodeproj --scheme GojoGo`) and a
   `test_report` entry pointing at `build/ios/test/*.xml`.

@@ -257,10 +257,11 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = GojoGo/GojoGo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 27;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_TEAM = T8348X4CNY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "GojoGo uses the camera to take photos and videos for your posts and chats.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "GojoGo uses your location to show the map, set your pickup point, and share your location in chats.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "GojoGo needs the microphone to record voice messages and audio for your posts.";
@@ -296,10 +297,11 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = GojoGo/GojoGo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 27;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_TEAM = T8348X4CNY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "GojoGo uses the camera to take photos and videos for your posts and chats.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "GojoGo uses your location to show the map, set your pickup point, and share your location in chats.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "GojoGo needs the microphone to record voice messages and audio for your posts.";

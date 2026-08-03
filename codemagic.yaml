@@ -52,8 +52,9 @@ workflows:
         XCODE_PROJECT: "GojoGo.xcodeproj"
         XCODE_SCHEME: "GojoGo"
         BUNDLE_ID: "com.gojo.gojogo"
-        # Numeric Apple ID of the app in App Store Connect. Leave unset until the
-        # app record exists; the build number then falls back to Codemagic's counter.
+        # Numeric Apple ID of the app in App Store Connect — the build number is
+        # read from there and bumped by one. Clear it and the build number falls
+        # back to Codemagic's own counter, which starts at 1.
         APP_STORE_APPLE_ID: "6762012938"
     cache:
       cache_paths:
@@ -87,9 +88,15 @@ workflows:
           set -e
           NEXT="$PROJECT_BUILD_NUMBER"
           if [ -n "$APP_STORE_APPLE_ID" ]; then
-            LATEST=$(app-store-connect get-latest-build-number "$APP_STORE_APPLE_ID" --all-versions 2>/dev/null || true)
+            LATEST=$(app-store-connect get-latest-build-number "$APP_STORE_APPLE_ID" --all-versions || true)
             if [ -n "$LATEST" ]; then
               NEXT=$((LATEST + 1))
+            else
+              # Don't let this pass unnoticed: Codemagic's counter can land on a
+              # build number App Store Connect has already seen, and the upload
+              # is then rejected at the very end of the build.
+              echo "WARNING: could not read the latest build number for APP_STORE_APPLE_ID=$APP_STORE_APPLE_ID."
+              echo "WARNING: falling back to Codemagic's counter ($NEXT), which may collide with an existing build."
             fi
           fi
           echo "Building as build number $NEXT"
@@ -126,7 +133,7 @@ workflows:
           failure: true
 
   ios-check:
-    name: iOS — compile check (branches & PRs)
+    name: iOS — compile check (branch pushes)
     instance_type: mac_mini_m2
     max_build_duration: 30
     environment:
