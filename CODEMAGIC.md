@@ -77,9 +77,9 @@ take PRs from forks, whose pushes Codemagic doesn't see.
   it to `production` on the runner only; the file in git is untouched, so local development builds keep
   working. If you ever add a second entitlement that differs between debug and release, move to two
   entitlement files instead of patching.
-- **Team ID mismatch.** The target uses `DEVELOPMENT_TEAM = T8348X4CNY`, the project-level Release
-  config uses `ZUKS346NF6`. On CI it doesn't matter — `xcode-project use-profiles` overwrites both from
-  the fetched profile — but it's worth reconciling in Xcode so local archives match.
+- **Team ID is `T8348X4CNY` everywhere.** The project-level Debug and Release configs used to say
+  `ZUKS346NF6` while the target said `T8348X4CNY`; both now say `T8348X4CNY`. CI never cared —
+  `xcode-project use-profiles` overwrites them from the fetched profile — but local archives did.
 - **Export compliance is pre-answered.** The target sets
   `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO`, so uploads don't land in TestFlight as *Missing
   Compliance* waiting on a manual answer. If the app ever ships non-exempt encryption, remove it and
