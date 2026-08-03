@@ -224,10 +224,58 @@ class DispatchAssignmentTests {
 
         service.complete(JobKind.RIDE, RIDE, 4);
 
+        assertThat(job.getState()).isEqualTo(JobState.COMPLETED);
         assertThat(driver.getStatus()).isEqualTo(WorkerStatus.AVAILABLE);
         assertThat(driver.getCompletedCount()).isEqualTo(1);
         // The 5.00 a new worker is created with is display, not a rating anybody
         // gave them — counting it would hand every driver a free five stars.
+        assertThat(driver.getRating()).isEqualByComparingTo("4.00");
+        assertThat(driver.getRatingCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a completed job is nobody's current assignment — the phone must "
+        + "stop being told about a trip that is over")
+    void completedJobLeavesTheAssignmentFeed() {
+        service.accept(DRIVER_USER, driverOffer.getId());
+        when(offers.findByWorkerIdAndStateOrderByOfferedAtAsc(driver.getId(), OfferState.ACCEPTED))
+            .thenReturn(List.of(driverOffer));
+        when(offers.findByWorkerIdAndStateOrderByOfferedAtAsc(driver.getId(), OfferState.OFFERED))
+            .thenReturn(List.of());
+        assertThat(service.mine(DRIVER_USER).assignment()).isNotNull();
+
+        service.complete(JobKind.RIDE, RIDE, 5);
+
+        // Left ASSIGNED, the finished trip stayed the driver's "current"
+        // assignment forever, and their app replayed the completion — card,
+        // haptic and earnings — on every poll.
+        assertThat(service.mine(DRIVER_USER).assignment()).isNull();
+    }
+
+    @Test
+    @DisplayName("completing twice counts once")
+    void completingIsIdempotent() {
+        service.accept(DRIVER_USER, driverOffer.getId());
+
+        service.complete(JobKind.RIDE, RIDE, 4);
+        service.complete(JobKind.RIDE, RIDE, 4);
+
+        assertThat(driver.getCompletedCount()).isEqualTo(1);
+        assertThat(driver.getRatingCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a rating that arrives after completion feeds the mean without "
+        + "counting a second job")
+    void lateRatingDoesNotDoubleCount() {
+        service.accept(DRIVER_USER, driverOffer.getId());
+        service.complete(JobKind.RIDE, RIDE, null);
+
+        // The rider rates from the receipt, minutes later — travel relays it
+        // here. Re-calling complete() for it counted the trip twice.
+        service.rate(JobKind.RIDE, RIDE, 4);
+
+        assertThat(driver.getCompletedCount()).isEqualTo(1);
         assertThat(driver.getRating()).isEqualByComparingTo("4.00");
         assertThat(driver.getRatingCount()).isEqualTo(1);
     }

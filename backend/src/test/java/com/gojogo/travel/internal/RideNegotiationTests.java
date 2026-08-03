@@ -460,7 +460,7 @@ class RideNegotiationTests {
 
         service.rate(RIDER, ride.getId(), 4);
 
-        verify(dispatch).complete(JobKind.RIDE, ride.getId(), 4);
+        verify(dispatch).rate(JobKind.RIDE, ride.getId(), 4);
     }
 
     // MARK: Fixtures

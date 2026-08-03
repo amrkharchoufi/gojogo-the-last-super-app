@@ -184,12 +184,27 @@ class DispatchService implements DispatchApi {
     @Transactional
     public void complete(JobKind jobKind, UUID jobRefId, Integer rating) {
         DispatchJob job = jobs.findByJobKindAndJobRefId(jobKind, jobRefId).orElse(null);
-        if (job == null || job.getAssignedWorkerId() == null) return;
+        // Only an ASSIGNED job can complete, and only once: closing with the
+        // state left ASSIGNED kept the finished trip in `currentAssignment`
+        // forever, and the driver's app replayed the completion — card, haptic
+        // and earnings — on every poll.
+        if (job == null || job.getState() != JobState.ASSIGNED
+            || job.getAssignedWorkerId() == null) return;
         workers.findById(job.getAssignedWorkerId()).ifPresent(worker -> {
             worker.countCompleted(rating);
             releaseAllRegistrations(worker.getUserId());
         });
-        job.close(JobState.ASSIGNED);
+        job.close(JobState.COMPLETED);
+    }
+
+    @Override
+    @Transactional
+    public void rate(JobKind jobKind, UUID jobRefId, Integer rating) {
+        if (rating == null) return;
+        jobs.findByJobKindAndJobRefId(jobKind, jobRefId)
+            .map(DispatchJob::getAssignedWorkerId)
+            .flatMap(workers::findById)
+            .ifPresent(worker -> worker.rate(rating));
     }
 
     @Override

@@ -5,6 +5,10 @@ enum JobState {
 
     SEARCHING,
     ASSIGNED,
+    /** The work was done. Closed as its own state rather than left ASSIGNED,
+     *  because "current assignment" is answered by this column and a finished
+     *  trip must stop being somebody's current anything. */
+    COMPLETED,
     /** Every ring searched, or out of time. The vertical has been told. */
     EXHAUSTED,
     CANCELLED;

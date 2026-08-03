@@ -47,6 +47,14 @@ extension AppState {
     /// Maps the server's ride onto the dashboard the app already draws — the
     /// same `PartnerJob` card and phases the demo used, with real values.
     func applyDriverRide(_ fresh: RideDTO) {
+        // A completion that was already shown and dismissed stays dismissed. The
+        // ride can arrive here again — a stale dispatch assignment, a read that
+        // was in flight when the card was cleared — and re-applying it would
+        // resurrect the "Trip complete" card and count the fare a second time.
+        if fresh.state == "COMPLETED", settledDriverRideIDs.contains(fresh.id),
+           partnerJobPhase == .idle {
+            return
+        }
         driverRide = fresh
         // Accepted in dispatch but not confirmed in travel yet — nothing to
         // draw; the poll will catch the confirmation a moment later.
@@ -87,17 +95,20 @@ extension AppState {
             default: .completed
         }
         if phase == .completed && partnerJobPhase != .completed {
-            // Count the earnings into the dashboard's "Today" tile once, and
-            // let the wallet card catch up with what actually landed.
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            partnerEarningsByRole[PartnerRole.driver.rawValue, default: 0]
-                += Double(fareMinor) / 100
-            partnerJobsByRole[PartnerRole.driver.rawValue, default: 0] += 1
             stopDriverRidePolling()
-            schedulePersist()
-            Task {
-                await refreshWorkerWallet()
-                await refreshDispatch()
+            // Count the earnings into the dashboard's "Today" tile once per
+            // ride — a phase transition alone is not enough, because a stale
+            // read can walk the phase back to idle and complete it again.
+            if settledDriverRideIDs.insert(fresh.id).inserted {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                partnerEarningsByRole[PartnerRole.driver.rawValue, default: 0]
+                    += Double(fareMinor) / 100
+                partnerJobsByRole[PartnerRole.driver.rawValue, default: 0] += 1
+                schedulePersist()
+                Task {
+                    await refreshWorkerWallet()
+                    await refreshDispatch()
+                }
             }
         }
         if phase != partnerJobPhase {

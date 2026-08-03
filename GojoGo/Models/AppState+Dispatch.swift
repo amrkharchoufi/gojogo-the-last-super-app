@@ -64,8 +64,11 @@ extension AppState {
         }
         // Same for a ride: dispatch says which job, `travel` says what the trip
         // is. This is also how a trip accepted on another device — or before
-        // the app was killed — comes back onto the screen.
-        if mine.assignment?.jobKind == "RIDE", driverRide == nil {
+        // the app was killed — comes back onto the screen. Never for a ride
+        // already completed and settled here: adopting a stale assignment would
+        // replay the completion.
+        if let assignment = mine.assignment, assignment.jobKind == "RIDE",
+           driverRide == nil, !settledDriverRideIDs.contains(assignment.jobRefId) {
             Task { @MainActor in
                 await refreshDriverRide()
                 if let ride = driverRide, !ride.isOver, driverRidePollTask == nil {

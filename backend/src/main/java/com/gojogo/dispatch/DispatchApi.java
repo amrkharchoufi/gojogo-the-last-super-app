@@ -65,6 +65,16 @@ public interface DispatchApi {
      */
     void complete(JobKind jobKind, UUID jobRefId, Integer rating);
 
+    /**
+     * A rating that arrived after the job was already completed. Folds into the
+     * worker's running mean without counting another completion — most ratings
+     * land later than the handoff, from a customer looking at the receipt, and
+     * re-calling {@link #complete} for them counted the job twice.
+     *
+     * @param rating 1–5; null is ignored
+     */
+    void rate(JobKind jobKind, UUID jobRefId, Integer rating);
+
     /** Who is doing this job, if anybody is yet. */
     Optional<Assignment> assignmentFor(JobKind jobKind, UUID jobRefId);
 

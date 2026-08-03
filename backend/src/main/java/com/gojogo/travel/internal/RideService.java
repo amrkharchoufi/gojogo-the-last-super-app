@@ -680,8 +680,10 @@ class RideService {
             }
             ride.rateDriver(stars);
             // The driver's dispatch rating is the average of these, kept there
-            // because that is what matching filters on.
-            dispatch.complete(JobKind.RIDE, ride.getId(), stars);
+            // because that is what matching filters on. `rate`, not `complete`:
+            // the job was completed and counted when the trip ended, and this
+            // is only the number that arrived afterwards.
+            dispatch.rate(JobKind.RIDE, ride.getId(), stars);
         } else if (callerId.equals(ride.getDriverUserId())) {
             if (ride.getRiderRating() != null) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "You already rated this");

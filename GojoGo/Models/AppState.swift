@@ -599,6 +599,11 @@ final class AppState: ObservableObject {
     @Published var driverRideBusy: Bool = false
     var driverRidePollTask: Task<Void, Never>?
     var driverNegotiationPollTask: Task<Void, Never>?
+    /// Rides whose completion this session has already celebrated and counted.
+    /// A completed ride can be read again after the card is dismissed — a stale
+    /// dispatch assignment, a poll that was already in flight — and without this
+    /// the re-read replays the completion: card, haptic and earnings, forever.
+    var settledDriverRideIDs: Set<UUID> = []
 
     // Courier Mode's other half (Phase 4 M1). Dispatch finds the work; this is
     // the delivery it turned out to be — what is in the bag, which restaurant,

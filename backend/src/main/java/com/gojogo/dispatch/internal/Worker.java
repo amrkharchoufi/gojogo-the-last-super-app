@@ -225,6 +225,13 @@ class Worker {
      */
     void countCompleted(Integer stars) {
         completedCount++;
+        rate(stars);
+    }
+
+    /** Folds one more rating into the running mean, without counting a job —
+     *  most ratings arrive after the handoff, from a customer looking at the
+     *  receipt, and the job they rate was completed and counted already. */
+    void rate(Integer stars) {
         if (stars == null) return;
         int clamped = Math.clamp(stars, 1, 5);
         BigDecimal total = rating.multiply(BigDecimal.valueOf(ratingCount))
