@@ -1,0 +1,165 @@
+definitions:
+  env_versions: &env_versions
+    # Pin to a specific version (e.g. 26.1) once you know which one you want to
+    # stay on; the project needs Xcode 16 or newer either way.
+    xcode: latest
+
+  mapbox_credentials: &mapbox_credentials
+    name: Write Mapbox credentials
+    script: |
+      set -e
+      # Secret sk.* token — lets SPM download the Mapbox binaries.
+      if [ -z "$MAPBOX_DOWNLOADS_TOKEN" ]; then
+        echo "MAPBOX_DOWNLOADS_TOKEN is missing. Add it to the 'mapbox' environment group."
+        exit 1
+      fi
+      cat > "$HOME/.netrc" <<EOF
+      machine api.mapbox.com
+      login mapbox
+      password $MAPBOX_DOWNLOADS_TOKEN
+      EOF
+      chmod 600 "$HOME/.netrc"
+
+      # Public pk.* token — bundled as a resource, read at runtime by MapboxConfig.
+      if [ -z "$MAPBOX_PUBLIC_TOKEN" ]; then
+        echo "MAPBOX_PUBLIC_TOKEN is missing. Add it to the 'mapbox' environment group."
+        exit 1
+      fi
+      printf '%s' "$MAPBOX_PUBLIC_TOKEN" > "$CM_BUILD_DIR/GojoGo/MapboxAccessToken"
+
+  resolve_packages: &resolve_packages
+    name: Resolve Swift packages
+    script: |
+      xcodebuild -resolvePackageDependencies \
+        -project "$CM_BUILD_DIR/GojoGo.xcodeproj" \
+        -scheme "$XCODE_SCHEME"
+
+workflows:
+  ios-testflight:
+    name: iOS — build & ship to TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: GojoGo App Store Connect
+    environment:
+      <<: *env_versions
+      groups:
+        - mapbox
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.gojo.gojogo
+      vars:
+        XCODE_PROJECT: "GojoGo.xcodeproj"
+        XCODE_SCHEME: "GojoGo"
+        BUNDLE_ID: "com.gojo.gojogo"
+        # Numeric Apple ID of the app in App Store Connect. Leave unset until the
+        # app record exists; the build number then falls back to Codemagic's counter.
+        APP_STORE_APPLE_ID: ""
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/org.swift.swiftpm
+        - $HOME/Library/Developer/Xcode/DerivedData/**/SourcePackages
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
+    scripts:
+      - *mapbox_credentials
+
+      - name: Set up code signing on the Xcode project
+        script: xcode-project use-profiles
+
+      - name: Switch push notifications to the production environment
+        script: |
+          # The checked-in entitlements ask for the development APS environment,
+          # which an App Store profile does not grant. Distribution builds need
+          # production; the repo copy stays untouched.
+          /usr/libexec/PlistBuddy \
+            -c "Set :aps-environment production" \
+            "$CM_BUILD_DIR/GojoGo/GojoGo.entitlements"
+
+      - *resolve_packages
+
+      - name: Pick the next build number
+        script: |
+          set -e
+          NEXT="$PROJECT_BUILD_NUMBER"
+          if [ -n "$APP_STORE_APPLE_ID" ]; then
+            LATEST=$(app-store-connect get-latest-build-number "$APP_STORE_APPLE_ID" --all-versions 2>/dev/null || true)
+            if [ -n "$LATEST" ]; then
+              NEXT=$((LATEST + 1))
+            fi
+          fi
+          echo "Building as build number $NEXT"
+          echo "NEW_BUILD_NUMBER=$NEXT" >> "$CM_ENV"
+
+      - name: Build the signed IPA
+        script: |
+          set -e
+          XCARGS="COMPILER_INDEX_STORE_ENABLE=NO CURRENT_PROJECT_VERSION=$NEW_BUILD_NUMBER"
+          # Start a build with APP_VERSION=1.1.0 to cut a new marketing version;
+          # otherwise the version in the project file is used as-is.
+          if [ -n "$APP_VERSION" ]; then
+            XCARGS="$XCARGS MARKETING_VERSION=$APP_VERSION"
+          fi
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --config "Release" \
+            --archive-xcargs "$XCARGS"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        submit_to_app_store: false
+      email:
+        recipients:
+          - amrkharchoufi3@gmail.com
+        notify:
+          success: true
+          failure: true
+
+  ios-check:
+    name: iOS — compile check (branches & PRs)
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      <<: *env_versions
+      groups:
+        - mapbox
+      vars:
+        XCODE_PROJECT: "GojoGo.xcodeproj"
+        XCODE_SCHEME: "GojoGo"
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/org.swift.swiftpm
+        - $HOME/Library/Developer/Xcode/DerivedData/**/SourcePackages
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: '*'
+          include: true
+          source: true
+      cancel_previous_builds: true
+    scripts:
+      - *mapbox_credentials
+      - *resolve_packages
+      - name: Build for the simulator, unsigned
+        script: |
+          xcodebuild \
+            -project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+    artifacts:
+      - /tmp/xcodebuild_logs/*.log
