@@ -19,7 +19,11 @@ enum KeychainStore {
         guard let value, let data = value.data(using: .utf8) else { return }
         var add = query
         add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // ThisDeviceOnly: the token set — including the long-lived refresh token —
+        // must not ride an encrypted iCloud/iTunes backup onto another device.
+        // AfterFirstUnlock still lets a background refresh run while the phone is
+        // locked in a pocket.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
     }
 

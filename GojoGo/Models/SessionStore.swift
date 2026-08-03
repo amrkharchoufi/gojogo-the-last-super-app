@@ -30,7 +30,10 @@ enum SessionStore {
     static func save(_ session: CachedSession) {
         do {
             let data = try JSONEncoder().encode(session)
-            try data.write(to: fileURL, options: [.atomic])
+            // completeFileProtection: this cache holds PII (email, cached DM
+            // threads), so it stays encrypted at rest and unreadable while the
+            // device is locked — not just until first unlock.
+            try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
             UserDefaults.standard.set(true, forKey: flagKey)
         } catch {
             #if DEBUG

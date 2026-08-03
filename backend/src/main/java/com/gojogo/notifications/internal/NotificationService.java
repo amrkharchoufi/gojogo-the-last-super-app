@@ -55,8 +55,12 @@ class NotificationService {
                 platform == null ? "ios" : platform)));
     }
 
-    void unregisterDevice(String token) {
-        deviceTokens.deleteByToken(token);
+    /** Scoped to the caller: a device token is deleted only from the account
+     *  that presents it, so knowing someone else's token cannot silently
+     *  disable their push (including safety notifications). */
+    @Transactional
+    void unregisterDevice(UUID userId, String token) {
+        deviceTokens.deleteByProfileIdAndToken(userId, token);
     }
 
     @Transactional(readOnly = true)

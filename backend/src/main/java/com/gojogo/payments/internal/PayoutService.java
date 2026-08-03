@@ -100,7 +100,7 @@ class PayoutService implements PayoutApi {
 
     @Override
     public PayoutResult payOut(OwnerKind ownerKind, UUID ownerId, UUID requestedBy,
-                               long amountMinor) {
+                               long amountMinor, PayoutGuard guard) {
         requireStripe();
         ConnectAccount account = txn.execute(status -> {
             ConnectAccount found = connectAccounts.findByOwnerKindAndOwnerId(ownerKind, ownerId)
@@ -115,9 +115,17 @@ class PayoutService implements PayoutApi {
                     ? "Stripe is still reviewing this account"
                     : "Payouts need: " + account.getRequirementsNote());
         }
-        checkLimits(ownerKind, ownerId, amountMinor);
 
-        Payout payout = txn.execute(status -> debit(ownerKind, ownerId, requestedBy, amountMinor));
+        // Cooldown, the owning module's cap, and the debit all under one lock on
+        // this payee's balance row — so two requests a millisecond apart cannot
+        // each pass a check the other is about to invalidate. The second waits
+        // here until the first commits its payout row, then sees it.
+        Payout payout = txn.execute(status -> {
+            ledger.lockForPayout(ownerKind, ownerId);
+            checkLimits(ownerKind, ownerId, amountMinor);
+            guard.check();
+            return debit(ownerKind, ownerId, requestedBy, amountMinor);
+        });
         return txn.execute(status -> send(payout.getId(), account.getStripeAccountId()));
     }
 
@@ -142,8 +150,15 @@ class PayoutService implements PayoutApi {
                 "The smallest payout is " + display(minimum));
         }
         long cooldownHours = config.number(COOLDOWN_KEY, COOLDOWN_DEFAULT_HOURS);
-        Optional<Payout> last = payouts.findFirstByOwnerKindAndOwnerIdAndStatusOrderByCreatedAtDesc(
-            ownerKind, ownerId, Payout.Status.SENT);
+        // REQUESTED as well as SENT: a payout debited a moment ago but not yet
+        // handed to Stripe is still one payout this window, and a cooldown that
+        // only saw SENT rows would wave a racing second request straight through
+        // before the first had a status to show for itself. A FAILED attempt
+        // reversed itself and is deliberately not counted, so a genuine retry
+        // after a provider refusal is not held against the window.
+        Optional<Payout> last = payouts
+            .findFirstByOwnerKindAndOwnerIdAndStatusInOrderByCreatedAtDesc(ownerKind, ownerId,
+                EnumSet.of(Payout.Status.SENT, Payout.Status.REQUESTED));
         if (last.isPresent() && last.get().getCreatedAt()
                 .isAfter(OffsetDateTime.now().minus(Duration.ofHours(cooldownHours)))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,

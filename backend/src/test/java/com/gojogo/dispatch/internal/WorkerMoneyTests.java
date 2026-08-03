@@ -11,6 +11,7 @@ import com.gojogo.payments.WalletApi;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.lang.reflect.Field;
@@ -94,7 +95,8 @@ class WorkerMoneyTests {
             .thenAnswer(call -> lifetimePaidOutMinor);
         when(payouts.statusOf(eq(OwnerKind.USER), any(UUID.class)))
             .thenReturn(new PayoutApi.ConnectStatus(true, "acct_1", true, true, ""));
-        when(payouts.payOut(eq(OwnerKind.USER), any(UUID.class), any(UUID.class), anyLong()))
+        when(payouts.payOut(eq(OwnerKind.USER), any(UUID.class), any(UUID.class), anyLong(),
+                any(PayoutApi.PayoutGuard.class)))
             .thenAnswer(call -> new PayoutApi.PayoutResult(UUID.randomUUID(),
                 call.getArgument(3, Long.class), "USD", "SENT", ""));
 
@@ -136,7 +138,7 @@ class WorkerMoneyTests {
         assertThatThrownBy(() -> money.payOut(WORKER_USER, 2_100))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("what you've earned working");
-        verify(payouts, never()).payOut(any(), any(), any(), anyLong());
+        verify(payouts, never()).payOut(any(), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -162,7 +164,7 @@ class WorkerMoneyTests {
             .hasMessageContaining("30.00");
         // Asking for 50 and watching 30 leave with no explanation is worse than
         // being told no.
-        verify(payouts, never()).payOut(any(), any(), any(), anyLong());
+        verify(payouts, never()).payOut(any(), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -175,6 +177,29 @@ class WorkerMoneyTests {
 
         assertThat(payout.amountMinor()).isEqualTo(3_000);
         assertThat(payout.status()).isEqualTo("SENT");
+    }
+
+    @Test
+    @DisplayName("the payout carries a guard that re-checks the cap at debit time — so a "
+        + "sibling that got there first makes the second request fail under the lock")
+    void payoutGuardRechecksTheCapUnderTheLock() {
+        earned(LedgerKind.RIDE_FARE, 5_000);
+        availableMinor = 5_000;
+
+        // The outer check passes and the payout is delegated, carrying a guard.
+        ArgumentCaptor<PayoutApi.PayoutGuard> guard =
+            ArgumentCaptor.forClass(PayoutApi.PayoutGuard.class);
+        money.payOut(WORKER_USER, 5_000);
+        verify(payouts).payOut(eq(OwnerKind.USER), any(), any(), eq(5_000L), guard.capture());
+
+        // Now a concurrent sibling has already withdrawn the lot: paid-out rises
+        // to the full earnings and nothing is left to withdraw. Re-running the
+        // guard — which is what happens under the balance lock once the sibling
+        // commits — must refuse, even though the outer check waved this one on.
+        lifetimePaidOutMinor = 5_000;
+        assertThatThrownBy(() -> guard.getValue().check())
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("earned");
     }
 
     @Test

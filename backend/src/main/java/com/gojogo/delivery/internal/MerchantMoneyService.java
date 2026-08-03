@@ -90,8 +90,12 @@ class MerchantMoneyService {
      */
     PayoutDto payOut(UUID me, long amountMinor) {
         Merchant merchant = require(me);
+        // No earned-cap: a merchant balance is only ever earnings, never a card
+        // top-up, so there is no card-in/bank-out path to bound. The cooldown and
+        // the balance still serialize under the payout's lock, which is what
+        // keeps two concurrent requests from each clearing the once-a-day gate.
         PayoutApi.PayoutResult result = payouts.payOut(OwnerKind.MERCHANT, merchant.getId(),
-            me, amountMinor);
+            me, amountMinor, PayoutApi.PayoutGuard.none());
         return new PayoutDto(result.payoutId(), result.amountMinor(), result.currency(),
             result.status(), result.failureReason());
     }

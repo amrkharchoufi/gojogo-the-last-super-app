@@ -154,11 +154,13 @@ export class GojoGoAppStack extends cdk.Stack {
               { name: 'MESSAGING_TABLE', value: props.messagingTable.tableName },
               // https:// @connections endpoint for WebSocket fan-out.
               { name: 'MESSAGING_WS_ENDPOINT', value: props.webSocketStage.callbackUrl },
-              // My World phone OTP: sender id for the SMS, plus a dev code that
-              // works alongside the real SMS code while SNS SMS is sandboxed.
-              // TODO: clear WORLD_OTP_DEV_CODE before any real launch.
+              // My World phone OTP: sender id for the SMS. No dev-code override
+              // ships here — WORLD_OTP_DEV_CODE is accepted *alongside* the real
+              // SMS code (WorldService.verifyPhone), so any value baked into a
+              // production task definition is a universal phone-verification
+              // bypass. Left unset, the backend defaults it to empty and the
+              // bypass is off. Set it only in a throwaway non-prod deploy.
               { name: 'WORLD_SMS_SENDER_ID', value: 'GojoGo' },
-              { name: 'WORLD_OTP_DEV_CODE', value: '424242' },
               // APNs push — non-secret coordinates (the .p8 itself is a secret,
               // injected below). Sandbox host for development builds.
               { name: 'APNS_KEY_ID', value: '9W7A69BV93' },

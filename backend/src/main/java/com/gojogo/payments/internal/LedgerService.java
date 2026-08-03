@@ -261,6 +261,29 @@ class LedgerService implements WalletApi {
         return entries.totalCredited(owned, kinds);
     }
 
+    /**
+     * Takes the {@code PESSIMISTIC_WRITE} lock on a payee's AVAILABLE row without
+     * moving anything — the serialization point a payout's cap and cooldown
+     * checks need.
+     *
+     * <p>{@link #post} already locks this row before it debits, but only for the
+     * instant of the movement, and long after the caller has decided the amount
+     * is allowed. A payout has to decide that <em>under</em> the lock: two
+     * requests that each read the balance, each pass the earned-cap, and each
+     * then debit will both fit within the balance yet together exceed what the
+     * payee may withdraw. Called at the top of the debit transaction, this makes
+     * the second request wait for the first to commit, so the guard it runs next
+     * sees the first payout already on the books. {@code MANDATORY}: it is
+     * meaningless outside the transaction that will do the debit.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    void lockForPayout(OwnerKind ownerKind, UUID ownerId) {
+        String currency = currency();
+        accounts.ensure(ownerKind.name(), ownerId, Bucket.AVAILABLE.name(), currency,
+            ownerKind == OwnerKind.EXTERNAL);
+        accounts.lock(ownerKind, ownerId, Bucket.AVAILABLE, currency);
+    }
+
     // MARK: The one write
 
     /**

@@ -152,6 +152,10 @@ gojogo:
 server:
   port: 8080
   error:
+    # The API's deliberate 4xx messages (ResponseStatusException reasons) are the
+    # product — the app shows the server's own words — so the message stays on.
+    # SafeErrorAttributes then blanks it for unexpected 5xx, where the message is
+    # a raw exception string that would leak internal detail.
     include-message: always
 
 management:

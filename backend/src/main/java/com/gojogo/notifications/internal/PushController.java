@@ -32,7 +32,7 @@ class PushController {
     @PostMapping("/v1/push/unregister")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     void unregister(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody UnregisterPushRequest request) {
-        notifications.unregisterDevice(request.token());
+        notifications.unregisterDevice(current.require(jwt).id(), request.token());
     }
 }
 

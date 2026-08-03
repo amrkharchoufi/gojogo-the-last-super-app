@@ -1,5 +1,7 @@
 package com.gojogo;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -9,6 +11,14 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -20,6 +30,8 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 class SecurityConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
 
     /**
      * Browser origins allowed to call this API. Empty — the default, and what
@@ -108,6 +120,56 @@ class SecurityConfig {
                 .anyRequest().authenticated())
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
         return http.build();
+    }
+
+    /**
+     * The bearer-token decoder, with one validator added to Spring's defaults:
+     * the token must have been minted for <em>this</em> app client.
+     *
+     * <p>The default resource-server setup checks signature, issuer and expiry
+     * and stops there — so every token the Cognito user pool has ever signed is
+     * accepted, whichever app client asked for it. A pool routinely grows a
+     * second, lower-trust client (a web console, a partner integration), and a
+     * token issued to that client would otherwise arrive here with full user
+     * privileges, group claims included. So we pin the audience: a Cognito ID
+     * token carries the client id in {@code aud}, an access token in
+     * {@code client_id}, and either must equal our configured client.
+     *
+     * <p>Enforced only when {@code gojogo.cognito.app-client-id} is set, which it
+     * is on every real deploy. Left blank — local dev against the placeholder
+     * issuer — the check is skipped with a warning rather than locking the door
+     * on a key that was never cut.
+     */
+    @Bean
+    JwtDecoder jwtDecoder(
+            @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String issuer,
+            @Value("${gojogo.cognito.app-client-id:}") String appClientId) {
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withIssuerLocation(issuer).build();
+        OAuth2TokenValidator<Jwt> withIssuer = JwtValidators.createDefaultWithIssuer(issuer);
+        if (appClientId == null || appClientId.isBlank()) {
+            log.warn("COGNITO_APP_CLIENT_ID is unset — bearer tokens are accepted from any "
+                + "app client in the pool. Set it to pin the audience.");
+            decoder.setJwtValidator(withIssuer);
+        } else {
+            decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                withIssuer, audienceValidator(appClientId.trim())));
+        }
+        return decoder;
+    }
+
+    /** Accepts a token whose {@code aud} (ID token) or {@code client_id} (access
+     *  token) is this app client, and refuses every other one. */
+    private static OAuth2TokenValidator<Jwt> audienceValidator(String appClientId) {
+        OAuth2Error error = new OAuth2Error("invalid_token",
+            "The token was not issued for this application", null);
+        return jwt -> {
+            List<String> audiences = jwt.getAudience();
+            String clientId = jwt.getClaimAsString("client_id");
+            boolean forUs = (audiences != null && audiences.contains(appClientId))
+                || appClientId.equals(clientId);
+            return forUs ? OAuth2TokenValidatorResult.success()
+                         : OAuth2TokenValidatorResult.failure(error);
+        };
     }
 
     private CorsConfigurationSource corsConfigurationSource() {

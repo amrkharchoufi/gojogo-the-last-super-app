@@ -43,9 +43,35 @@ public interface PayoutApi {
      * that paid out without debiting is unrecoverable; one that debited and
      * failed to pay is a FAILED row and a release entry, which is a Tuesday.
      *
+     * <p>The {@code guard} is the owning module's own limit — a driver's
+     * earned-cap, say — and it is run <em>inside</em> the debit transaction,
+     * after this payee's balance row is locked and before any money moves. That
+     * placement is the whole point: a cap checked before the lock is a cap two
+     * simultaneous requests both pass, each reading a balance the other is about
+     * to spend. Under the lock, the second request blocks until the first
+     * commits its payout row, then re-runs the guard against a total that already
+     * counts it. The guard throws (a {@code ResponseStatusException}) to refuse;
+     * a payee with no such limit passes a no-op.
+     *
      * @throws InsufficientFundsException when the balance won't cover it
      */
-    PayoutResult payOut(OwnerKind ownerKind, UUID ownerId, UUID requestedBy, long amountMinor);
+    PayoutResult payOut(OwnerKind ownerKind, UUID ownerId, UUID requestedBy, long amountMinor,
+                        PayoutGuard guard);
+
+    /**
+     * A last check run under the payee's balance lock, just before the debit.
+     * Throw to refuse the payout; return to allow it. See {@link #payOut}.
+     */
+    @FunctionalInterface
+    interface PayoutGuard {
+        void check();
+
+        /** For a payee the platform pays without an earned-cap (a merchant's
+         *  balance is only ever earnings). Cooldown and balance still apply. */
+        static PayoutGuard none() {
+            return () -> { };
+        }
+    }
 
     /**
      * Everything this payee has already had sent out of the platform, in minor

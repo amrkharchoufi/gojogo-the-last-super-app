@@ -113,15 +113,34 @@ class WorkerMoneyService {
      */
     WorkerPayoutDto payOut(UUID me, long amountMinor) {
         requireRegistration(me);
+        // Checked twice, on purpose. Here first as a courtesy — an obviously
+        // over-cap ask is refused with the right sentence before a database lock
+        // or a Stripe call is spent on it. And again as the guard below, run
+        // inside the payout's locked debit transaction, which is the one that
+        // actually holds: two simultaneous requests both pass this outer read,
+        // and only the in-lock re-check — against a paid-out total that now
+        // counts the sibling — can tell the second one no.
+        enforceCap(me, amountMinor);
+        PayoutApi.PayoutResult result = payouts.payOut(OwnerKind.USER, me, me, amountMinor,
+            () -> enforceCap(me, amountMinor));
+        return new WorkerPayoutDto(result.payoutId(), result.amountMinor(), result.currency(),
+            result.status(), result.failureReason());
+    }
+
+    /**
+     * The cap, throwing the refusal that names whichever half bit. Reads the
+     * balance and the paid-out total fresh each time it is called, so that when
+     * it runs as the payout's guard — inside the transaction that has just locked
+     * this worker's balance row — it sees any sibling payout that committed while
+     * it waited for the lock.
+     */
+    private void enforceCap(UUID me, long amountMinor) {
         long available = wallet.balancesOf(OwnerKind.USER, me).available();
         long withdrawable = withdrawable(me, wallet.totalByKind(OwnerKind.USER, me, EARNED));
         if (amountMinor > Math.min(available, withdrawable)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 refusal(available, withdrawable));
         }
-        PayoutApi.PayoutResult result = payouts.payOut(OwnerKind.USER, me, me, amountMinor);
-        return new WorkerPayoutDto(result.payoutId(), result.amountMinor(), result.currency(),
-            result.status(), result.failureReason());
     }
 
     // MARK: The cap

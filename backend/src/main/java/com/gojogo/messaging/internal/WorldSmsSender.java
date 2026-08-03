@@ -1,5 +1,6 @@
 package com.gojogo.messaging.internal;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +29,18 @@ class WorldSmsSender {
 
     WorldSmsSender(WorldProperties props) {
         this.props = props;
+    }
+
+    /** A dev bypass code set on a deploy that also sends real SMS is a
+     *  misconfiguration — the code is inert (WorldProperties.hasDevCode), but the
+     *  fact that someone set it at all is worth saying out loud so it is removed
+     *  before anyone comes to rely on it. */
+    @PostConstruct
+    void announce() {
+        if (props.devCodeShipped()) {
+            log.warn("WORLD_OTP_DEV_CODE is set while SMS is enabled — the phone-verification "
+                + "bypass is being IGNORED. Unset it; a static OTP does not belong in a real deploy.");
+        }
     }
 
     private SnsClient sns() {

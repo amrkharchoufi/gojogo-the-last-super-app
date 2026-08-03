@@ -160,6 +160,12 @@ interface PayoutRepository extends JpaRepository<Payout, UUID> {
     Optional<Payout> findFirstByOwnerKindAndOwnerIdAndStatusOrderByCreatedAtDesc(
         OwnerKind ownerKind, UUID ownerId, Payout.Status status);
 
+    /** The cooldown check, counting in-flight payouts too: a REQUESTED row has
+     *  been debited and is on its way out, so it holds the window just as a SENT
+     *  one does. See {@code PayoutService.checkLimits}. */
+    Optional<Payout> findFirstByOwnerKindAndOwnerIdAndStatusInOrderByCreatedAtDesc(
+        OwnerKind ownerKind, UUID ownerId, Collection<Payout.Status> statuses);
+
     /**
      * How much has left for this payee, over their whole history. The caller
      * chooses the statuses, because "already paid out" and "sent" are not the

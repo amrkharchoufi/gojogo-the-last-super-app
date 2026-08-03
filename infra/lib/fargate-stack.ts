@@ -195,8 +195,11 @@ export class GojoGoFargateStack extends cdk.Stack {
         MEDIA_CLEANUP_DELETE: 'false',
         MESSAGING_TABLE: props.messagingTable.tableName,
         MESSAGING_WS_ENDPOINT: props.webSocketStage.callbackUrl,
+        // No WORLD_OTP_DEV_CODE: it is accepted alongside the real SMS code
+        // (WorldService.verifyPhone), so shipping any value here is a universal
+        // phone-verification bypass. Unset, the backend defaults it to empty and
+        // the bypass is off. Set it only in a throwaway non-prod deploy.
         WORLD_SMS_SENDER_ID: 'GojoGo',
-        WORLD_OTP_DEV_CODE: '424242',
         APNS_KEY_ID: '9W7A69BV93',
         APNS_TEAM_ID: 'T8348X4CNY',
         APNS_BUNDLE_ID: 'com.gojo.gojogo',
