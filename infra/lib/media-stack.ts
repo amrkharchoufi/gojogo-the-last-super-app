@@ -8,15 +8,25 @@ import { Construct } from 'constructs';
 /**
  * User media: S3 bucket written via backend-presigned PUT URLs.
  *
- * Reads SHOULD go through CloudFront, but this AWS account is not yet
- * verified for CloudFront (new-account restriction; AWS Support must lift
- * it). Until then objects under media/* are public-read straight from S3.
- * Once support verifies the account, flip ENABLE_CLOUDFRONT to true and
- * redeploy GojoGoMediaStack + GojoGoAppStack — the app picks up the new
- * domain via the MEDIA_CDN_DOMAIN env var; keys/URLs keep the same paths.
+ * Reads SHOULD go through CloudFront — it is faster everywhere (edge cache
+ * near the user instead of one region), it is cheaper per GB than S3 egress,
+ * and it lets the bucket go fully private behind an Origin Access Control
+ * instead of serving `media/*` to the open internet. All of that is written
+ * below and switched off, because the blocker is not code: a new AWS account
+ * is not entitled to CloudFront until Support lifts the restriction.
+ *
+ * So it is a **deploy-time flag, not a source edit**:
+ *
+ *   cdk deploy GojoGoMediaStack GojoGoAppStack -c enableCloudfront=true
+ *
+ * Turning it on flips the bucket to BLOCK_ALL and drops the public-read policy
+ * in the same change, so there is no window where both doors are open. The app
+ * picks up the new host via MEDIA_CDN_DOMAIN and object keys are unchanged, so
+ * previously uploaded URLs keep resolving.
+ *
+ * Deploying with the flag on before the account is entitled fails the stack
+ * rather than half-applying it, which is the safe direction.
  */
-const ENABLE_CLOUDFRONT = false;
-
 export class GojoGoMediaStack extends cdk.Stack {
   readonly bucket: s3.Bucket;
   /** Domain that serves uploaded objects (CloudFront when enabled, else S3). */
@@ -24,6 +34,11 @@ export class GojoGoMediaStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    // `-c enableCloudfront=true`. Accepts the boolean or the string CDK context
+    // gives you depending on whether it came from the CLI or cdk.json.
+    const flag = this.node.tryGetContext('enableCloudfront');
+    const ENABLE_CLOUDFRONT = flag === true || flag === 'true';
 
     this.bucket = new s3.Bucket(this, 'UserMedia', {
       bucketName: `gojogo-user-media-${this.account}`,
@@ -37,13 +52,22 @@ export class GojoGoMediaStack extends cdk.Stack {
           }),
       cors: [
         {
+          // Wide open on purpose, and it grants nothing: a PUT still needs a
+          // presigned URL the backend minted, and while reads are public a
+          // browser origin rule cannot protect an object anyone can curl. The
+          // thing that actually closes this is CloudFront + a private bucket
+          // above, not a narrower list here.
           allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET, s3.HttpMethods.HEAD],
           allowedOrigins: ['*'],
           allowedHeaders: ['*'],
           maxAge: 3600,
         },
       ],
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      // RETAIN, not DESTROY: this holds avatars, post images and delivery proof
+      // photos — user data that no migration can regenerate. A stack teardown
+      // should leave an orphaned bucket to clean up by hand, not silently take
+      // everybody's uploads with it.
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     if (ENABLE_CLOUDFRONT) {

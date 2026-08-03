@@ -598,6 +598,34 @@ class MessagingRepository {
             .key(Map.of("pk", s("WORLDOTP#" + profileId), "sk", s("OTP"))));
     }
 
+    // ---- WebSocket connect tickets --------------------------------------
+    //
+    //   Ticket  pk=WSTICKET#{ticket}  sk=TICKET  { sub, expiresAt, ttl }
+    //
+    // A socket URL cannot carry an Authorization header, so whatever
+    // authenticates $connect ends up in the query string — and query strings are
+    // written to access logs in plain text. So what goes there is not the user's
+    // ID token (an hour of full account access sitting in a log file) but one of
+    // these: random, single-use, and dead within seconds.
+    //
+    // Keyed by the ticket itself so the authorizer's consume is a single O(1)
+    // delete, and carrying the *Cognito subject* rather than the profile id
+    // because that is what the connection registry and Fanout key on.
+
+    /** Stores a freshly minted connect ticket. */
+    void putSocketTicket(String ticket, String cognitoSub, Instant expiresAt) {
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", s("WSTICKET#" + ticket));
+        item.put("sk", s("TICKET"));
+        item.put("sub", s(cognitoSub));
+        item.put("expiresAt", n(expiresAt.getEpochSecond()));
+        // DynamoDB's own TTL sweep is lazy (up to 48h), so it is housekeeping
+        // rather than the expiry check — the authorizer compares expiresAt
+        // itself and refuses a stale row the sweeper hasn't reached yet.
+        item.put("ttl", n(expiresAt.getEpochSecond() + 300));
+        db().putItem(r -> r.tableName(table).item(item));
+    }
+
     // ---- contact aliases (private per-viewer renames) ----------------------
 
     // Item: pk=WORLDUSER#{viewerId}  sk=ALIAS#{contactId}  { alias }

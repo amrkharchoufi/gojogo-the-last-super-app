@@ -78,6 +78,11 @@ jobs:
           DB_NAME: gojogo
           DB_USER: gojogo
           DB_PASSWORD: gojogo
+          # The service container is a plain Postgres with no certificate. Real
+          # deploys default to sslmode=require (and RDS refuses plaintext), so
+          # this override is what keeps that default honest instead of weakening
+          # it for everybody to keep CI happy.
+          DB_SSLMODE: disable
           # A syntactically valid issuer that is never reached: the resource
           # server only fetches JWKS when a request arrives, and none does.
           COGNITO_ISSUER_URI: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ImKOJoJaA

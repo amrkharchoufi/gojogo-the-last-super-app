@@ -2,9 +2,15 @@ spring:
   application:
     name: gojogo-backend
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:gojogo}
+    # sslmode defaults to `require` so a real deploy encrypts in transit (RDS
+    # also refuses plaintext now — see rds.force_ssl in the data stack). Local
+    # development against a plain container overrides it with DB_SSLMODE=disable.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:gojogo}?sslmode=${DB_SSLMODE:require}
     username: ${DB_USER:gojogo}
-    password: ${DB_PASSWORD:gojogo}
+    # No default. A deploy that forgets DB_PASSWORD should fail to start and say
+    # so, rather than boot and sit there reachable with a password that is
+    # written down in this file.
+    password: ${DB_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: validate

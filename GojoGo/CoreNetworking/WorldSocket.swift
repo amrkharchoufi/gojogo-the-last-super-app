@@ -1,15 +1,33 @@
 import Foundation
 
 /// My World real-time channel: a `URLSessionWebSocketTask` to the API Gateway
-/// WebSocket API, authenticated with the Cognito ID token in the query string
-/// (validated by the $connect authorizer Lambda). Server->client only — the
-/// client sends over REST and receives message/reaction/read/typing events
-/// here.
+/// WebSocket API. Server->client only — the client sends over REST and receives
+/// message/reaction/read/typing events here.
+///
+/// **Authentication is a single-use ticket, not the ID token.** A `wss://`
+/// handshake cannot carry an `Authorization` header, so whatever authenticates
+/// it travels in the query string — and query strings are written verbatim into
+/// API Gateway and CloudWatch access logs. Putting the ID token there would
+/// leave an hour of full account access sitting in plain text in a log store.
+/// So the socket asks the backend for a ticket first, over an ordinary
+/// authenticated request where the token rides in a header: the ticket is
+/// random, bound to this account, dead in ~30 seconds, and the $connect
+/// authorizer destroys it as it reads it. What reaches the log is spent.
+///
+/// A ticket is minted per dial, which is correct rather than wasteful — it is
+/// one small request against a connection that then lives for minutes, and a
+/// reused ticket would not be single-use.
 ///
 /// The connection is treated as disposable: it is pinged every 30s so a dead
 /// socket is noticed within seconds rather than on the next send, reconnects
 /// with an escalating backoff, and is torn down/rebuilt when the app comes back
 /// to the foreground (API Gateway drops idle sockets after 10 minutes).
+/// The one-shot credential the handshake spends (`POST /v1/messaging/socket/ticket`).
+private struct SocketTicket: Decodable {
+    let ticket: String
+    let expiresInSeconds: Int
+}
+
 @MainActor
 final class WorldSocket: NSObject {
 
@@ -74,9 +92,13 @@ final class WorldSocket: NSObject {
     private func openAndListen() async {
         while shouldRun, !Task.isCancelled {
             do {
-                let token = try await AuthSession.shared.validIdToken()
+                let credential = try await handshakeCredential()
                 guard var comps = URLComponents(string: BackendConfig.messagingSocketURL) else { return }
-                comps.queryItems = [URLQueryItem(name: "token", value: token)]
+                // Named `token` because that is the API's declared identity
+                // source — API Gateway rejects a handshake missing it before the
+                // authorizer runs. The value is a ticket; the authorizer tells
+                // the two apart by shape.
+                comps.queryItems = [URLQueryItem(name: "token", value: credential)]
                 guard let url = comps.url else { return }
 
                 let socket = URLSession.shared.webSocketTask(with: url)
@@ -99,6 +121,26 @@ final class WorldSocket: NSObject {
             attempt = min(attempt + 1, 5)
             let delay = min(0.4 * pow(2, Double(attempt - 1)), 8)
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+    }
+
+    /// A fresh connect ticket, falling back to the ID token if the backend has
+    /// no ticket endpoint yet.
+    ///
+    /// The fallback is for one situation only: an app build newer than the
+    /// deployed backend. Losing real-time chat because a rollout landed in the
+    /// wrong order would be a worse failure than the log exposure the ticket
+    /// removes, and the server-side switch (`WS_ALLOW_TOKEN_AUTH=false`) is what
+    /// closes this path for good once both sides have shipped.
+    private func handshakeCredential() async throws -> String {
+        do {
+            let ticket: SocketTicket = try await APIClient.shared.post("/v1/messaging/socket/ticket")
+            return ticket.ticket
+        } catch {
+            #if DEBUG
+            print("WorldSocket ticket unavailable, falling back to ID token: \(error)")
+            #endif
+            return try await AuthSession.shared.validIdToken()
         }
     }
 

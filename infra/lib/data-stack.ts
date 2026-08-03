@@ -87,10 +87,26 @@ export class GojoGoDataStack extends cdk.Stack {
     // place across VPCs. NOTE: deploying this REPLACES the database (test data
     // is lost — acceptable per PROGRESS.md); the endpoint + secret name change,
     // but App Runner reads both dynamically so it re-wires automatically.
+    // Refuse unencrypted connections at the server. The subnets are private, so
+    // this is defence in depth rather than the only thing standing between the
+    // database and the internet — but "private network" is a trust boundary that
+    // holds right up until anything else in the VPC is compromised, and every
+    // credential and every row of personal data crosses this link. The backend
+    // asks for TLS too (sslmode=require in the JDBC URL); this is the half that
+    // cannot be forgotten by a client.
+    const parameterGroup = new rds.ParameterGroup(this, 'PostgresParamsV4', {
+      engine: rds.DatabaseInstanceEngine.postgres({
+        version: rds.PostgresEngineVersion.VER_16,
+      }),
+      description: 'GojoGo Postgres - TLS required',
+      parameters: { 'rds.force_ssl': '1' },
+    });
+
     this.database = new rds.DatabaseInstance(this, 'PostgresV4', {
       engine: rds.DatabaseInstanceEngine.postgres({
         version: rds.PostgresEngineVersion.VER_16,
       }),
+      parameterGroup,
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO),
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
@@ -105,10 +121,22 @@ export class GojoGoDataStack extends cdk.Stack {
       allocatedStorage: 20,
       maxAllocatedStorage: 20,
       multiAz: false,
-      backupRetention: cdk.Duration.days(0),
-      deletionProtection: false,
-      deleteAutomatedBackups: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      // Durability. Backups were off, deletion protection was off and the
+      // removal policy was DESTROY — together that means any `cdk destroy`, any
+      // construct-id change that forces a replace, and any fat-fingered console
+      // click takes the database with it and there is nothing to restore from.
+      // That is survivable while the only rows are test data and unrecoverable
+      // the first day they aren't, and nothing about the code says which day
+      // that is. Seven days of point-in-time recovery costs a few dollars a
+      // month at this storage size.
+      backupRetention: cdk.Duration.days(7),
+      deletionProtection: true,
+      deleteAutomatedBackups: false,
+      // SNAPSHOT, not RETAIN: a deliberate teardown still leaves a restorable
+      // copy behind rather than an orphaned instance nobody is paying attention
+      // to. With deletionProtection on, an accidental teardown does not get this
+      // far in the first place.
+      removalPolicy: cdk.RemovalPolicy.SNAPSHOT,
     });
 
     new cdk.CfnOutput(this, 'DbEndpoint', { value: this.database.dbInstanceEndpointAddress });

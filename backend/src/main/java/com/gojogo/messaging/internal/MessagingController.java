@@ -29,10 +29,28 @@ class MessagingController {
 
     private final MessagingService messaging;
     private final CurrentProfile current;
+    private final SocketTicketService tickets;
 
-    MessagingController(MessagingService messaging, CurrentProfile current) {
+    MessagingController(MessagingService messaging, CurrentProfile current,
+                        SocketTicketService tickets) {
         this.messaging = messaging;
         this.current = current;
+        this.tickets = tickets;
+    }
+
+    /**
+     * A one-shot credential for the {@code wss://} handshake — see
+     * {@link SocketTicketService} for why the socket is not opened with the ID
+     * token itself.
+     *
+     * <p>Answered from the bearer token's own subject rather than from a stored
+     * profile: the ticket stands in for that token at {@code $connect}, and the
+     * connection registry keys on the Cognito subject. A caller with no valid
+     * token never reaches here, so there is nothing further to authorise.
+     */
+    @PostMapping("/v1/messaging/socket/ticket")
+    SocketTicketDto socketTicket(@AuthenticationPrincipal Jwt jwt) {
+        return tickets.mint(jwt.getSubject());
     }
 
     @GetMapping("/v1/conversations")

@@ -2,6 +2,8 @@ package com.gojogo.notifications.internal;
 
 import com.gojogo.profile.ProfileApi;
 import com.gojogo.profile.ProfileDto;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +20,8 @@ import java.util.UUID;
  */
 @Service
 class NotificationService {
+
+    private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
 
     private final NotificationRepository repo;
     private final DeviceTokenRepository deviceTokens;
@@ -47,10 +51,34 @@ class NotificationService {
         apns.notify(recipientId, actorId, type, postId, storyFrameId);
     }
 
+    /**
+     * Points a device at the account that just signed in on it.
+     *
+     * <p><b>Reassignment is deliberate.</b> APNs issues one token per device per
+     * app, not per person, so a phone that is handed over — logged out, logged
+     * back in as somebody else — presents the same token under a new account.
+     * Refusing to move it would leave the new owner with no notifications at
+     * all, so this is the behaviour rather than a hole.
+     *
+     * <p>It is still worth a line in the log. Taking a device over requires
+     * already knowing its token, which nothing in this system ever discloses —
+     * but if one did leak, this is where it would be spent, and a hand-off that
+     * nobody can see afterwards is one that cannot be investigated. Logged at
+     * INFO with no token in the message: the identifier is the credential, and
+     * writing it here would put it in exactly the log a leak would come from.
+     */
     @Transactional
     void registerDevice(UUID userId, String token, String platform) {
         deviceTokens.findByToken(token).ifPresentOrElse(
-            existing -> { existing.reassign(userId); deviceTokens.save(existing); },
+            existing -> {
+                UUID previous = existing.getProfileId();
+                if (previous != null && !previous.equals(userId)) {
+                    log.info("Device handed over: push token moves from profile {} to {}",
+                        previous, userId);
+                }
+                existing.reassign(userId);
+                deviceTokens.save(existing);
+            },
             () -> deviceTokens.save(new DeviceToken(userId, token,
                 platform == null ? "ios" : platform)));
     }

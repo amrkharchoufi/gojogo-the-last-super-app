@@ -55,7 +55,9 @@ export class GojoGoMessagingStack extends cdk.Stack {
 
     const issuerUri = `https://cognito-idp.${this.region}.amazonaws.com/${props.userPool.userPoolId}`;
 
-    // $connect authorizer: validates the Cognito ID token from ?token=.
+    // $connect authorizer: spends the single-use connect ticket from ?token=
+    // (and still accepts a Cognito ID token while older builds are in the wild —
+    // see the Lambda's own header for why the parameter keeps that name).
     const authorizerFn = new lambda.Function(this, 'WsAuthorizer', {
       functionName: 'gojogo-ws-authorizer',
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -65,8 +67,16 @@ export class GojoGoMessagingStack extends cdk.Stack {
       environment: {
         COGNITO_ISSUER_URI: issuerUri,
         COGNITO_APP_CLIENT_ID: props.userPoolClient.userPoolClientId,
+        // Tickets live in the same table as the connection registry.
+        MESSAGING_TABLE: this.table.tableName,
+        // Flip to 'false' once the ticket-aware iOS build is adopted; that
+        // closes the last path where an ID token can reach a query string.
+        WS_ALLOW_TOKEN_AUTH: 'true',
       },
     });
+    // Spending a ticket is a DeleteItem returning the old row — read and destroy
+    // in one atomic call, which is what makes it single-use.
+    this.table.grantWriteData(authorizerFn);
 
     // $connect / $disconnect handler: maintains the connection registry.
     const connectionFn = new lambda.Function(this, 'WsConnections', {
@@ -91,6 +101,24 @@ export class GojoGoMessagingStack extends cdk.Stack {
         integration: new WebSocketLambdaIntegration('DisconnectIntegration', connectionFn),
       },
     });
+
+    // No authorizer result caching. API Gateway would otherwise key a cached
+    // Allow on the credential in the query string, so a replayed ticket would be
+    // waved through without the authorizer Lambda running — silently undoing the
+    // single-use guarantee the ticket exists to provide. It defaults to 300s, so
+    // this has to be said explicitly.
+    //
+    // Found by walking the tree rather than by construct path: the L2 authorizer
+    // decides where it attaches its L1, and a hard-coded path would break on a
+    // CDK upgrade with no signal beyond caching quietly coming back.
+    const authorizers = this.webSocketApi.node
+      .findAll()
+      .filter((c): c is apigwv2.CfnAuthorizer => c instanceof apigwv2.CfnAuthorizer);
+    if (authorizers.length === 0) {
+      throw new Error('WebSocket authorizer not found — connect-ticket replay protection '
+        + 'depends on setting authorizerResultTtlInSeconds to 0');
+    }
+    authorizers.forEach((a) => { a.authorizerResultTtlInSeconds = 0; });
 
     this.webSocketStage = new apigwv2.WebSocketStage(this, 'ProdStage', {
       webSocketApi: this.webSocketApi,
