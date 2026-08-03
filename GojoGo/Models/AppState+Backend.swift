@@ -17,6 +17,14 @@ extension AppState {
     // MARK: Session bootstrap
 
     func connectBackend() async {
+        // Unknown again for the length of this attempt, and answered at the end
+        // of it whichever way it goes — a failed connect is still an answer, and
+        // the screens that shimmer while it's unknown need to be let go of. The
+        // reset matters on the sign-in path: launching signed out settles this
+        // to "no backend", and without clearing it here the first connect after
+        // logging in would run with the answer already (wrongly) in.
+        backendResolved = false
+        defer { backendResolved = true }
         do {
             _ = try await ProfileStore.shared.establishSession()
             let profile = try await ProfileStore.shared.fetchMe()

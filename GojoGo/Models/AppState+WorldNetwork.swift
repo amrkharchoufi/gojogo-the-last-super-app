@@ -34,11 +34,22 @@ extension AppState {
     /// posts, arriving after everything else had already settled. `!setupLoaded`
     /// is the honest "we don't know yet", and it is a window of one request.
     ///
-    /// Still bounded, though: once the answer is in and it is *not* set up,
-    /// nobody is fetching a feed, and a placeholder for a request that will
-    /// never be made is what teaches people to distrust a spinner.
+    /// The same argument applies to the session itself, and it is the older half
+    /// of the same bug: `backendConnected` is false for the whole of
+    /// `connectBackend()`, so waiting for it meant the feed could not begin to
+    /// shimmer until the session and the profile had both come back — while the
+    /// messages list below it had been shimmering since the first frame. That is
+    /// the two-stage load people see: chats first, then stories and posts
+    /// starting a *second* loading state under a screen that looked done.
+    /// `!backendResolved` is the honest "we don't know yet" for the connection.
+    ///
+    /// Still bounded, though: once the answer is in and there is no backend, or
+    /// it is *not* set up, nobody is fetching a feed, and a placeholder for a
+    /// request that will never be made is what teaches people to distrust a
+    /// spinner.
     var shouldShowWorldFeedShimmer: Bool {
-        backendConnected && !worldFeedLoaded
+        !worldFeedLoaded
+            && (backendConnected || !backendResolved)
             && (worldSetupComplete || !worldSetupLoaded)
             && worldStories.isEmpty && worldFeedPosts.isEmpty
     }

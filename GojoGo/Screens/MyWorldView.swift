@@ -4,24 +4,40 @@ import SwiftUI
 struct MyWorldView: View {
     @EnvironmentObject var app: AppState
 
+    /// A thread or a contact page is over the list. It stays mounted underneath
+    /// — that's the point — but it stops polling while nobody can see it.
+    private var covered: Bool {
+        app.showWorldContact || app.selectedWorldConversationID != nil
+    }
+
     var body: some View {
         ZStack {
             IMColor.bg.ignoresSafeArea()
+
+            // The list is the floor of this screen, not one of three
+            // alternatives: a thread is pushed over it and slides back off it,
+            // the way a navigation stack works — and, more to the point, the way
+            // that leaves something behind the thread while it moves. Swapped
+            // branch for branch, the list had to fade *in* underneath a chat
+            // that was fading *out*, and the two crossfades met at the page
+            // colour: leaving a thread with a wallpaper went picture → blank
+            // white → messages, every time.
+            WorldMessagesList(covered: covered)
+                .zIndex(0)
 
             if app.showWorldContact, app.selectedWorldContact != nil || app.selectedWorldConversation != nil {
                 WorldContactView()
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)))
+                    .zIndex(1)
             } else if let id = app.selectedWorldConversationID,
                       app.worldConversations.contains(where: { $0.id == id }) {
                 WorldChatView(conversationID: id)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .trailing).combined(with: .opacity)))
-            } else {
-                WorldMessagesList()
-                    .transition(.opacity)
+                        removal: .move(edge: .trailing)))
+                    .zIndex(1)
             }
         }
         .animation(.ggOverlay, value: app.selectedWorldConversationID)
@@ -81,6 +97,11 @@ struct WorldSheetHost: ViewModifier {
 
 private struct WorldMessagesList: View {
     @EnvironmentObject var app: AppState
+    /// True while a thread or contact page is on top of the list. The list is
+    /// still here, so it keeps its scroll position and its first fetch doesn't
+    /// run again on the way back — but a screen nobody is looking at has no
+    /// business fetching.
+    var covered = false
     /// Drives the relative timestamps ("2m", "1h") without a per-row timer, and
     /// doubles as a safety-net poll behind the socket.
     @State private var clock = Date()
@@ -99,8 +120,16 @@ private struct WorldMessagesList: View {
             await app.refreshWorldConversations()
             await app.connectWorldNetwork()
         }
+        // Coming back from a thread. The list was never torn down, so nothing
+        // re-runs on its own — and the rows behind the thread are the ones that
+        // changed while it was open.
+        .onChange(of: covered) { _, nowCovered in
+            guard !nowCovered else { return }
+            Task { await app.refreshWorldConversations() }
+        }
         .onReceive(tick) { now in
             clock = now
+            guard !covered else { return }
             Task {
                 await app.refreshWorldConversations()
                 await app.refreshWorldFeed()

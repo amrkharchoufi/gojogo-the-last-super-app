@@ -108,7 +108,12 @@ struct WorldChatView: View {
         .animation(.ggNav, value: app.showWorldAppsMenu)
         .coordinateSpace(name: "worldChat")
         .onPreferenceChange(BubbleFrameKey.self) { bubbleFrames = $0 }
-        .background(IMColor.bg.ignoresSafeArea())
+        // No page-colour sheet behind the thread. `chatWallpaper` already paints
+        // every branch of this screen edge to edge, including the plain one — and
+        // this one sat *outside* the dismiss offset and opacity, so a thread
+        // swiped away slid off a white card and faded into it instead of
+        // uncovering the list. The wallpaper went to white and the messages
+        // arrived after.
         .photosPicker(
             isPresented: $showPhotoPicker,
             selection: $photoItems,

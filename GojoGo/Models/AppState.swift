@@ -17,6 +17,13 @@ final class AppState: ObservableObject {
     @Published var authError: String? = nil
     /// True once /v1/auth/session + profile succeeded against the live backend.
     var backendConnected: Bool = false
+    /// True once `connectBackend()` has finished, whichever way it went. Screens
+    /// that shimmer need to tell "no backend yet" apart from "no backend at all":
+    /// before this flips, `backendConnected == false` only means the answer
+    /// hasn't come back, and a screen that reads it as "offline" starts its
+    /// loading state late — one stage behind everything that was already
+    /// shimmering.
+    @Published var backendResolved: Bool = false
     /// Initial live-feed load in flight (drives the Home loading state).
     @Published var feedLoading: Bool = false
     /// Keyset cursor for the next feed page; nil = no more pages.
@@ -674,6 +681,10 @@ final class AppState: ObservableObject {
             // No real account tokens — any cached prototype session is obsolete.
             SessionStore.clear()
             bootstrapFreshSession()
+            // Nobody is going to call connectBackend on this launch, so the
+            // answer is in already: there is no backend. Screens that shimmer
+            // while it's unknown would otherwise shimmer forever.
+            backendResolved = true
             #if DEBUG
             // Headless E2E hook: `simctl launch` with SIMCTL_CHILD_GG_AUTOLOGIN_*.
             let env = ProcessInfo.processInfo.environment
@@ -946,6 +957,9 @@ final class AppState: ObservableObject {
     }
 
     func openWorldConversation(_ id: UUID) {
+        // The list stays mounted under the thread now, search field and all, so
+        // its keyboard would come along for the ride.
+        Keyboard.dismiss()
         showWorldAppsMenu = false
         showWorldContact = false
         showWorldFilters = false
@@ -2183,6 +2197,7 @@ final class AppState: ObservableObject {
         PushRegistrar.shared.reset()
         clearGojoMessages()
         backendConnected = false
+        backendResolved = false
         pendingOnboarding = false
         authPassword = ""
         authCode = ""
