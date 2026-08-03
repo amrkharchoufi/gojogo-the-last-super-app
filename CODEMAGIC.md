@@ -20,8 +20,22 @@ The pipeline lives in [codemagic.yaml](codemagic.yaml). Two workflows:
    ```
 
    That name is what `integrations.app_store_connect` in the YAML looks up. If you name it something
-   else, change the YAML to match. This one key covers both signing (certificates and profiles are
-   fetched and installed automatically) and the TestFlight upload — there is nothing to upload by hand.
+   else, change the YAML to match. This one key covers both signing and the TestFlight upload — there
+   is nothing to upload by hand. The key needs the **App Manager** role, because the build asks it to
+   create signing files at Apple, not just read them.
+
+   Signing uses the *automatic* flow: the release workflow runs
+   `app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create`, which makes
+   Apple mint the App Store provisioning profile (and a distribution certificate if none matches).
+   There is deliberately **no `ios_signing:` block** in the environment — that block means "use the
+   certificate and profile I uploaded to Codemagic under Team settings → Code signing identities", and
+   with nothing uploaded it fails during machine setup with *No matching profiles found for bundle
+   identifier "com.gojo.gojogo" and distribution type "app_store"*. The two styles cannot be mixed.
+
+   One thing to tidy up when you next have a Mac: set a secure variable `CERTIFICATE_PRIVATE_KEY` to
+   the distribution certificate's private key. Without it a build can't tell that a usable certificate
+   already exists and asks Apple for another one, and Apple caps you at three. The build prints a
+   `NOTE:` block telling you where the key was written on the runner.
 
 3. **Environment group `mapbox`.** Application settings → Environment variables → group `mapbox`,
    both marked *Secure*:

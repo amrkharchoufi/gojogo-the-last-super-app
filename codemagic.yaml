@@ -45,9 +45,11 @@ workflows:
       <<: *env_versions
       groups:
         - mapbox
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.gojo.gojogo
+      # No `ios_signing:` block here on purpose. That block fetches signing files
+      # *already uploaded to Codemagic* under Team settings → Code signing
+      # identities; with nothing uploaded it fails during machine setup with
+      # "No matching profiles found for bundle identifier". Signing files are
+      # fetched from Apple in the scripts below instead.
       vars:
         XCODE_PROJECT: "GojoGo.xcodeproj"
         XCODE_SCHEME: "GojoGo"
@@ -69,8 +71,30 @@ workflows:
     scripts:
       - *mapbox_credentials
 
-      - name: Set up code signing on the Xcode project
-        script: xcode-project use-profiles
+      - name: Fetch signing files from Apple and set up code signing
+        script: |
+          set -e
+          keychain initialize
+
+          if [ -z "$CERTIFICATE_PRIVATE_KEY" ]; then
+            echo "NOTE: CERTIFICATE_PRIVATE_KEY is not set, so this build cannot recognise"
+            echo "NOTE: an existing iOS Distribution certificate and will ask Apple for a new"
+            echo "NOTE: one. Apple allows 3 per account. To reuse the same certificate on every"
+            echo "NOTE: build, save its private key as a secure variable named"
+            echo "NOTE: CERTIFICATE_PRIVATE_KEY — fetch-signing-files writes it to"
+            echo "NOTE: ~/.codemagic/certificate_private_key on this machine."
+          fi
+
+          # --create makes Apple mint whatever is missing: the App Store
+          # provisioning profile for the bundle ID, and a distribution
+          # certificate if no matching one is found.
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --platform IOS \
+            --create
+
+          keychain add-certificates
+          xcode-project use-profiles
 
       - name: Switch push notifications to the production environment
         script: |
