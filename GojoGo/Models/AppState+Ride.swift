@@ -112,7 +112,13 @@ extension AppState {
         // "the network blinked" indistinguishable from "there is no ride" — and
         // clear a live trip off the screen every time a request failed.
         do {
-            if let live = try await TravelStore.shared.live() {
+            // A tracked ride is refreshed by id, never via /live: the live read
+            // excludes COMPLETED (correctly — a finished trip is not "in a
+            // car"), so refreshing a just-completed trip through it erased the
+            // rating screen at the exact moment the completion push arrived.
+            if let current = ride {
+                apply(try await TravelStore.shared.ride(current.id))
+            } else if let live = try await TravelStore.shared.live() {
                 apply(live)
             } else {
                 clearRide()
@@ -122,6 +128,15 @@ extension AppState {
             print("Ride refresh failed: \(error.localizedDescription)")
             #endif
         }
+    }
+
+    /// Puts a server ride on the rider's screen from outside the normal flow —
+    /// a completion push tapped after the app was relaunched, when nothing was
+    /// being tracked. The caller has already established this is the rider's
+    /// seat; a live ride also restarts the poll that follows the car.
+    func adoptRiderRide(_ fresh: RideDTO) {
+        apply(fresh)
+        if !fresh.isOver { startRidePolling() }
     }
 
     /// Polls while a ride is live.
@@ -172,6 +187,13 @@ extension AppState {
             case "IN_TRIP": .inTrip
             case "COMPLETED": .completed
             default: .home
+        }
+        if phase == .completed && travelPhase != .completed {
+            // The trip just ended, which is when the server mints the vehicle
+            // verification invite. The screen's own `.task` loaded invites at
+            // appear — before this trip existed — so without this reload the
+            // push says "help us check the car" and the app shows nothing.
+            Task { await loadVerificationInvites() }
         }
         if phase != travelPhase {
             withAnimation(.easeInOut(duration: 0.3)) { travelPhase = phase }

@@ -181,7 +181,20 @@ extension AppState {
                 case "ride":
                     // Whichever seat this account is in: the rider's live trip,
                     // the driver's, or a negotiation waiting on the other side.
-                    if self.ride != nil { await self.refreshRide() }
+                    if self.ride != nil {
+                        await self.refreshRide()
+                    } else if let refID = (info["refId"] as? String).flatMap(UUID.init(uuidString:)),
+                              self.driverRide?.id != refID,
+                              let fresh = try? await TravelStore.shared.ride(refID),
+                              fresh.tokenCost == nil {
+                        // Nothing on screen — the app was relaunched between the
+                        // trip and the push (most often "Trip complete"). Fetch
+                        // the ride the push names and put it back. `tokenCost`
+                        // is the seat test: the server only ever shows it to the
+                        // assigned driver, so nil means this account is the
+                        // rider and the rider's screens are the right ones.
+                        self.adoptRiderRide(fresh)
+                    }
                     await self.refreshDriverRide()
                     await self.refreshDriverNegotiation()
                 default:

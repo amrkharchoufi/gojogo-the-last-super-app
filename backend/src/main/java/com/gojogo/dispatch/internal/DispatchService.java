@@ -137,8 +137,14 @@ class DispatchService implements DispatchApi {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "They've already taken something else");
         }
+        // Unconditionally, not just while the offer is open: the normal
+        // negotiated path is decline-then-counter (the driver answered "not at
+        // that price" here and named their price in the vertical), so by the
+        // time the vertical assigns them the offer row reads DECLINED. Leaving
+        // it that way made the assignment invisible to `currentAssignment` —
+        // the winning driver's own app told them somebody else got the trip
+        // while the rider stood waiting for their car.
         offers.findByJobIdAndWorkerId(job.getId(), workerId)
-            .filter(o -> o.getState().isOpen())
             .ifPresent(o -> o.close(OfferState.ACCEPTED));
         worker.countAccepted();
         job.assignTo(worker.getId());

@@ -123,6 +123,27 @@ class DispatchAssignmentTests {
     }
 
     @Test
+    @DisplayName("a negotiated assignment revives the declined offer — the driver who "
+        + "countered must see the job as theirs")
+    void negotiatedAssignmentFlipsTheDeclinedOffer() {
+        // The normal negotiated path: "not at that price" is a decline here and
+        // a counter in the vertical. When the rider takes that counter, the
+        // vertical assigns this worker — and the offer row must read ACCEPTED,
+        // because `currentAssignment` walks accepted offers to find the job.
+        // Left DECLINED, the winning driver's own app reported the trip as
+        // taken by somebody else while the rider stood waiting for their car.
+        service.decline(DRIVER_USER, driverOffer.getId());
+        when(offers.findByJobIdAndWorkerId(job.getId(), driver.getId()))
+            .thenReturn(Optional.of(driverOffer));
+
+        service.assign(JobKind.RIDE, RIDE, driver.getId());
+
+        assertThat(driverOffer.getState()).isEqualTo(OfferState.ACCEPTED);
+        assertThat(job.getAssignedWorkerId()).isEqualTo(driver.getId());
+        assertThat(driver.getStatus()).isEqualTo(WorkerStatus.BUSY);
+    }
+
+    @Test
     @DisplayName("the second accept on the same job is refused, and says so plainly")
     void secondAcceptIsRefused() {
         service.accept(DRIVER_USER, driverOffer.getId());
