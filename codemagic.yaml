@@ -54,7 +54,7 @@ workflows:
         BUNDLE_ID: "com.gojo.gojogo"
         # Numeric Apple ID of the app in App Store Connect. Leave unset until the
         # app record exists; the build number then falls back to Codemagic's counter.
-        APP_STORE_APPLE_ID: ""
+        APP_STORE_APPLE_ID: "6762012938"
     cache:
       cache_paths:
         - $HOME/Library/Caches/org.swift.swiftpm
