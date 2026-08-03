@@ -32,12 +32,29 @@ The pipeline lives in [codemagic.yaml](codemagic.yaml). Two workflows:
    with nothing uploaded it fails during machine setup with *No matching profiles found for bundle
    identifier "com.gojo.gojogo" and distribution type "app_store"*. The two styles cannot be mixed.
 
-   One thing to tidy up when you next have a Mac: set a secure variable `CERTIFICATE_PRIVATE_KEY` to
-   the distribution certificate's private key. Without it a build can't tell that a usable certificate
-   already exists and asks Apple for another one, and Apple caps you at three. The build prints a
-   `NOTE:` block telling you where the key was written on the runner.
+3. **Environment group `signing`.** One variable, marked *Secure*:
 
-3. **Environment group `mapbox`.** Application settings → Environment variables → group `mapbox`,
+   | Variable | Value |
+   | --- | --- |
+   | `CERTIFICATE_PRIVATE_KEY` | a 2048-bit RSA private key in PEM form |
+
+   Apple builds the distribution certificate *from a key you own*, so the build cannot invent one —
+   without this variable it stops immediately and tells you so. Generate the key once, on any machine:
+
+   ```bash
+   ssh-keygen -t rsa -b 2048 -m PEM -f ios_distribution_private_key -q -N ""
+   ```
+
+   Paste the whole file into the variable, including the `-----BEGIN RSA PRIVATE KEY-----` and
+   `-----END RSA PRIVATE KEY-----` lines. **Do not base64-encode it** — that is the single most common
+   cause of *Cannot save Signing Certificates without certificate private key*.
+
+   Then keep that key forever, and back it up somewhere you trust. It is how every later build
+   recognises the certificate it already has; change it and the next build asks Apple for another
+   certificate, against a cap of three. Treat it like a password — anyone holding it plus your API key
+   can sign apps as your team.
+
+4. **Environment group `mapbox`.** Application settings → Environment variables → group `mapbox`,
    both marked *Secure*:
 
    | Variable | Value |
@@ -45,14 +62,14 @@ The pipeline lives in [codemagic.yaml](codemagic.yaml). Two workflows:
    | `MAPBOX_DOWNLOADS_TOKEN` | your **secret** `sk.…` token with the `DOWNLOADS:READ` scope — written to `~/.netrc` so SPM can fetch the Mapbox binaries |
    | `MAPBOX_PUBLIC_TOKEN` | your **public** `pk.…` token — written to `GojoGo/MapboxAccessToken`, which is gitignored and so never reaches the runner from git |
 
-4. **App record.** `com.gojo.gojogo` needs to exist as an App ID in the developer portal *and* as an app
+5. **App record.** `com.gojo.gojogo` needs to exist as an App ID in the developer portal *and* as an app
    in App Store Connect before the first TestFlight upload. Its numeric Apple ID is already set as
    `APP_STORE_APPLE_ID` in `codemagic.yaml` (`6762012938`), so the build number is read from App Store
    Connect and bumped by one. If that number is ever wrong the lookup fails, the build falls back to
    Codemagic's own counter — which starts at 1 and can collide with builds you have already uploaded —
    and the step prints a `WARNING:` line saying so. Grep the log for it if a build number looks off.
 
-5. **Capabilities on the App ID.** `GojoGo/GojoGo.entitlements` asks for **Push Notifications** and
+6. **Capabilities on the App ID.** `GojoGo/GojoGo.entitlements` asks for **Push Notifications** and
    **Sign in with Apple**. Both have to be enabled on the App ID in the developer portal, otherwise the
    App Store profile Codemagic fetches won't grant them and the export step fails after a full build.
 

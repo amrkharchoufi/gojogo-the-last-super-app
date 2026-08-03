@@ -45,6 +45,9 @@ workflows:
       <<: *env_versions
       groups:
         - mapbox
+        # CERTIFICATE_PRIVATE_KEY — the RSA key Apple builds the distribution
+        # certificate from. Generated once and never changed; see CODEMAGIC.md.
+        - signing
       # No `ios_signing:` block here on purpose. That block fetches signing files
       # *already uploaded to Codemagic* under Team settings → Code signing
       # identities; with nothing uploaded it fails during machine setup with
@@ -77,20 +80,29 @@ workflows:
           keychain initialize
 
           if [ -z "$CERTIFICATE_PRIVATE_KEY" ]; then
-            echo "NOTE: CERTIFICATE_PRIVATE_KEY is not set, so this build cannot recognise"
-            echo "NOTE: an existing iOS Distribution certificate and will ask Apple for a new"
-            echo "NOTE: one. Apple allows 3 per account. To reuse the same certificate on every"
-            echo "NOTE: build, save its private key as a secure variable named"
-            echo "NOTE: CERTIFICATE_PRIVATE_KEY — fetch-signing-files writes it to"
-            echo "NOTE: ~/.codemagic/certificate_private_key on this machine."
+            echo "CERTIFICATE_PRIVATE_KEY is missing. Add it to the 'signing' environment group."
+            echo
+            echo "Apple builds the distribution certificate from a private key you own, so"
+            echo "there is nothing for this build to create one from. Generate a key once:"
+            echo
+            echo "  ssh-keygen -t rsa -b 2048 -m PEM -f ios_distribution_private_key -q -N ''"
+            echo
+            echo "then paste the whole file — including the BEGIN and END RSA PRIVATE KEY"
+            echo "lines — into a secure variable named CERTIFICATE_PRIVATE_KEY. Do not"
+            echo "base64-encode it. Keep the same key forever: it is what lets later builds"
+            echo "recognise the certificate they already have instead of asking Apple for"
+            echo "another one, and Apple caps distribution certificates at three."
+            exit 1
           fi
 
           # --create makes Apple mint whatever is missing: the App Store
           # provisioning profile for the bundle ID, and a distribution
-          # certificate if no matching one is found.
+          # certificate built from CERTIFICATE_PRIVATE_KEY if no certificate
+          # matching that key exists yet.
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --platform IOS \
+            --certificate-key "@env:CERTIFICATE_PRIVATE_KEY" \
             --create
 
           keychain add-certificates
