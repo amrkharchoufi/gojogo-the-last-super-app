@@ -16,6 +16,9 @@ struct WorldContactView: View {
     @State private var confirmingDelete = false
     @State private var renaming = false
     @State private var draftAlias = ""
+    /// Bumped when the safety-number card writes, so it re-reads the on-disk
+    /// verification state — that state is deliberately not `@Published`.
+    @State private var verificationTick = 0
 
     enum ContactTab: String, CaseIterable, Identifiable {
         case info = "Info"
@@ -470,6 +473,8 @@ struct WorldContactView: View {
                 membersCard(members)
             }
 
+            safetyNumberCard
+
             statsCard
             settingsCard
         }
@@ -538,6 +543,87 @@ struct WorldContactView: View {
             // returned to a contact — so both are worth asking for again.
             loadedContentFor = nil
             await loadTheirContent()
+        }
+    }
+
+    // MARK: Safety number (E2EE Phase E)
+    //
+    // The number is a digest of both identity keys, so it can only match if
+    // each side holds the key it thinks it holds. Comparing it out of band is
+    // what makes the key directory untrusted infrastructure instead of trusted
+    // — a server that substituted a key would produce a number that doesn't
+    // match, and nothing else in the app would ever notice.
+    //
+    // Shown only on a 1:1 with an established session: groups are outside v1's
+    // E2EE entirely, and before the first message there is no peer key to
+    // digest. Absent rather than empty, because a "safety number: none" row on
+    // a thread that isn't encrypted would imply the others are.
+
+    @ViewBuilder
+    private var safetyNumberCard: some View {
+        if !isGroup, let contactID, let number = WorldSafetyNumber.displayNumber(with: contactID) {
+            let status = WorldVerificationStore.shared.status(of: contactID)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: status == .verified ? "checkmark.shield.fill" : "lock.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(status == .changedAfterVerification
+                                         ? Color(dark: "FF453A", light: "FF3B30") : (status == .verified ? .green : IMColor.secondary))
+                    Text("Safety number")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(IMColor.secondary)
+                        .textCase(.uppercase)
+                }
+
+                Text(number)
+                    // Monospaced and grouped: this gets read aloud digit by
+                    // digit, and proportional figures make that harder than it
+                    // needs to be.
+                    .font(.system(size: 16, weight: .regular, design: .monospaced))
+                    .foregroundStyle(IMColor.label)
+                    .lineSpacing(4)
+                    .textSelection(.enabled)
+
+                if status == .changedAfterVerification {
+                    Text("This changed since you verified it. That happens when "
+                         + "\(displayName) reinstalls GojoGo — but it is also what "
+                         + "an intercepted conversation looks like. Compare the "
+                         + "number with them again before you trust it.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color(dark: "FF453A", light: "FF3B30"))
+                } else {
+                    Text("Compare these digits with \(displayName) in person or "
+                         + "over a call. If they match, nobody is reading this "
+                         + "conversation.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(IMColor.secondary)
+                }
+
+                Button {
+                    // Marking verified stores the key being vouched for, not a
+                    // flag — a flag would go on claiming "verified" after the
+                    // key it referred to was replaced.
+                    if status == .verified {
+                        WorldVerificationStore.shared.clearVerification(contactID)
+                    } else {
+                        WorldVerificationStore.shared.markVerified(contactID)
+                    }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    verificationTick &+= 1
+                } label: {
+                    Text(status == .verified ? "Clear verification" : "Mark as verified")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(status == .verified ? IMColor.secondary : IMColor.blue)
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(cardShape)
+            .padding(.horizontal, 16)
+            // Verification state lives on disk, not in @Published state, so the
+            // card needs a nudge to re-read it after the button writes.
+            .id(verificationTick)
         }
     }
 

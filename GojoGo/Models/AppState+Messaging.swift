@@ -558,7 +558,17 @@ extension AppState {
                 for: peer,
                 fallback: MessagingStore.shared.otherParticipant(in: conversationId)?.displayName)
                 ?? "This contact"
-            let line = "\(name) is using a new device."
+            // Phase E draws the one distinction that matters. For a contact
+            // nobody verified, a changed key is a reinstall and gets a neutral
+            // line — warning on those would train people to dismiss the warning
+            // that counts. For a contact the user explicitly compared safety
+            // numbers with, the same event is the thing verification exists to
+            // catch, and it says so.
+            let verified = WorldVerificationStore.shared.status(of: peer) != .unverified
+            let line = verified
+                ? "\(name)'s safety number has changed. Verify it again before "
+                    + "sharing anything sensitive."
+                : "\(name) is using a new device."
             // One notice per run of messages — a refetch that re-opens several
             // of their messages must not stack the same sentence.
             if self.worldConversations[i].messages.last(where: { $0.kind == .system })?.text == line {

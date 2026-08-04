@@ -360,10 +360,43 @@ two accounts, confirm the CDN object is ciphertext, and confirm both sides
 render it. Not yet done: driving the attachment picker needs UI input the
 simulator tooling can't supply (see the Phase C notes).
 
-### Phase E — safety numbers *(v1 requirement, not polish)*
-- Identity fingerprint on the contact page + explicit verify action. Until users
-  can compare fingerprints, the key directory could substitute keys silently —
-  the directory is trusted infrastructure exactly until this ships.
+### Phase E — safety numbers *(landed and verified 2026-08-04)*
+
+The directory stops being trusted infrastructure here. Every session starts from
+a bundle **our server** hands out; a server that handed out its own instead
+would sit inside a conversation both ends believe is encrypted, and nothing in
+C or D would notice — the ratchet works perfectly with the wrong peer.
+
+**Landed:**
+- `WorldSafetyNumber`: libsignal's `NumericFingerprintGenerator`, Signal's
+  parameters (5200 iterations, version 2) because an interoperable 60-digit
+  number is only comparable if both sides derive it identically. Rendered as
+  twelve groups of five, monospaced — chunking is not decoration, it is what
+  makes reading sixty digits aloud survivable.
+- `WorldVerificationStore` records **the key that was vouched for**, not a
+  boolean. A boolean would keep claiming "verified" after the key it referred to
+  was replaced, which is exactly the attack this phase exists to catch. Three
+  states: unverified, verified, changed-after-verification.
+- The in-thread notice now splits on that. Unverified → the neutral "using a new
+  device" line, because warning on every reinstall trains people to dismiss the
+  warning that counts. Verified → an explicit "safety number has changed,
+  verify again before sharing anything sensitive".
+- **The Phase C downgrade hole is closed.** The mark is not "we have a session"
+  (which fires legitimately mid-rollout) but "*they* have sent us a sealed
+  message" — only possible once they hold our bundle, after which they have a
+  session and can never send v1 again. A v1 envelope from such a peer is not a
+  straggler; it renders as "wasn't encrypted and was not shown" rather than
+  being read.
+
+**Verified on two devices:** both contact pages render the same number —
+`00343 12773 96857 85860 57666 74980 96331 09768 83616 75292 70368 50809` —
+computed independently, with local/remote roles reversed. Matching is the proof
+each side holds the key the other believes it holds. Marking verified persists
+and reads back (green shield, action flips to "Clear verification").
+
+**Not covered:** QR scanning (`ScannableFingerprint` exists in the vendored
+sources and would remove the read-aloud step) and blocking sends to a
+changed-key contact until re-verified. Both are additive.
 
 ### Phase F — backup & restore *(the WhatsApp behaviour, minus the code)*
 - Continuous encrypted export of the local store → CloudKit private DB; backup
@@ -388,12 +421,9 @@ simulator tooling can't supply (see the Phase C notes).
 - **Search** covers only locally-decrypted history (in practice: everything this
   device has ever seen, thanks to the local store).
 - **Multi-device** deferred; schema-ready via `deviceId`.
-- **A v1 envelope is still accepted on a thread that already has a session.**
-  Refusing it would be real downgrade protection, but it also fires
-  legitimately during rollout: a peer keeps sending v1 until they have fetched
-  our bundle, and we may have established a session toward them first. The
-  honest guard is a per-thread "has been encrypted" high-water mark, and it is
-  only worth anything alongside safety numbers — so it belongs with Phase E.
+- ~~A v1 envelope is still accepted on a thread that already has a session.~~
+  **Closed in Phase E**, with the sharper mark that made it safe: not "we have a
+  session" but "they have sent us a sealed message".
 - **History predates the ratchet.** A vault entry lost (app deleted, sign-out)
   makes that message unreadable forever, by anyone. That is forward secrecy
   working, not a bug — and it is what Phase F's encrypted backup answers.

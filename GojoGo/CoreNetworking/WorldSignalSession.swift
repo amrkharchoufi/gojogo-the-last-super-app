@@ -148,6 +148,39 @@ enum WorldSignalSession {
         return try? address(for: id)
     }
 
+    // MARK: Downgrade high-water mark (Phase E)
+    //
+    // Phase C left a hole and said so: a v1 envelope was still accepted on a
+    // thread that already had a session, because refusing it would have fired
+    // legitimately during rollout — a peer keeps sending v1 until they have
+    // fetched our bundle, and we may have established a session toward them
+    // first.
+    //
+    // The precise mark is not "we have a session" but "**they** have sent us a
+    // sealed message". That can only happen once they hold our bundle, and from
+    // that moment they have a session of their own and will never send v1
+    // again. So a v1 envelope from such a peer is not a straggler; it is
+    // someone else writing to the row. It is refused.
+
+    private static let sealedPeersKey = "world.e2ee.sealedPeers"
+
+    static func recordSealedMessage(from peer: UUID) {
+        let id = peer.uuidString.lowercased()
+        var peers = Set(UserDefaults.standard.stringArray(forKey: sealedPeersKey) ?? [])
+        guard peers.insert(id).inserted else { return }
+        UserDefaults.standard.set(Array(peers), forKey: sealedPeersKey)
+    }
+
+    /// True once this peer has ever delivered a sealed message to this device.
+    static func hasSentSealed(_ peer: UUID) -> Bool {
+        Set(UserDefaults.standard.stringArray(forKey: sealedPeersKey) ?? [])
+            .contains(peer.uuidString.lowercased())
+    }
+
+    static func forgetSealedPeers() {
+        UserDefaults.standard.removeObject(forKey: sealedPeersKey)
+    }
+
     /// Whether this device already holds a ratchet with someone. A thread that
     /// has one may never fall back to the readable envelope — see the downgrade
     /// rule in `WorldEnvelope`.

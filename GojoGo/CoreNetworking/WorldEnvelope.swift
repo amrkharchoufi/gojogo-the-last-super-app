@@ -76,6 +76,10 @@ enum WorldEnvelope {
         /// undamaged — this build just can't represent it.
         case unsupportedVersion(Int)
         case malformed
+        /// A readable envelope arrived from a peer who has already sent sealed
+        /// ones. They cannot have gone back — they hold our bundle and a
+        /// session. Something else wrote this row. (Phase E.)
+        case downgraded
     }
 
     /// The Phase A body: encoded, not encrypted.
@@ -108,9 +112,16 @@ enum WorldEnvelope {
                      identityChanged: (() -> Void)? = nil) throws -> WorldEnvelopePayload {
         guard version <= Self.version else { throw EnvelopeError.unsupportedVersion(version) }
         guard let sealed = Data(base64Encoded: body) else { throw EnvelopeError.malformed }
+        guard version >= sealedVersion || !WorldSignalSession.hasSentSealed(sender) else {
+            // Phase E: this peer has sealed to us before, so they cannot have
+            // lost the ability to. Reading it anyway would make stripping the
+            // encryption a matter of rewriting one field.
+            throw EnvelopeError.downgraded
+        }
         let plain = version >= sealedVersion
             ? try WorldSignalSession.open(sealed, from: sender, identityChanged: identityChanged)
             : sealed
+        if version >= sealedVersion { WorldSignalSession.recordSealedMessage(from: sender) }
         return try JSONDecoder().decode(WorldEnvelopePayload.self, from: plain)
     }
 }

@@ -2197,6 +2197,10 @@ final class AppState: ObservableObject {
         WorldSignalStore.shared.wipe()
         // Phase D: these open the account's photos and voice notes.
         WorldMediaKeyStore.shared.wipe()
+        // Phase E: one account's "I checked this is them" says nothing about
+        // the next account's contacts, and the downgrade mark is per-identity.
+        WorldVerificationStore.shared.wipe()
+        WorldSignalSession.forgetSealedPeers()
         SocialStore.shared.reset()
         StoriesStore.shared.reset()
         WatchStore.shared.reset()

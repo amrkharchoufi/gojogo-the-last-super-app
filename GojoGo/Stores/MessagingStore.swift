@@ -367,6 +367,13 @@ final class MessagingStore {
             return WorldEnvelopePayload(
                 kind: "text",
                 text: "This message needs a newer version of GojoGo.")
+        } catch WorldEnvelope.EnvelopeError.downgraded {
+            // Not a decryption failure and not phrased as one: the bytes were
+            // readable, which is exactly the problem. Said plainly, because a
+            // user who sees this should be suspicious rather than reassured.
+            return WorldEnvelopePayload(
+                kind: Self.undecryptableKind,
+                text: "This message wasn't encrypted and was not shown.")
         } catch {
             #if DEBUG
             print("Envelope open failed (\(dto.id)): \(error)")
