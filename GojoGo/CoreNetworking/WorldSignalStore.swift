@@ -35,14 +35,27 @@ final class WorldSignalStore {
     /// store lives in Application Support.
     static let appGroup = "group.com.gojo.gojogo"
 
-    private let root: URL
+    let root: URL
     private let lock = NSRecursiveLock()
+    /// Identity kept in memory instead of the Keychain. Only the loopback
+    /// self-check uses this — two isolated stores in one process cannot share
+    /// one keychain account, and a diagnostic must never touch the real one.
+    private var ephemeralIdentity: (IdentityKeyPair, UInt32)?
+    private let usesKeychain: Bool
 
-    private init() {
+    /// `root: nil` is the real store — App Group container when the entitlement
+    /// exists, Application Support until then.
+    init(root: URL? = nil, usesKeychain: Bool = true) {
         let fm = FileManager.default
-        let base = fm.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup)
-            ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        root = base.appendingPathComponent("signal", isDirectory: true)
+        self.usesKeychain = usesKeychain
+        if let root {
+            self.root = root
+        } else {
+            let base = fm.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup)
+                ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            self.root = base.appendingPathComponent("signal", isDirectory: true)
+        }
+        let root = self.root
         for sub in ["sessions", "prekeys", "signed-prekeys", "kyber-prekeys", "identities"] {
             try? fm.createDirectory(
                 at: root.appendingPathComponent(sub, isDirectory: true),
@@ -64,6 +77,12 @@ final class WorldSignalStore {
     /// to forget to call.
     func ensureIdentity() throws -> (identity: IdentityKeyPair, registrationId: UInt32) {
         lock.lock(); defer { lock.unlock() }
+        guard usesKeychain else {
+            if let existing = ephemeralIdentity { return existing }
+            let made = (IdentityKeyPair.generate(), UInt32.random(in: 1...0x3FFF))
+            ephemeralIdentity = made
+            return made
+        }
         if let stored = KeychainStore.get(.signalIdentity),
            let bytes = Data(base64Encoded: stored),
            let regRaw = KeychainStore.get(.signalRegistrationId),

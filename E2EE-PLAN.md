@@ -203,11 +203,33 @@ one-time prekeys, 1 signed prekey (id 1), 1 Kyber prekey (id 2),
 deployed directory (`30910738705`, green). Backend deploy for the directory
 itself also green.
 
-**Remaining for Phase B — needs a second account (same blocker as Phase A):**
-- Session handshake: fetch a peer bundle via `keyBundle(for:)`, run
-  `processPreKeyBundle`, and confirm both sides derive the same session. Single
-  account can publish and self-fetch but can't complete a two-party handshake.
-- First CI run with the `vendor_libsignal` step (watch the cache warm on run 2).
+**Phase C gate: PASSED (`WorldSignalSelfCheck`, 2026-08-04).** The two-party
+handshake needs a second account, but the two-*store* handshake needs only a
+temp directory — and exercises the same five protocol implementations the live
+path will use. The loopback runs the real X3DH + Double Ratchet between two
+isolated `WorldSignalStore` instances and verifies:
+
+1. `processPreKeyBundle` turns a published bundle into a stored session
+2. The first message is a **PreKey** message and opens via `signalDecryptPreKey`
+3. The one-time prekey is **spent** — reuse would break the guarantee
+4. The session is bidirectional (reply is a **Whisper** message and opens)
+5. **Cold start**: brand-new store instances over the same directories still
+   decrypt — wrong session persistence would pass every other check and break
+   on the app's second launch instead
+6. The ratchet **advances** — identical plaintext twice yields different bytes
+7. **Out-of-order** delivery decrypts (skipped message keys retained) — this is
+   what a dropped socket actually produces, and what `resyncWorld()` guarantees
+   will happen in production
+8. Ciphertext is **opaque** — the plaintext is not sitting inside it
+
+Why this gate exists: a ratchet deletes each message key on use, so a message
+encrypted through a subtly wrong store is not "broken", it is permanently
+unreadable by anyone, forever. That is not a defect to discover in production.
+
+**Remaining, needs a second account:** confirm two real devices establish a
+session through the deployed directory. Everything up to that point is proven.
+**Also pending:** first CI run with the `vendor_libsignal` step (watch the cache
+warm on run 2).
 
 ### Phase C — swap the cipher
 - Replace the identity transform with libsignal session encrypt/decrypt.

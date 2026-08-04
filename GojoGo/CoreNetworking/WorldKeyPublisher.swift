@@ -123,11 +123,9 @@ enum WorldKeyPublisher {
 // MARK: Minting (private halves stored before the publics ever leave)
 
 extension WorldSignalStore {
-    private var metaURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("signal", isDirectory: true)
-            .appendingPathComponent("meta.json")
-    }
+    /// Follows the store's own root — an injected (test) store must not share
+    /// the real one's id counter, or prekey ids would collide across them.
+    private var metaURL: URL { root.appendingPathComponent("meta.json") }
 
     private struct PublishMeta: Codable {
         var nextPreKeyId: UInt32 = 1

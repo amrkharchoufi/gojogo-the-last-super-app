@@ -72,6 +72,14 @@ struct GojoGoApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
+    init() {
+        // Gate for Phase C: verifies the five protocol stores against the real
+        // Double Ratchet before any live message depends on them. Debug-only.
+        #if DEBUG
+        WorldSignalSelfCheck.run()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
