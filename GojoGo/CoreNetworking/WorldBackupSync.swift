@@ -27,6 +27,34 @@ enum WorldBackupSync {
 
     private static var container: CKContainer { CKContainer(identifier: containerId) }
 
+    // MARK: Observable state
+    //
+    // A backup nobody can see is one nobody can trust. These are the three
+    // facts a user actually needs — is it on, when did it last work, how big —
+    // and they are written from the same places that do the work, so the
+    // screen cannot claim a backup that did not happen.
+
+    private static let lastBackupKey = "world.backup.lastAt"
+    private static let lastSizeKey = "world.backup.lastBytes"
+    private static let disabledKey = "world.backup.disabled"
+
+    static var lastBackupAt: Date? {
+        let stamp = UserDefaults.standard.double(forKey: lastBackupKey)
+        return stamp > 0 ? Date(timeIntervalSince1970: stamp) : nil
+    }
+
+    static var lastBackupBytes: Int {
+        UserDefaults.standard.integer(forKey: lastSizeKey)
+    }
+
+    /// User-facing off switch. Turning it off stops future uploads; it does not
+    /// delete what is already there, because "stop backing up" and "destroy my
+    /// history" are different requests and only one of them is reversible.
+    static var isEnabled: Bool {
+        get { !UserDefaults.standard.bool(forKey: disabledKey) }
+        set { UserDefaults.standard.set(!newValue, forKey: disabledKey) }
+    }
+
     private static func recordID(for profileId: UUID) -> CKRecord.ID {
         // Deterministic: the same account always addresses the same record, so
         // an overwrite replaces rather than accumulates.
@@ -48,7 +76,7 @@ enum WorldBackupSync {
     /// caps an inline field at 1 MB and a real history passes that quickly. An
     /// asset has no such limit and streams instead of loading whole.
     static func export(for profileId: UUID) async {
-        guard await isAvailable() else { return }
+        guard isEnabled, await isAvailable() else { return }
         do {
             let snapshot = await MainActor.run { WorldBackup.snapshot(for: profileId) }
             let sealed = try WorldBackup.seal(snapshot, for: profileId)
@@ -68,6 +96,8 @@ enum WorldBackupSync {
             record[updatedKey] = Date() as NSDate
             _ = try await db.modifyRecords(saving: [record], deleting: [],
                                            savePolicy: .allKeys)
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastBackupKey)
+            UserDefaults.standard.set(sealed.count, forKey: lastSizeKey)
             #if DEBUG
             print("E2EE backup uploaded — \(sealed.count) bytes sealed")
             #endif

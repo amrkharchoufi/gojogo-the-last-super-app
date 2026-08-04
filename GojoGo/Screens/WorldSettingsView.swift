@@ -14,6 +14,9 @@ struct WorldSettingsView: View {
 
     @State private var avatarItem: PhotosPickerItem?
     @State private var cacheSize: Int64 = 0
+    @State private var backupEnabled = WorldBackupSync.isEnabled
+    @State private var backingUpNow = false
+    @State private var backupTick = 0
     @FocusState private var nameFocused: Bool
 
     private var dirty: Bool {
@@ -31,6 +34,7 @@ struct WorldSettingsView: View {
                     privacySection
                     notificationsSection
                     appearanceSection
+                    backupSection
                     storageSection
                     about
                 }
@@ -316,6 +320,85 @@ struct WorldSettingsView: View {
                     .offset(x: 2, y: 2)
             }
         }
+    }
+
+    // MARK: Backup (E2EE Phase F)
+    //
+    // A backup nobody can see is one nobody can trust — and this one matters
+    // more than most, because forward secrecy means the device holds the only
+    // copy. Every line here is read from what actually happened, so the screen
+    // can never claim a backup that did not run.
+
+    private var backupSection: some View {
+        section("CHAT BACKUP") {
+            VStack(spacing: 0) {
+                settingsRow("Back up to iCloud", icon: "icloud.fill", tint: IMColor.blue) {
+                    Toggle("", isOn: Binding(
+                        get: { backupEnabled },
+                        set: { on in
+                            WorldBackupSync.isEnabled = on
+                            backupEnabled = on
+                            if on, let id = SocialStore.shared.myProfileId {
+                                WorldBackupSync.scheduleExport(for: id)
+                            }
+                        }))
+                        .labelsHidden()
+                }
+                divider
+                settingsRow("Last backup", icon: "clock.arrow.circlepath", tint: IMColor.secondary) {
+                    Text(backupStatus)
+                        .font(.system(size: 15))
+                        .foregroundStyle(IMColor.secondary)
+                }
+                divider
+                Button {
+                    guard let id = SocialStore.shared.myProfileId else { return }
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    backingUpNow = true
+                    Task {
+                        await WorldBackupSync.export(for: id)
+                        backingUpNow = false
+                        backupTick &+= 1
+                    }
+                } label: {
+                    HStack {
+                        Text(backingUpNow ? "Backing up…" : "Back up now")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(backupEnabled ? IMColor.blue : IMColor.secondary)
+                        Spacer()
+                        if backingUpNow { ProgressView().tint(IMColor.secondary) }
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 52)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!backupEnabled || backingUpNow)
+            }
+            .background(card)
+
+            // The honest sentence. Not a reassurance — the point is that we
+            // cannot read it, and that turning this off means a lost phone is a
+            // lost history, which is a real consequence of the encryption
+            // rather than a defect.
+            Text("Your messages are encrypted on this device before they leave it, "
+                 + "so nobody — including us and Apple — can read the backup. "
+                 + "With it off, a lost phone means lost messages.")
+                .font(.system(size: 12))
+                .foregroundStyle(IMColor.secondary)
+                .padding(.horizontal, 4)
+                .padding(.top, 2)
+                .id(backupTick)
+        }
+    }
+
+    private var backupStatus: String {
+        guard backupEnabled else { return "Off" }
+        guard let at = WorldBackupSync.lastBackupAt else { return "Not yet" }
+        let size = WorldBackupSync.lastBackupBytes
+        let when = RelativeDateTimeFormatter().localizedString(for: at, relativeTo: Date())
+        guard size > 0 else { return when }
+        return "\(when) · \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))"
     }
 
     // MARK: Storage

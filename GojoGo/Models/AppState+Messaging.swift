@@ -797,6 +797,15 @@ extension AppState {
                                                   in: conversationId, sealer: sealer)
                 _ = try await MessagingStore.shared.send(conversationId, body: body)
             } catch {
+                // Said out loud, not swallowed. Before Phase C a failed send was
+                // almost always a network blip and the retry loop covered it;
+                // now a message that cannot be sealed is deliberately *not*
+                // sent, so silence would leave an optimistic bubble sitting
+                // there looking delivered forever. The two cases people can act
+                // on — a contact whose safety number changed, and a contact who
+                // has no keys — say so in their own words.
+                markWorldSendFailed(msg.id, in: conversationId)
+                showWorldNotice(sendFailureNotice(for: error))
                 #if DEBUG
                 print("Live send failed: \(error.localizedDescription)")
                 #endif
@@ -880,6 +889,24 @@ extension AppState {
             clientId: msg.id, scheduledAt: scheduled,
             envelopeVersion: sealed.version,
             cipherBody: sealed.body)
+    }
+
+    /// Marks an optimistic bubble as not sent, so the thread stops implying it
+    /// went out. The message stays on screen — it is the user's text and it is
+    /// not ours to delete.
+    private func markWorldSendFailed(_ messageID: UUID, in conversationId: UUID) {
+        guard let i = worldConversations.firstIndex(where: { $0.id == conversationId }),
+              let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
+        else { return }
+        worldConversations[i].messages[j].readLabel = "Not sent"
+        archiveWorldMessages(conversationId)
+    }
+
+    private func sendFailureNotice(for error: Error) -> String {
+        if let session = error as? WorldSignalSession.SessionError {
+            return session.errorDescription ?? "That message couldn't be sent."
+        }
+        return "That message couldn't be sent."
     }
 
     /// Whether this thread's attachments should be encrypted before upload.
