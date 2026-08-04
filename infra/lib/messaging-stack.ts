@@ -5,6 +5,7 @@ import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integra
 import { WebSocketLambdaAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
 
@@ -74,9 +75,21 @@ export class GojoGoMessagingStack extends cdk.Stack {
         WS_ALLOW_TOKEN_AUTH: 'true',
       },
     });
-    // Spending a ticket is a DeleteItem returning the old row — read and destroy
-    // in one atomic call, which is what makes it single-use.
-    this.table.grantWriteData(authorizerFn);
+    // Exactly one permission, on the table only. Spending a ticket is a single
+    // DeleteItem returning the old row — read and destroy in one atomic call,
+    // which is what makes it single-use — so that is all this function may do.
+    //
+    // Deliberately not grantWriteData: that also hands out PutItem, UpdateItem
+    // and BatchWriteItem across the table *and every index*. This Lambda is the
+    // one piece of the messaging system that runs on an unauthenticated,
+    // attacker-supplied credential, and the table it is reaching into holds the
+    // conversations and the connection registry. Write access there would let a
+    // compromise forge messages or reroute somebody's live socket; delete access
+    // to a ticket row lets it do its job and nothing else.
+    authorizerFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:DeleteItem'],
+      resources: [this.table.tableArn],
+    }));
 
     // $connect / $disconnect handler: maintains the connection registry.
     const connectionFn = new lambda.Function(this, 'WsConnections', {
@@ -102,23 +115,17 @@ export class GojoGoMessagingStack extends cdk.Stack {
       },
     });
 
-    // No authorizer result caching. API Gateway would otherwise key a cached
-    // Allow on the credential in the query string, so a replayed ticket would be
-    // waved through without the authorizer Lambda running — silently undoing the
-    // single-use guarantee the ticket exists to provide. It defaults to 300s, so
-    // this has to be said explicitly.
+    // Nothing here disables authorizer result caching, and nothing needs to:
+    // WebSocket APIs do not cache authorizer results at all. API Gateway rejects
+    // AuthorizerResultTtlInSeconds outright on a WEBSOCKET-protocol API
+    // ("cannot be set for WEBSOCKET protocol Apis"), and CDK synth does not
+    // catch it, so setting it to 0 defensively fails the deploy rather than
+    // hardening anything.
     //
-    // Found by walking the tree rather than by construct path: the L2 authorizer
-    // decides where it attaches its L1, and a hard-coded path would break on a
-    // CDK upgrade with no signal beyond caching quietly coming back.
-    const authorizers = this.webSocketApi.node
-      .findAll()
-      .filter((c): c is apigwv2.CfnAuthorizer => c instanceof apigwv2.CfnAuthorizer);
-    if (authorizers.length === 0) {
-      throw new Error('WebSocket authorizer not found — connect-ticket replay protection '
-        + 'depends on setting authorizerResultTtlInSeconds to 0');
-    }
-    authorizers.forEach((a) => { a.authorizerResultTtlInSeconds = 0; });
+    // Worth stating because it is load-bearing for the connect ticket: every
+    // $connect invokes the authorizer, so a spent ticket is always re-checked
+    // against DynamoDB and a replay always loses. If this API ever becomes an
+    // HTTP API, caching returns as a real concern and must be set to 0 there.
 
     this.webSocketStage = new apigwv2.WebSocketStage(this, 'ProdStage', {
       webSocketApi: this.webSocketApi,
