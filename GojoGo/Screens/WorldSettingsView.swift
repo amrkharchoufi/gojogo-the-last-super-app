@@ -14,7 +14,7 @@ struct WorldSettingsView: View {
 
     @State private var avatarItem: PhotosPickerItem?
     @State private var cacheSize: Int64 = 0
-    @State private var backupEnabled = WorldBackupSync.isEnabled
+    @State private var backupFrequency = WorldBackupSync.frequency
     @State private var backingUpNow = false
     @State private var backupTick = 0
     @FocusState private var nameFocused: Bool
@@ -91,7 +91,7 @@ struct WorldSettingsView: View {
                          initial: initial)
 
             VStack(spacing: 0) {
-                settingsRow("Name", icon: "person.fill", tint: IMColor.blue) {
+                settingsRow("Name", icon: "person") {
                     TextField("Your name", text: $app.worldSettingsName)
                         .font(.system(size: 16))
                         .foregroundStyle(IMColor.label)
@@ -104,8 +104,7 @@ struct WorldSettingsView: View {
 
                 divider
 
-                settingsRow("Phone", icon: "phone.fill",
-                            tint: Color(red: 0.2, green: 0.78, blue: 0.35)) {
+                settingsRow("Phone", icon: "phone") {
                     HStack(spacing: 6) {
                         Text(app.worldPhone ?? "Not verified")
                             .font(.system(size: 16))
@@ -209,16 +208,15 @@ struct WorldSettingsView: View {
     private var privacySection: some View {
         section("PRIVACY") {
             VStack(spacing: 0) {
-                toggleRow("Typing indicators", icon: "ellipsis.bubble.fill", tint: IMColor.blue,
-                          subtitle: "Let people see when you're writing",
+                toggleRow("Typing indicators", icon: "ellipsis.bubble",
                           isOn: $app.worldTypingIndicatorsEnabled)
                 divider
-                toggleRow("Share location", icon: "location.fill",
-                          tint: Color(red: 0.2, green: 0.78, blue: 0.35),
-                          subtitle: "Show Location in the chat apps drawer",
+                toggleRow("Share location", icon: "location",
                           isOn: $app.worldLocationSharingEnabled)
             }
             .background(card)
+            footnote("Typing indicators let people see when you're writing. "
+                     + "Location adds it to the chat apps drawer.")
         }
     }
 
@@ -227,17 +225,13 @@ struct WorldSettingsView: View {
     private var notificationsSection: some View {
         section("NOTIFICATIONS") {
             VStack(spacing: 0) {
-                toggleRow("Push notifications", icon: "bell.fill",
-                          tint: Color(red: 1, green: 0.27, blue: 0.23),
-                          subtitle: "New messages and activity on this device",
-                          isOn: $app.worldPushEnabled)
+                toggleRow("Push notifications", icon: "bell", isOn: $app.worldPushEnabled)
                 divider
                 Button {
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                     UIApplication.shared.open(url)
                 } label: {
-                    settingsRow("iOS notification settings", icon: "gearshape.fill",
-                                tint: IMColor.secondary) {
+                    settingsRow("iOS notification settings", icon: "gearshape") {
                         Image(systemName: "arrow.up.forward")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(IMColor.secondary)
@@ -332,71 +326,81 @@ struct WorldSettingsView: View {
     private var backupSection: some View {
         section("CHAT BACKUP") {
             VStack(spacing: 0) {
-                settingsRow("Back up to iCloud", icon: "icloud.fill", tint: IMColor.blue) {
-                    Toggle("", isOn: Binding(
-                        get: { backupEnabled },
-                        set: { on in
-                            WorldBackupSync.isEnabled = on
-                            backupEnabled = on
-                            if on, let id = SocialStore.shared.myProfileId {
+                // A menu rather than four radio rows: the cadence is one
+                // decision with one current answer, and the answer belongs on
+                // the right of the row like every other value here.
+                Menu {
+                    Picker("", selection: Binding(
+                        get: { backupFrequency },
+                        set: { next in
+                            WorldBackupSync.frequency = next
+                            backupFrequency = next
+                            if next != .off, let id = SocialStore.shared.myProfileId {
                                 WorldBackupSync.scheduleExport(for: id)
                             }
-                        }))
-                        .labelsHidden()
-                }
-                divider
-                settingsRow("Last backup", icon: "clock.arrow.circlepath", tint: IMColor.secondary) {
-                    Text(backupStatus)
-                        .font(.system(size: 15))
-                        .foregroundStyle(IMColor.secondary)
-                }
-                divider
-                Button {
-                    guard let id = SocialStore.shared.myProfileId else { return }
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    backingUpNow = true
-                    Task {
-                        await WorldBackupSync.export(for: id)
-                        backingUpNow = false
-                        backupTick &+= 1
+                        })) {
+                        ForEach(WorldBackupSync.Frequency.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
                     }
                 } label: {
-                    HStack {
-                        Text(backingUpNow ? "Backing up…" : "Back up now")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(backupEnabled ? IMColor.blue : IMColor.secondary)
-                        Spacer()
-                        if backingUpNow { ProgressView().tint(IMColor.secondary) }
+                    settingsRow("Back up to iCloud", icon: "icloud") {
+                        HStack(spacing: 4) {
+                            Text(backupFrequency.title)
+                                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                .foregroundStyle(IMColor.secondary)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(IMColor.secondary)
+                        }
                     }
-                    .padding(.horizontal, 16)
-                    .frame(height: 52)
-                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!backupEnabled || backingUpNow)
+
+                divider
+                valueRow("Last backup", icon: "clock.arrow.circlepath", value: backupStatus)
+
+                if backupFrequency != .off {
+                    divider
+                    Button {
+                        guard let id = SocialStore.shared.myProfileId else { return }
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        backingUpNow = true
+                        Task {
+                            // Forced: someone tapping this is asking for one
+                            // upload now, not for the cadence's opinion.
+                            await WorldBackupSync.export(for: id, force: true)
+                            backingUpNow = false
+                            backupTick &+= 1
+                        }
+                    } label: {
+                        settingsRow(backingUpNow ? "Backing up…" : "Back up now",
+                                    icon: "arrow.up.to.line") {
+                            if backingUpNow { ProgressView().tint(IMColor.secondary) }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(backingUpNow)
+                }
             }
             .background(card)
+            .id(backupTick)
 
             // The honest sentence. Not a reassurance — the point is that we
-            // cannot read it, and that turning this off means a lost phone is a
-            // lost history, which is a real consequence of the encryption
-            // rather than a defect.
-            Text("Your messages are encrypted on this device before they leave it, "
-                 + "so nobody — including us and Apple — can read the backup. "
-                 + "With it off, a lost phone means lost messages.")
-                .font(.system(size: 12))
-                .foregroundStyle(IMColor.secondary)
-                .padding(.horizontal, 4)
-                .padding(.top, 2)
-                .id(backupTick)
+            // cannot read it, and that turning it off means a lost phone is a
+            // lost history, which is a consequence of the encryption rather
+            // than a defect.
+            footnote("Messages are encrypted on this device before they leave it, so "
+                     + "nobody — including us and Apple — can read the backup. "
+                     + "With it off, a lost phone means lost messages.")
         }
     }
 
     private var backupStatus: String {
-        guard backupEnabled else { return "Off" }
+        guard backupFrequency != .off else { return "Off" }
         guard let at = WorldBackupSync.lastBackupAt else { return "Not yet" }
-        let size = WorldBackupSync.lastBackupBytes
         let when = RelativeDateTimeFormatter().localizedString(for: at, relativeTo: Date())
+        let size = WorldBackupSync.lastBackupBytes
         guard size > 0 else { return when }
         return "\(when) · \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))"
     }
@@ -406,7 +410,7 @@ struct WorldSettingsView: View {
     private var storageSection: some View {
         section("STORAGE") {
             VStack(spacing: 0) {
-                settingsRow("Cached media", icon: "internaldrive.fill", tint: IMColor.secondary) {
+                settingsRow("Cached media", icon: "internaldrive") {
                     // ByteCountFormatter renders 0 as "Zero KB", which reads oddly.
                     Text(cacheSize == 0
                          ? "Empty"
@@ -488,61 +492,72 @@ struct WorldSettingsView: View {
                                         @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(0.8)
                 .foregroundStyle(IMColor.secondary)
-                .padding(.leading, 4)
+                .padding(.leading, 6)
             content()
         }
     }
 
+    /// One row shape for the whole screen.
+    ///
+    /// The old version took a `tint` and every row picked its own — blue, green,
+    /// red, grey — which turned a settings list into a colour chart and made the
+    /// two rows that genuinely mean "careful" indistinguishable from the rest.
+    /// The chip is neutral now; colour is spent only where it carries meaning.
     private func settingsRow<Trailing: View>(
-        _ title: String, icon: String, tint: Color,
+        _ title: String, icon: String,
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(tint)
-                )
+            chip(icon)
             Text(title)
-                .font(.system(size: 16))
+                .font(.system(size: 15))
                 .foregroundStyle(IMColor.label)
-            Spacer(minLength: 12)
+                .lineLimit(1)
+            Spacer(minLength: 8)
             trailing()
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 52)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 48)
     }
 
-    private func toggleRow(_ title: String, icon: String, tint: Color,
-                           subtitle: String, isOn: Binding<Bool>) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(tint)
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 16))
-                    .foregroundStyle(IMColor.label)
-                Text(subtitle)
-                    .font(.system(size: 12))
-                    .foregroundStyle(IMColor.secondary)
-            }
-            Spacer(minLength: 12)
+    /// The right-hand value, borrowed from the feed's settings: a row that only
+    /// names a thing makes you open it to find out where you stand.
+    private func valueRow(_ title: String, icon: String, value: String) -> some View {
+        settingsRow(title, icon: icon) {
+            Text(value)
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .foregroundStyle(IMColor.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func toggleRow(_ title: String, icon: String, isOn: Binding<Bool>) -> some View {
+        settingsRow(title, icon: icon) {
             Toggle("", isOn: isOn)
                 .labelsHidden()
                 .tint(IMColor.blue)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+    }
+
+    private func chip(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(IMColor.label)
+            .frame(width: 26, height: 26)
+            .background(Circle().fill(IMColor.label.opacity(0.08)))
+    }
+
+    /// Explanatory text belongs under a group, not stacked inside every row.
+    /// Subtitles on each line tripled the height of the screen and pushed the
+    /// things people actually came for below the fold.
+    private func footnote(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(IMColor.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
     }
 }

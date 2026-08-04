@@ -47,12 +47,67 @@ enum WorldBackupSync {
         UserDefaults.standard.integer(forKey: lastSizeKey)
     }
 
-    /// User-facing off switch. Turning it off stops future uploads; it does not
-    /// delete what is already there, because "stop backing up" and "destroy my
-    /// history" are different requests and only one of them is reversible.
-    static var isEnabled: Bool {
-        get { !UserDefaults.standard.bool(forKey: disabledKey) }
-        set { UserDefaults.standard.set(!newValue, forKey: disabledKey) }
+    /// How often the backup is allowed to run.
+    ///
+    /// A cadence rather than a bare on/off because the two ends of the trade
+    /// are real: every upload re-seals and re-sends the whole history, so a
+    /// chatty account on daily costs data and battery, while monthly means a
+    /// lost phone can cost a month of messages. Daily is the default because
+    /// losing a month is the worse surprise.
+    ///
+    /// Off does not delete what is already stored — "stop backing up" and
+    /// "destroy my history" are different requests, and only one is reversible.
+    enum Frequency: String, CaseIterable, Identifiable {
+        case off, daily, weekly, monthly
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .off: return "Off"
+            case .daily: return "Daily"
+            case .weekly: return "Weekly"
+            case .monthly: return "Monthly"
+            }
+        }
+
+        /// Minimum gap between uploads. Nil means never.
+        var interval: TimeInterval? {
+            switch self {
+            case .off: return nil
+            case .daily: return 24 * 3600
+            case .weekly: return 7 * 24 * 3600
+            case .monthly: return 30 * 24 * 3600
+            }
+        }
+    }
+
+    private static let frequencyKey = "world.backup.frequency"
+
+    static var frequency: Frequency {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: frequencyKey) else {
+                // Migration from the original boolean: an account that had
+                // backup on stays on, at the default cadence.
+                return UserDefaults.standard.bool(forKey: disabledKey) ? .off : .daily
+            }
+            return Frequency(rawValue: raw) ?? .daily
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: frequencyKey)
+            UserDefaults.standard.set(newValue == .off, forKey: disabledKey)
+        }
+    }
+
+    static var isEnabled: Bool { frequency != .off }
+
+    /// Whether enough time has passed since the last successful upload.
+    /// A first-ever backup is always due — otherwise a new account would wait
+    /// a day before its history was protected at all.
+    static var isDue: Bool {
+        guard let interval = frequency.interval else { return false }
+        guard let last = lastBackupAt else { return true }
+        return Date().timeIntervalSince(last) >= interval
     }
 
     private static func recordID(for profileId: UUID) -> CKRecord.ID {
@@ -75,8 +130,10 @@ enum WorldBackupSync {
     /// The payload rides as a `CKAsset` — a file reference — because CloudKit
     /// caps an inline field at 1 MB and a real history passes that quickly. An
     /// asset has no such limit and streams instead of loading whole.
-    static func export(for profileId: UUID) async {
-        guard isEnabled, await isAvailable() else { return }
+    /// `force` is the "Back up now" button: an explicit request ignores the
+    /// cadence, because a user who taps it is asking for exactly one upload.
+    static func export(for profileId: UUID, force: Bool = false) async {
+        guard isEnabled, force || isDue, await isAvailable() else { return }
         do {
             let snapshot = await MainActor.run { WorldBackup.snapshot(for: profileId) }
             let sealed = try WorldBackup.seal(snapshot, for: profileId)
@@ -147,6 +204,10 @@ enum WorldBackupSync {
 
     @MainActor
     static func scheduleExport(for profileId: UUID) {
+        // Cheap enough to check before arming: on a cadence of weekly, almost
+        // every message would otherwise arm a timer that wakes only to decide
+        // it has nothing to do.
+        guard isEnabled, isDue else { return }
         pendingExport?.cancel()
         pendingExport = Task {
             try? await Task.sleep(nanoseconds: 30 * NSEC_PER_SEC)
