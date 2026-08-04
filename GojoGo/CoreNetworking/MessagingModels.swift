@@ -96,6 +96,10 @@ struct MessageDTO: Decodable {
     var createdAt: String
     var scheduledAt: String?
     var clientId: UUID?
+    /// Present on envelope messages; nil on legacy plaintext ones. A legacy
+    /// message must render forever — that is the whole migration story.
+    var envelopeVersion: Int?
+    var cipherBody: String?
 }
 
 struct MessagesPageDTO: Decodable {
@@ -151,6 +155,12 @@ struct SendMessageBody: Encodable {
     var replyToMessageId: UUID?
     var clientId: UUID?
     var scheduledAt: String?
+    /// E2EE envelope (Phase A). When set, `kind` is `"encrypted"`, `text` is
+    /// nil, and the content rides opaquely in `cipherBody`. Media *URLs* stay
+    /// outside so the server can reference-count uploads; polls stay outside
+    /// because the server tallies votes.
+    var envelopeVersion: Int?
+    var cipherBody: String?
 }
 
 struct ReactBody: Encodable {

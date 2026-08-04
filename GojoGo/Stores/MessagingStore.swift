@@ -237,7 +237,12 @@ final class MessagingStore {
 
     func map(_ dto: MessageDTO) -> WorldMessage {
         let mine = dto.senderId == myProfileId
-        let kind = kind(from: dto.kind)
+        // Envelope messages carry their content opaquely; everything below
+        // reads from the opened payload instead of the wire's own fields. A
+        // message with no envelope is legacy plaintext, mapped exactly as
+        // it always was.
+        let payload = openedEnvelope(dto)
+        let kind = kind(from: payload?.kind ?? dto.kind)
         let firstImage = dto.mediaItems?.first { !$0.isVideo }
         let firstVideo = dto.mediaItems?.first { $0.isVideo }
         // Audio rides in the media item's file slot; a pin rides there as a geo: URI.
@@ -256,21 +261,36 @@ final class MessagingStore {
             WorldReaction(tapback: WorldTapback(rawValue: $0.tapback) ?? .heart,
                           fromUser: $0.userId == myProfileId)
         }
-        let reply = dto.replyTo.map {
-            // authorId is what carries the rename into the quote card. Snippets
-            // written before that field existed have none, and fall back to the
-            // name stored with the message.
-            WorldReplySnippet(authorName: aliasedName(for: $0.authorId, fallback: $0.authorName) ?? "",
-                              preview: $0.preview ?? "", fromUser: false)
+        let reply: WorldReplySnippet?
+        if let payload, payload.replyPreview != nil || payload.replyAuthorName != nil {
+            // The envelope's quote card is self-contained — the receiver never
+            // needs the server's copy of the replied-to message.
+            reply = WorldReplySnippet(
+                authorName: aliasedName(for: payload.replyAuthorId,
+                                        fallback: payload.replyAuthorName) ?? "",
+                preview: payload.replyPreview ?? "",
+                fromUser: payload.replyAuthorId == myProfileId)
+        } else {
+            reply = dto.replyTo.map {
+                // authorId is what carries the rename into the quote card. Snippets
+                // written before that field existed have none, and fall back to the
+                // name stored with the message.
+                WorldReplySnippet(authorName: aliasedName(for: $0.authorId, fallback: $0.authorName) ?? "",
+                                  preview: $0.preview ?? "", fromUser: false)
+            }
         }
         return WorldMessage(
             id: dto.id,
             kind: kind,
-            text: place?.name ?? dto.text ?? "",
+            text: payload?.latitude != nil ? (payload?.text ?? "")
+                : (place?.name ?? payload?.text ?? dto.text ?? ""),
             fromUser: mine,
+            fileName: payload?.fileName,
+            fileMeta: payload?.fileMeta,
             readLabel: mine ? "Delivered" : nil,
             imageURL: firstImage?.imageUrl ?? firstVideo?.imageUrl,
-            durationLabel: kind == .location ? nil : (firstImage ?? firstVideo)?.durationLabel,
+            durationLabel: payload?.durationLabel
+                ?? (kind == .location ? nil : (firstImage ?? firstVideo)?.durationLabel),
             senderName: mine ? nil : aliasedName(for: dto.senderId, fallback: dto.senderName),
             carouselItems: carousel.count >= 2 ? carousel : [],
             reactions: reactions,
@@ -278,8 +298,28 @@ final class MessagingStore {
             poll: dto.poll.map { poll(from: $0, in: dto.conversationId) },
             audioURL: audioURL,
             videoURL: movieURL,
-            latitude: place?.latitude,
-            longitude: place?.longitude)
+            latitude: payload?.latitude ?? place?.latitude,
+            longitude: payload?.longitude ?? place?.longitude)
+    }
+
+    /// Opens an envelope message's payload; nil for legacy plaintext.
+    ///
+    /// A payload this build cannot open still returns — as a text bubble that
+    /// says so. Silence would read as a lost message, and the message is not
+    /// lost; this build just can't represent it yet.
+    private func openedEnvelope(_ dto: MessageDTO) -> WorldEnvelopePayload? {
+        guard dto.kind == "encrypted" else { return nil }
+        guard let version = dto.envelopeVersion, let body = dto.cipherBody else {
+            return WorldEnvelopePayload(kind: "text", text: "Message can't be displayed.")
+        }
+        do {
+            return try WorldEnvelope.open(version: version, body: body,
+                                          conversationId: dto.conversationId)
+        } catch {
+            return WorldEnvelopePayload(
+                kind: "text",
+                text: "This message needs a newer version of GojoGo.")
+        }
     }
 
     private func kind(from raw: String) -> WorldMessageKind {

@@ -198,7 +198,8 @@ class MessagingService {
         StoredMessage msg = new StoredMessage(
             UUID.randomUUID(), convId, userId, req.kind(),
             req.text(), req.mediaItems(), req.poll(), reply,
-            Map.of(), createdAt, req.scheduledAt(), req.clientId());
+            Map.of(), createdAt, req.scheduledAt(), req.clientId(),
+            req.envelopeVersion(), req.cipherBody());
 
         if (req.mediaItems() != null && !req.mediaItems().isEmpty()) {
             media.markReferenced(req.mediaItems().stream()
@@ -275,7 +276,7 @@ class MessagingService {
             if (meta == null) continue;
             StoredMessage delivered = new StoredMessage(m.id(), m.conversationId(), m.senderId(),
                 m.kind(), m.text(), m.mediaItems(), m.poll(), m.replyTo(), Map.of(),
-                Instant.now(), null, m.clientId());
+                Instant.now(), null, m.clientId(), m.envelopeVersion(), m.cipherBody());
             repo.appendMessage(delivered, meta.participants());
             MessageDto dto = toMessageDto(delivered, profiles.findByIds(List.of(m.senderId())),
                 repo.worldProfilesByIds(List.of(m.senderId())));
@@ -320,7 +321,8 @@ class MessagingService {
 
         StoredMessage revised = new StoredMessage(stored.id(), convId, stored.senderId(),
             stored.kind(), stored.text(), stored.mediaItems(), updated, stored.replyTo(),
-            stored.reactions(), stored.createdAt(), stored.scheduledAt(), stored.clientId());
+            stored.reactions(), stored.createdAt(), stored.scheduledAt(), stored.clientId(),
+            stored.envelopeVersion(), stored.cipherBody());
         MessageDto dto = toMessageDto(revised, profiles.findByIds(List.of(stored.senderId())),
             repo.worldProfilesByIds(List.of(stored.senderId())));
         fanout.publish(meta.participants(), Map.of("type", "poll", "message", dto));
@@ -421,7 +423,8 @@ class MessagingService {
             sm.id(), sm.conversationId(), sm.senderId(),
             senderName,
             sm.kind(), sm.text(), sm.mediaItems(), sm.poll(), sm.replyTo(),
-            reactions, sm.createdAt(), sm.scheduledAt(), sm.clientId());
+            reactions, sm.createdAt(), sm.scheduledAt(), sm.clientId(),
+            sm.envelopeVersion(), sm.cipherBody());
     }
 
     private static List<UUID> otherThan(List<UUID> all, UUID userId) {
@@ -431,6 +434,10 @@ class MessagingService {
     private static String snippet(StoredMessage m) {
         if (m.text() != null && !m.text().isBlank()) return m.text();
         return switch (m.kind()) {
+            // Feeds the push body and server-built reply cards. An envelope's
+            // content is not the server's to describe — the client renders its
+            // own quoted snippet from inside the payload.
+            case "encrypted" -> "New message";
             case "photo" -> "Photo";
             case "video" -> "Video";
             case "audio" -> "Audio message";

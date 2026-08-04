@@ -265,7 +265,7 @@ class MessagingRepository {
     record StoredMessage(UUID id, UUID conversationId, UUID senderId, String kind, String text,
                          List<MediaItemDto> mediaItems, PollDto poll, ReplySnippetDto replyTo,
                          Map<UUID, String> reactions, Instant createdAt, Instant scheduledAt,
-                         UUID clientId) {}
+                         UUID clientId, Integer envelopeVersion, String cipherBody) {}
 
     /** Appends a message and, in the same transaction, bumps every
      *  participant's membership (activity, preview, unread except the sender). */
@@ -287,6 +287,10 @@ class MessagingRepository {
         item.put("createdAt", s(msg.createdAt().toString()));
         if (msg.scheduledAt() != null) item.put("scheduledAt", s(msg.scheduledAt().toString()));
         if (msg.clientId() != null) item.put("clientId", s(msg.clientId().toString()));
+        // Envelope messages: the body is stored exactly as it arrived. This
+        // module never parses it — that is the entire point.
+        if (msg.envelopeVersion() != null) item.put("envelopeVersion", n(msg.envelopeVersion()));
+        if (msg.cipherBody() != null) item.put("cipherBody", s(msg.cipherBody()));
 
         List<TransactWriteItem> writes = new ArrayList<>();
         writes.add(TransactWriteItem.builder().put(Put.builder()
@@ -366,7 +370,9 @@ class MessagingRepository {
             reactionsFromAttr(it.get("reactions")),
             Instant.parse(it.get("createdAt").s()),
             it.containsKey("scheduledAt") ? Instant.parse(it.get("scheduledAt").s()) : null,
-            it.containsKey("clientId") ? UUID.fromString(it.get("clientId").s()) : null);
+            it.containsKey("clientId") ? UUID.fromString(it.get("clientId").s()) : null,
+            it.containsKey("envelopeVersion") ? Integer.parseInt(it.get("envelopeVersion").n()) : null,
+            attr(it, "cipherBody"));
     }
 
     // ---- scheduled (send-later) -------------------------------------------
@@ -1182,6 +1188,10 @@ class MessagingRepository {
 
     private static String previewFor(String kind) {
         return switch (kind) {
+            // The server cannot know what an envelope says, so the membership
+            // preview is a constant; the client derives the real preview from
+            // its own decrypted copy.
+            case "encrypted" -> "Message";
             case "photo" -> "📷 Photo";
             case "video" -> "📹 Video";
             case "carousel" -> "🖼 Attachments";

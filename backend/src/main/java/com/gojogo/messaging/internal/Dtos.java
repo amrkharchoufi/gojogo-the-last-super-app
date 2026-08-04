@@ -36,7 +36,15 @@ record SendMessageRequest(
     PollDto poll,
     UUID replyToMessageId,
     UUID clientId,
-    Instant scheduledAt) {
+    Instant scheduledAt,
+    // E2EE envelope (Phase A). When present, `kind` is "encrypted" and the
+    // content this module used to read — kind, text, reply snippet — travels
+    // inside `cipherBody`, opaque to the server. Media *URLs* stay outside for
+    // reference-counting; their bytes get their own encryption in Phase D.
+    // Polls stay outside entirely: the server tallies votes by mutating the
+    // stored poll, which an opaque body cannot support.
+    Integer envelopeVersion,
+    String cipherBody) {
 }
 
 record ReactRequest(@NotNull String tapback) {
@@ -93,7 +101,10 @@ record MessageDto(
     List<ReactionDto> reactions,
     Instant createdAt,
     Instant scheduledAt,
-    UUID clientId) {
+    UUID clientId,
+    // Echoed verbatim for envelope messages; null on legacy plaintext ones.
+    Integer envelopeVersion,
+    String cipherBody) {
 }
 
 record ConversationDto(

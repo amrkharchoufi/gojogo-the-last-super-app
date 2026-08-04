@@ -431,6 +431,14 @@ extension AppState {
                     incoming.lastActivityAt = existing.lastActivityAt
                     incoming.preview = existing.preview
                 }
+                // The server can't preview an envelope, so its row says the
+                // constant "Message". This device derives the real preview from
+                // the decrypted copy — don't let the constant overwrite it.
+                // (Interim until the Phase A local store persists previews.)
+                if incoming.preview == "Message", existing.preview != "Message",
+                   !existing.preview.isEmpty {
+                    incoming.preview = existing.preview
+                }
             }
             merged.append(incoming)
         }
@@ -666,10 +674,9 @@ extension AppState {
                             options: local.options.map { PollOptionDTO(id: $0.id, text: $0.text, voters: []) },
                             allowsMultiple: local.allowsMultiple)
                 }
-                let body = SendMessageBody(
-                    kind: wireKind(msg.kind), text: msg.text.isEmpty ? nil : msg.text,
-                    mediaItems: mediaItems, poll: poll, replyToMessageId: replyToId,
-                    clientId: msg.id, scheduledAt: scheduledAt.map { Self.iso8601($0) })
+                let body = try envelopeBody(for: msg, mediaItems: mediaItems, poll: poll,
+                                            replyToId: replyToId, scheduledAt: scheduledAt,
+                                            in: conversationId)
                 _ = try await MessagingStore.shared.send(conversationId, body: body)
             } catch {
                 #if DEBUG
@@ -677,6 +684,62 @@ extension AppState {
                 #endif
             }
         }
+    }
+
+    /// Builds the wire body — an E2EE envelope for 1:1 content, the legacy
+    /// plaintext shape for everything the envelope deliberately excludes.
+    ///
+    /// Excluded on purpose (see E2EE-PLAN.md): polls (the server tallies votes),
+    /// group threads (pairwise sessions don't cover them in v1), and media
+    /// *URLs* (the server reference-counts uploads; the bytes behind the URL
+    /// get their own encryption in Phase D). A shared pin's coordinates are
+    /// content, so for envelope sends they ride inside the payload and the
+    /// legacy geo media item is not sent at all.
+    ///
+    /// No plaintext fallback on failure, deliberately: once Phase C lands, a
+    /// quiet "couldn't seal, sent readable instead" would be a downgrade
+    /// attack surface. A message that can't be sealed isn't sent.
+    private func envelopeBody(for msg: WorldMessage, mediaItems: [WorldMediaItemDTO]?,
+                              poll: PollDTO?, replyToId: UUID?, scheduledAt: Date?,
+                              in conversationId: UUID) throws -> SendMessageBody {
+        let convo = worldConversations.first { $0.id == conversationId }
+        let scheduled = scheduledAt.map { Self.iso8601($0) }
+        guard WorldEnvelope.sendingEnabled, msg.kind != .poll, !(convo?.isGroup ?? false) else {
+            return SendMessageBody(
+                kind: wireKind(msg.kind), text: msg.text.isEmpty ? nil : msg.text,
+                mediaItems: mediaItems, poll: poll, replyToMessageId: replyToId,
+                clientId: msg.id, scheduledAt: scheduled)
+        }
+
+        var payload = WorldEnvelopePayload(kind: wireKind(msg.kind))
+        payload.text = msg.text.nilIfBlank
+        payload.durationLabel = msg.durationLabel
+        payload.latitude = msg.latitude
+        payload.longitude = msg.longitude
+        payload.fileName = msg.fileName
+        payload.fileMeta = msg.fileMeta
+        if let replyToId, let src = convo?.messages.first(where: { $0.id == replyToId }) {
+            // Canonical names only. The viewer's private rename must never ride
+            // in a payload the other side reads — the id is what lets each side
+            // apply its own rename to the quote card.
+            if src.fromUser {
+                payload.replyAuthorId = SocialStore.shared.myProfileId
+                payload.replyAuthorName = worldSetupName.nilIfBlank ?? user.name
+            } else {
+                let other = MessagingStore.shared.otherParticipant(in: conversationId)
+                payload.replyAuthorId = other?.id
+                payload.replyAuthorName = other?.displayName
+            }
+            payload.replyPreview = src.snippetText
+        }
+
+        return SendMessageBody(
+            kind: "encrypted", text: nil,
+            mediaItems: msg.kind == .location ? nil : mediaItems,
+            poll: nil, replyToMessageId: replyToId,
+            clientId: msg.id, scheduledAt: scheduled,
+            envelopeVersion: WorldEnvelope.version,
+            cipherBody: try WorldEnvelope.seal(payload, conversationId: conversationId))
     }
 
     private static func iso8601(_ date: Date) -> String {

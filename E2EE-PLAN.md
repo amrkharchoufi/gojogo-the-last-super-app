@@ -96,17 +96,47 @@ commit even though v1 doesn't use them:
 
 ## Phases
 
-### Phase A — envelope + local store, no-op cipher *(start here; largest chunk)*
+### Phase A — envelope + local store, no-op cipher *(in progress)*
 The whole cross-cutting refactor while every payload is still readable — the
 "cipher" is an identity transform, so any blank bubble has exactly one suspect.
-- Wire: `envelopeVersion`, `cipherBody` opaque to the server; `kind`, `text`,
-  `replyTo`, `poll`, media refs move inside the payload. Server stores blind.
-  Legacy messages keep rendering — that is the whole migration story.
+
+**Scope refinement (2026-08-04), discovered against the real send path:** two
+things stay *outside* the envelope on purpose. **Polls** — the server tallies
+votes by mutating the stored poll, which an opaque body can't support; polls
+are group-shaped anyway and groups are out of v1. **Media URLs** — the server
+reference-counts uploads by URL (`media.markReferenced`), so the pointer stays
+visible and Phase D encrypts what's *behind* it. A shared pin's coordinates
+are content, so envelope location messages carry them in the payload and skip
+the legacy geo media item entirely.
+
+**Landed (builds green, messaging tests green, legacy regression verified):**
+- Backend: `SendMessageRequest`/`MessageDto`/`StoredMessage` carry
+  `envelopeVersion` + `cipherBody`; stored and echoed opaquely through send,
+  fetch, socket fanout, and scheduled delivery. `previewFor("encrypted")` →
+  constant `"Message"`; push/reply `snippet` → `"New message"`.
+- iOS: `WorldEnvelope` codec (`WorldEnvelopePayload` v1, `WorldMessageCipher`
+  protocol, identity-transform `WorldPlaintextCipher`). Send path wraps 1:1
+  non-poll content; receive path opens envelopes with per-message fallbacks —
+  a payload from a newer build renders as "needs a newer version of GojoGo",
+  never as silence. Envelope reply cards are self-contained and carry
+  `replyAuthorId` + *canonical* name (a viewer's private rename must never
+  ride in a payload the other side reads). Merge keeps locally-derived
+  previews from being clobbered by the server's `"Message"` constant.
+- No plaintext fallback when sealing fails, deliberately: after Phase C that
+  would be a downgrade-attack surface. A message that can't be sealed isn't
+  sent.
+
+**⚠ `WorldEnvelope.sendingEnabled = false` until the backend deploys.** The
+live backend drops unknown JSON fields, so an envelope sent to it would store
+with *no body* — content silently lost. Flip the flag in the same change that
+confirms the rollout; the read path ships enabled either way.
+
+**Remaining for Phase A:**
 - **Local message store** (persistent, per conversation); server fetch becomes
   "new ciphertext only". List preview derives from the last locally-stored
-  message, so the list isn't blank on cold start.
-- Push goes generic: `MessageSent.preview` → constant. (Backend's one change.)
-- Scheduled send unchanged: the server holds an opaque body and delivers blind.
+  message (replaces the merge heuristic above), so the list isn't blank on
+  cold start.
+- Push generic text end-to-end check once the backend is deployed.
 - **Done when:** two builds exchange messages through the new envelope, old
   threads render, previews and push behave, history survives relaunch offline.
 
