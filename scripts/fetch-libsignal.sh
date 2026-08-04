@@ -20,6 +20,14 @@
 # Run before `xcodebuild -resolvePackageDependencies`, locally and in CI.
 set -euo pipefail
 
+# NOTE on packaging: an XCFramework does NOT work here and was tried — the
+# prebuilt archives are *mixed* (Mach-O plus Rust LTO bitcode members), and
+# `xcodebuild -create-xcframework` dies on the bitcode magic (0xb17c0de) even
+# though the archive links fine. So the slices are laid out per destination
+# and the app target selects one via sdk-conditional LIBRARY_SEARCH_PATHS,
+# exactly as Signal's own podspec does. Device and simulator arm64 must never
+# be lipo'd together — same architecture, different platform.
+#
 # The binary and the Swift sources MUST be the same version: this is a C ABI
 # across the FFI boundary, and a mismatch fails at runtime, not at link time.
 VERSION="${LIBSIGNAL_VERSION:-0.99.3}"
@@ -29,7 +37,7 @@ VENDOR="$REPO_ROOT/Vendor/LibSignalClient"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-if [[ -d "$VENDOR/LibSignalFFI.xcframework" && "${FORCE:-0}" != "1" ]]; then
+if [[ -f "$VENDOR/lib/device/libsignal_ffi.a" && "${FORCE:-0}" != "1" ]]; then
     echo "libsignal $VERSION already vendored — FORCE=1 to refetch."
     exit 0
 fi
@@ -49,28 +57,24 @@ mkdir -p "$WORK/src" && tar -xzf "$WORK/src.tar.gz" -C "$WORK/src" --strip-compo
 device="$(find "$WORK/ffi" -path "*aarch64-apple-ios/release/libsignal_ffi.a" | head -1)"
 sim_arm="$(find "$WORK/ffi" -path "*aarch64-apple-ios-sim/release/libsignal_ffi.a" | head -1)"
 sim_x86="$(find "$WORK/ffi" -path "*x86_64-apple-ios/release/libsignal_ffi.a" | head -1)"
-headers="$(dirname "$(find "$WORK/src/swift" -name "signal_ffi.h" | head -1)")"
 
-for required in "$device" "$sim_arm" "$sim_x86" "$headers"; do
+for required in "$device" "$sim_arm" "$sim_x86"; do
     [[ -n "$required" ]] || { echo "!! layout changed upstream — inspect $WORK" >&2; exit 1; }
 done
+[[ -d "$WORK/src/swift/Sources/LibSignalClient" && -d "$WORK/src/swift/Sources/SignalFfi" ]] \
+    || { echo "!! Swift source layout changed upstream — inspect $WORK/src" >&2; exit 1; }
 
-# An XCFramework holds one library per platform *variant*, so the two simulator
-# architectures have to be fattened into a single slice first.
-echo "==> Merging simulator slices"
-lipo -create "$sim_arm" "$sim_x86" -output "$WORK/libsignal_ffi_sim.a"
+echo "==> Laying out slices per destination"
+mkdir -p "$VENDOR/lib/device" "$VENDOR/lib/simulator"
+cp "$device" "$VENDOR/lib/device/libsignal_ffi.a"
+# The two *simulator* architectures do get fattened — they're distinct archs on
+# the same platform, which is exactly what a fat archive is for.
+lipo -create "$sim_arm" "$sim_x86" -output "$VENDOR/lib/simulator/libsignal_ffi.a"
 
-echo "==> Building LibSignalFFI.xcframework"
-rm -rf "$VENDOR/LibSignalFFI.xcframework"
-mkdir -p "$VENDOR"
-xcodebuild -create-xcframework \
-    -library "$device" -headers "$headers" \
-    -library "$WORK/libsignal_ffi_sim.a" -headers "$headers" \
-    -output "$VENDOR/LibSignalFFI.xcframework"
-
-echo "==> Copying Swift sources"
+echo "==> Copying Swift sources + FFI module"
 rm -rf "$VENDOR/Sources"
 mkdir -p "$VENDOR/Sources"
 cp -R "$WORK/src/swift/Sources/LibSignalClient" "$VENDOR/Sources/LibSignalClient"
+cp -R "$WORK/src/swift/Sources/SignalFfi" "$VENDOR/Sources/SignalFfi"
 
-echo "==> Vendored libsignal $VERSION into Vendor/libsignal"
+echo "==> Vendored libsignal $VERSION into Vendor/LibSignalClient"

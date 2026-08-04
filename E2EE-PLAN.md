@@ -154,22 +154,45 @@ still up, and the archive-derived preview showed on the list before any fetch.
   today the fetch still reconciles full pages, which is correct while the
   no-op cipher makes server copies re-readable.
 
-### Phase B — key infrastructure *(parallel-safe; touches no product surface)*
-- Rewrite `fetch-libsignal.sh` packaging → per-destination layout; local package
-  `Vendor/LibSignalClient/` (manifest tracked; `Sources/` and `lib/` gitignored
-  — ~560 MB must never enter git history).
-- The five protocol stores (`IdentityKeyStore`, `SessionStore`, `PreKeyStore`,
-  `SignedPreKeyStore`, `KyberPreKeyStore`) on App-Group storage per the rules
-  above. `KeychainStore` grows a `Data` API.
-- Backend key directory: `PUT /v1/keys` (publish bundle),
-  `GET /v1/keys/{profileId}/{deviceId}` (**atomically consumes** one one-time
-  prekey), `GET /v1/keys/count` (client tops up).
-- CI: add `Vendor/` to `cache_paths` in **both** workflows (today's cache only
-  covers `$HOME`; the repo checkout is wiped every build, so without this every
-  push re-downloads 151 MB). TestFlight workflow fetches the device slice only;
-  the compile-check workflow the simulator slices only.
-- **Done when:** `IdentityKeyPair.generate()` runs on device and a session
-  establishes between two simulators via the directory.
+### Phase B — key infrastructure *(core landed 2026-08-04)*
+
+**Landed and verified:**
+- Vendoring works end to end: `fetch-libsignal.sh` lays slices out per
+  destination (`lib/device`, `lib/simulator` — sim arm64+x86_64 lipo'd, device
+  arm64 kept separate), pairs them with version-matched Swift sources, and the
+  local package `Vendor/LibSignalClient/` builds. Key discovery: upstream's
+  `unsafeFlags` is only on its *test* target, and SignalFfi's module map says
+  `link "signal_ffi"` — so the manifest needs **no linker settings at all**;
+  the app carries only sdk-conditional `LIBRARY_SEARCH_PATHS`.
+- **Runtime proof:** `libsignal alive — identity fingerprint: 05928e4f…` from
+  the simulator — the Rust FFI executes, not just links. (Temporary smoke test
+  in `GojoGoApp.init`; replaced when the publish flow lands.)
+- The five protocol stores on `WorldSignalStore`: identity in the Keychain
+  (wiped by `clearAll()` on sign-out, so account-bound for free), sessions/
+  prekeys/peer identities as protected files, **excluded from backup**
+  (per the plan: stale ratchets must never ride a restore; the identity's
+  backup path is separate). Base directory prefers the App Group container
+  (`group.com.gojo.gojogo`) and falls back to Application Support until the
+  entitlement lands. TOFU identity trust; changed keys surface, not auto-trust.
+  Note: the app's own `SessionStore` (auth) collides with libsignal's protocol
+  name — qualify as `LibSignalClient.SessionStore`.
+- Backend key directory in `messaging`: `PUT /v1/keys`,
+  `GET /v1/keys/{profileId}/{deviceId}` (one-time prekey consumed via
+  conditional-delete-with-retry, so no two senders get the same one; empty pool
+  degrades gracefully per X3DH), `GET /v1/keys/count`. `deviceId` in every row
+  and path, only `1` accepted. Known v1 gap, documented in the controller: any
+  authenticated caller can drain a prekey pool; rate limiting belongs at the
+  gateway.
+- CI: `Vendor/` cached in both workflows, `vendor_libsignal` step before
+  package resolution. (Both workflows fetch the full archive — the 151 MB tar
+  isn't separable per slice server-side; the cache makes it a one-time cost.)
+
+**Remaining for Phase B:**
+- Client publish flow: generate signed + Kyber prekeys and a one-time pool,
+  `PUT /v1/keys` on messaging connect, top up when `/count` runs low.
+- Session establishment between two accounts via the directory (needs the
+  publish flow plus a second account, like Phase A's pending check).
+- First CI run with the new fetch step needs watching once this pushes.
 
 ### Phase C — swap the cipher
 - Replace the identity transform with libsignal session encrypt/decrypt.

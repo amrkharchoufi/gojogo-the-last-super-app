@@ -7,6 +7,10 @@ enum KeychainStore {
 
     enum Key: String, CaseIterable {
         case idToken, accessToken, refreshToken, tokenExpiry, accountEmail
+        // E2EE (Phase B): the device's libsignal identity. In `allCases` on
+        // purpose — `clearAll()` runs on sign-out, and the identity must not
+        // outlive the account on a shared device.
+        case signalIdentity, signalRegistrationId
     }
 
     static func set(_ value: String?, for key: Key) {

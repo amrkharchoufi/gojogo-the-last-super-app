@@ -1,4 +1,5 @@
 import SwiftUI
+import LibSignalClient
 import UIKit
 import UserNotifications
 import MapboxMaps
@@ -71,6 +72,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 struct GojoGoApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
+
+    init() {
+        // E2EE Phase B smoke test: proves the vendored libsignal core links and
+        // its Rust FFI actually executes. Debug-only and temporary — replaced by
+        // the real identity bootstrap in the protocol-stores milestone.
+        #if DEBUG
+        let identity = IdentityKeyPair.generate()
+        print("libsignal alive — identity fingerprint: "
+              + identity.publicKey.serialize().prefix(8).map { String(format: "%02x", $0) }.joined())
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {

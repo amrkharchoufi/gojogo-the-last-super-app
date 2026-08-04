@@ -63,6 +63,7 @@
 			);
 			name = GojoGo;
 			packageProductDependencies = (
+				GGSIGNAL000000000000002 /* LibSignalClient */,
 				GGMAPBOX000000000000002 /* MapboxMaps */,
 				GGSUMSUB000000000000002 /* IdensicMobileSDK */,
 			);
@@ -94,6 +95,7 @@
 			);
 			mainGroup = GG00000000000000000001;
 			packageReferences = (
+				GGSIGNAL000000000000003 /* XCLocalSwiftPackageReference "Vendor/LibSignalClient" */,
 				GGMAPBOX000000000000003 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */,
 				GGSUMSUB000000000000003 /* XCRemoteSwiftPackageReference "IdensicMobileSDK-iOS" */,
 			);
@@ -277,6 +279,14 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/LibSignalClient/lib/device",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/LibSignalClient/lib/simulator",
+				);
 				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gojo.gojogo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -317,6 +327,14 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/LibSignalClient/lib/device",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/LibSignalClient/lib/simulator",
+				);
 				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gojo.gojogo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -353,6 +371,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		GGSIGNAL000000000000003 /* XCLocalSwiftPackageReference "Vendor/LibSignalClient" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/LibSignalClient;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		GGMAPBOX000000000000003 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -373,6 +398,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		GGSIGNAL000000000000002 /* LibSignalClient */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = GGSIGNAL000000000000003 /* XCLocalSwiftPackageReference "Vendor/LibSignalClient" */;
+			productName = LibSignalClient;
+		};
 		GGMAPBOX000000000000002 /* MapboxMaps */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = GGMAPBOX000000000000003 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */;

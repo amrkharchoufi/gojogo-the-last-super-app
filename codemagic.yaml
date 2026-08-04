@@ -27,6 +27,17 @@ definitions:
       fi
       printf '%s' "$MAPBOX_PUBLIC_TOKEN" > "$CM_BUILD_DIR/GojoGo/MapboxAccessToken"
 
+  vendor_libsignal: &vendor_libsignal
+    name: Vendor libsignal (prebuilt)
+    script: |
+      # E2EE (see E2EE-PLAN.md): fetches Signal's prebuilt libsignal_ffi.a and
+      # version-matched Swift sources into Vendor/LibSignalClient. The script
+      # no-ops when the cached copy is already there, so with Vendor/ in
+      # cache_paths only the first build after a version bump pays the 151 MB.
+      # Must run before package resolution — the local package's sources are
+      # gitignored and exist only after this step.
+      bash "$CM_BUILD_DIR/scripts/fetch-libsignal.sh"
+
   resolve_packages: &resolve_packages
     name: Resolve Swift packages
     script: |
@@ -65,6 +76,8 @@ workflows:
       cache_paths:
         - $HOME/Library/Caches/org.swift.swiftpm
         - $HOME/Library/Developer/Xcode/DerivedData/**/SourcePackages
+        # ~560 MB of vendored libsignal slices; the fetch step skips when warm.
+        - $CM_BUILD_DIR/Vendor
     triggering:
       events:
         - tag
@@ -117,6 +130,7 @@ workflows:
             -c "Set :aps-environment production" \
             "$CM_BUILD_DIR/GojoGo/GojoGo.entitlements"
 
+      - *vendor_libsignal
       - *resolve_packages
 
       - name: Pick the next build number
@@ -183,6 +197,8 @@ workflows:
       cache_paths:
         - $HOME/Library/Caches/org.swift.swiftpm
         - $HOME/Library/Developer/Xcode/DerivedData/**/SourcePackages
+        # ~560 MB of vendored libsignal slices; the fetch step skips when warm.
+        - $CM_BUILD_DIR/Vendor
     triggering:
       events:
         - push
@@ -193,6 +209,7 @@ workflows:
       cancel_previous_builds: true
     scripts:
       - *mapbox_credentials
+      - *vendor_libsignal
       - *resolve_packages
       - name: Build for the simulator, unsigned
         script: |

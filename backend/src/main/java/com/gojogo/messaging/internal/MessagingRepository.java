@@ -375,6 +375,109 @@ class MessagingRepository {
             attr(it, "cipherBody"));
     }
 
+    // ---- E2EE key directory (Phase B — see E2EE-PLAN.md) ------------------
+    //
+    // The directory holds only *public* material: identity keys, signed and
+    // Kyber prekeys, and a pool of one-time prekeys that are consumed — deleted
+    // on handout — so no two senders ever start a session from the same one.
+    // `deviceId` is in the schema from day one (hardcoded 1 by the API for now)
+    // because this module can never migrate rows it cannot read.
+
+    record StoredKeyBundle(int registrationId, String identityKey,
+                           int signedPreKeyId, String signedPreKeyPublic, String signedPreKeySignature,
+                           int kyberPreKeyId, String kyberPreKeyPublic, String kyberPreKeySignature) {}
+
+    record StoredOneTimePreKey(int id, String publicKey) {}
+
+    void putKeyBundle(UUID user, int deviceId, StoredKeyBundle bundle,
+                      List<StoredOneTimePreKey> oneTimePreKeys) {
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", s("USER#" + user));
+        item.put("sk", s("E2EKEYS#" + deviceId));
+        item.put("registrationId", n(bundle.registrationId()));
+        item.put("identityKey", s(bundle.identityKey()));
+        item.put("spkId", n(bundle.signedPreKeyId()));
+        item.put("spkPublic", s(bundle.signedPreKeyPublic()));
+        item.put("spkSignature", s(bundle.signedPreKeySignature()));
+        item.put("kyberId", n(bundle.kyberPreKeyId()));
+        item.put("kyberPublic", s(bundle.kyberPreKeyPublic()));
+        item.put("kyberSignature", s(bundle.kyberPreKeySignature()));
+        item.put("updatedAt", s(Instant.now().toString()));
+        db().putItem(r -> r.tableName(table).item(item));
+
+        for (StoredOneTimePreKey key : oneTimePreKeys) {
+            Map<String, AttributeValue> row = new HashMap<>();
+            row.put("pk", s("USER#" + user));
+            row.put("sk", s(otpkSk(deviceId, key.id())));
+            row.put("preKeyId", n(key.id()));
+            row.put("publicKey", s(key.publicKey()));
+            db().putItem(r -> r.tableName(table).item(row));
+        }
+    }
+
+    Optional<StoredKeyBundle> getKeyBundle(UUID user, int deviceId) {
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("USER#" + user), "sk", s("E2EKEYS#" + deviceId)))).item();
+        if (item == null || item.isEmpty()) return Optional.empty();
+        return Optional.of(new StoredKeyBundle(
+            Integer.parseInt(item.get("registrationId").n()),
+            item.get("identityKey").s(),
+            Integer.parseInt(item.get("spkId").n()),
+            item.get("spkPublic").s(),
+            item.get("spkSignature").s(),
+            Integer.parseInt(item.get("kyberId").n()),
+            item.get("kyberPublic").s(),
+            item.get("kyberSignature").s()));
+    }
+
+    /**
+     * Hands out one one-time prekey and deletes it in the same breath. The
+     * conditional delete is what makes the handout atomic: two racing fetches
+     * can read the same row, but only the delete that finds it still there
+     * returns it — the loser retries against the next row. An empty pool is a
+     * valid answer, not an error: X3DH degrades gracefully without one.
+     */
+    Optional<StoredOneTimePreKey> consumeOneTimePreKey(UUID user, int deviceId) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            QueryResponse resp = db().query(QueryRequest.builder()
+                .tableName(table)
+                .keyConditionExpression("pk = :p AND begins_with(sk, :s)")
+                .expressionAttributeValues(Map.of(
+                    ":p", s("USER#" + user), ":s", s("E2EOTPK#" + deviceId + "#")))
+                .limit(1)
+                .build());
+            if (resp.items().isEmpty()) return Optional.empty();
+            var row = resp.items().get(0);
+            try {
+                db().deleteItem(r -> r.tableName(table)
+                    .key(Map.of("pk", row.get("pk"), "sk", row.get("sk")))
+                    .conditionExpression("attribute_exists(pk)"));
+                return Optional.of(new StoredOneTimePreKey(
+                    Integer.parseInt(row.get("preKeyId").n()),
+                    row.get("publicKey").s()));
+            } catch (software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException raced) {
+                // Another sender took this one between our read and delete.
+            }
+        }
+        return Optional.empty();
+    }
+
+    int countOneTimePreKeys(UUID user, int deviceId) {
+        QueryResponse resp = db().query(QueryRequest.builder()
+            .tableName(table)
+            .keyConditionExpression("pk = :p AND begins_with(sk, :s)")
+            .expressionAttributeValues(Map.of(
+                ":p", s("USER#" + user), ":s", s("E2EOTPK#" + deviceId + "#")))
+            .select(software.amazon.awssdk.services.dynamodb.model.Select.COUNT)
+            .build());
+        return resp.count();
+    }
+
+    /** Zero-padded so DynamoDB's lexicographic sk order is numeric order. */
+    private static String otpkSk(int deviceId, int keyId) {
+        return String.format("E2EOTPK#%d#%010d", deviceId, keyId);
+    }
+
     // ---- scheduled (send-later) -------------------------------------------
 
     // Pending scheduled messages live under a single partition keyed by due
