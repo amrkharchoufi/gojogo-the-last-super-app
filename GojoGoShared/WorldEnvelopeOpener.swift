@@ -46,7 +46,7 @@ enum WorldEnvelopeOpener {
         if let banked = WorldEnvelopeVault.shared.payload(for: messageId, in: conversationId) {
             return banked
         }
-        return try WorldRatchetLock.withLock {
+        return try WorldRatchetLock.withLock { () throws -> WorldEnvelopePayload in
             let vault = WorldEnvelopeVault.shared
             if let banked = vault.payload(for: messageId, in: conversationId) {
                 return banked

@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Deliberately NOT inside GojoGoNotificationService/. That folder is a
+     file-system-synchronized group, so everything in it gets target membership
+     automatically — which for an Info.plist means it is copied as a resource
+     *and* processed as the bundle's Info.plist, two tasks writing the same
+     path. The build fails at planning time with "Multiple commands produce
+     .../GojoGoNotificationService.appex/Info.plist". A file outside every
+     synchronized folder has no membership at all, and is reachable only
+     through INFOPLIST_FILE, which is exactly what is wanted here. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>

@@ -453,7 +453,7 @@
 				CURRENT_PROJECT_VERSION = 33;
 				DEVELOPMENT_TEAM = T8348X4CNY;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = GojoGoNotificationService/Info.plist;
+				INFOPLIST_FILE = Config/GojoGoNotificationService-Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -491,7 +491,7 @@
 				CURRENT_PROJECT_VERSION = 33;
 				DEVELOPMENT_TEAM = T8348X4CNY;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = GojoGoNotificationService/Info.plist;
+				INFOPLIST_FILE = Config/GojoGoNotificationService-Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
