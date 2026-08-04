@@ -42,6 +42,10 @@ ECR_REPO="${ECR_REPO:-${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gojogo-
 ECS_CLUSTER="${ECS_CLUSTER:-gojogo}"
 ECS_SERVICE="${ECS_SERVICE:-gojogo-backend}"
 HEALTH_URL="${HEALTH_URL:-https://api.gojogo.app/actuator/health}"
+# How long to keep asking ECS to confirm the rollout after the service goes
+# stable. This is slack for a lagging rolloutState, not for a slow start — the
+# start itself is covered by `wait services-stable` above it.
+ROLLOUT_CONFIRM_SECS="${ROLLOUT_CONFIRM_SECS:-300}"
 
 # --- CDK context for --infra --------------------------------------------------
 # Every flag `cdk deploy GojoGoFargateStack` reads, in one place. None of these
@@ -279,23 +283,57 @@ EOF
   #
   # So: ask what is *actually running*, and insist it is the revision this
   # deploy created.
+  #
+  # Ask repeatedly, though, because the two halves of that answer settle at
+  # different times. `wait services-stable` returns the moment the service has a
+  # single deployment whose runningCount equals desiredCount; rolloutState only
+  # becomes COMPLETED when the scheduler next reconciles the service and calls it
+  # steady, which routinely lands a minute or more later. Reading rolloutState in
+  # the same breath as the waiter catches a healthy rollout mid-IN_PROGRESS and
+  # fails a deploy that has, in fact, landed — 2026-08-04 died exactly that way,
+  # with the wanted revision already the one running and zero failed tasks.
+  #
+  # What a genuinely broken rollout looks like is different and does not get
+  # better with waiting: the wanted revision never becomes the running one,
+  # because the task keeps dying before it can serve.
   step "Rollout"
-  local rollout
-  rollout="$(aws_ ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
-    --query "services[0].deployments[?status=='PRIMARY']|[0].{state:rolloutState,failed:failedTasks,td:taskDefinition}" \
-    --output json)"
-  local want_td state failed
-  want_td="$(printf '%s' "$rollout" | python3 -c 'import json,sys; print(json.load(sys.stdin)["td"])')"
-  state="$(printf '%s' "$rollout" | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')"
-  failed="$(printf '%s' "$rollout" | python3 -c 'import json,sys; print(json.load(sys.stdin)["failed"])')"
+  local deadline=$(( SECONDS + ROLLOUT_CONFIRM_SECS ))
+  local rollout want_td state failed running_tds serving=0 waited=0
+  while :; do
+    rollout="$(aws_ ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+      --query "services[0].deployments[?status=='PRIMARY']|[0].{state:rolloutState,failed:failedTasks,td:taskDefinition}" \
+      --output json)"
+    IFS=$'\t' read -r want_td state failed <<<"$(printf '%s' "$rollout" \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\t".join(str(d[k]) for k in ("td","state","failed")))' 2>/dev/null)"
 
-  local running_tds
-  running_tds="$(aws_ ecs describe-tasks --cluster "$ECS_CLUSTER" \
-    --tasks $(aws_ ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" \
-      --query 'taskArns' --output text) \
-    --query 'tasks[?lastStatus==`RUNNING`].taskDefinitionArn' --output text 2>/dev/null || echo "")"
+    # Without this the empty want_td below would substring-match anything and
+    # every rollout would look like a success.
+    [[ -n "$want_td" ]] || die "Could not read the PRIMARY deployment of $ECS_SERVICE:
+    $rollout"
 
-  if [[ "$state" != "COMPLETED" || "$running_tds" != *"${want_td##*/}"* ]]; then
+    running_tds="$(aws_ ecs describe-tasks --cluster "$ECS_CLUSTER" \
+      --tasks $(aws_ ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" \
+        --query 'taskArns' --output text) \
+      --query 'tasks[?lastStatus==`RUNNING`].taskDefinitionArn' --output text 2>/dev/null || echo "")"
+
+    serving=0
+    if [[ "$running_tds" == *"${want_td##*/}"* ]]; then serving=1; fi
+
+    # Settled, one way or the other — stop polling.
+    if (( serving )) && [[ "$state" == "COMPLETED" ]]; then break; fi
+    if [[ "$state" == "FAILED" ]]; then break; fi
+    # Tasks are dying and none of them is serving yet: waiting only prolongs it.
+    if (( ! serving )) && [[ "${failed:-0}" != "0" ]]; then break; fi
+    if (( SECONDS >= deadline )); then break; fi
+
+    if (( ! waited )); then
+      note "ECS still reports $state; confirming for up to ${ROLLOUT_CONFIRM_SECS}s."
+      waited=1
+    fi
+    sleep 10
+  done
+
+  if [[ "$state" == "FAILED" ]] || (( ! serving )); then
     printf '      wanted   %s\n      running  %s\n      state    %s (%s failed task(s))\n' \
       "${want_td##*/}" "${running_tds:-none}" "$state" "$failed" >&2
     die "The new revision is NOT what's serving traffic.
@@ -306,7 +344,16 @@ EOF
       aws logs tail /ecs/gojogo-backend --since 15m --region $AWS_REGION
       $0 --rollback"
   fi
-  ok "Running ${want_td##*/}${failed:+ (after $failed failed attempt(s))}"
+
+  if [[ "$state" != "COMPLETED" ]]; then
+    # The revision this deploy built is the one serving traffic and nothing has
+    # failed; only ECS's own bookkeeping is behind. Say so and go check health,
+    # rather than failing a deploy that worked.
+    warn "ECS still says $state after ${ROLLOUT_CONFIRM_SECS}s, but ${want_td##*/} is what's running and no task has failed. Continuing."
+  fi
+  local failed_note=""
+  [[ "${failed:-0}" == "0" ]] || failed_note=" (after $failed failed attempt(s))"
+  ok "Running ${want_td##*/}${failed_note}"
 
   step "Health"
   local code
