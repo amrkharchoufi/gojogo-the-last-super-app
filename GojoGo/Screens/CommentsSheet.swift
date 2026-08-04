@@ -8,10 +8,14 @@ struct CommentsSheet: View {
     /// the long-form player so comments don't fight the `fullScreenCover`.
     var embedded: Bool = false
 
-    /// How many replies a thread shows before it asks to be opened. Enough to
-    /// read a short exchange in place, few enough that one loud thread can't
-    /// bury the rest of the conversation.
-    private static let replyPreviewCount = 2
+    /// How many replies a thread shows before it asks to be opened.
+    ///
+    /// Zero, so "View N replies" sits directly under the comment it belongs to.
+    /// Showing a couple first put the control below the last preview, where it
+    /// reads as belonging to *that* reply rather than to the thread — and a
+    /// thread with three replies showed two of them and then offered to reveal
+    /// "1 reply", which is the confusing half-state.
+    private static let replyPreviewCount = 0
 
     private var postID: UUID? { app.commentingPostID }
     private var comments: [Comment] {
@@ -111,11 +115,6 @@ struct CommentsSheet: View {
                 }
                 .padding(.horizontal, 16).padding(.vertical, 8)
                 .background(GGColor.ink(0.04))
-                // Belt and braces with the scoped animation above: whatever
-                // transaction is in flight when a reply begins — the keyboard
-                // rising, a suggestion bar collapsing — this row is a label for
-                // a state that is already true, so it is simply there.
-                .transaction { $0.animation = nil }
             }
 
             HStack(spacing: 10) {
@@ -142,6 +141,16 @@ struct CommentsSheet: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
+        // The banner and the field it sits above have to move as one piece.
+        // Silencing the banner alone (a `.transaction { $0.animation = nil }` on
+        // it) was the previous fix and it is what brought the artefact back: the
+        // row snapped to its final place while the text field below still slid
+        // down under whatever transaction was in flight — the keyboard rising,
+        // a poll republishing AppState — so for those few frames the banner sat
+        // *under* the field and then the field cleared off it. Suppressing the
+        // animation for the whole composer, keyed to the one state change that
+        // inserts the row, means both are simply there together.
+        .animation(nil, value: app.replyingToHandle)
         .onChange(of: app.draftComment) { _, text in
             autocomplete.update(for: text, connected: app.backendConnected)
         }

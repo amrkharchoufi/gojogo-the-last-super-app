@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Async/await client for the GojoGo backend: attaches the Cognito ID token,
 /// refreshes it once on 401, decodes JSON responses.
@@ -187,6 +188,56 @@ final class APIClient {
             return "image/heic"
         }
         return "image/jpeg"
+    }
+
+    /// A photo re-encoded for viewing on a phone: long edge capped, EXIF
+    /// orientation baked in, paired with the content type to upload it as.
+    /// Returns nil when the bytes aren't an image or are an animated GIF, so the
+    /// caller uploads them untouched.
+    ///
+    /// Uploading the camera roll's own file was costing every reader the whole
+    /// thing. A modern phone photo is 4000px and several megabytes; the feed
+    /// draws it a few hundred points wide and the viewer zooms it to at most a
+    /// screen and a half, so all of that resolution was paid for over the
+    /// network, on someone else's data plan, and then thrown away at decode.
+    /// 2048 is past what any phone screen can resolve and matches the cap
+    /// `ImageCache` decodes to.
+    ///
+    /// A PNG stays a PNG. It is usually the larger encoding for a photograph,
+    /// but it is the one that can carry transparency, and flattening a posted
+    /// cut-out onto black to save a few hundred kilobytes is not a trade this
+    /// gets to make silently.
+    static func displayImage(_ data: Data, maxEdge: CGFloat = 2048,
+                             quality: CGFloat = 0.85) -> (data: Data, contentType: String)? {
+        let type = imageContentType(for: data)
+        guard type != "image/gif", let image = UIImage(data: data) else { return nil }
+        let keepPNG = type == "image/png"
+
+        let longest = max(image.size.width, image.size.height)
+        let ready: UIImage
+        if longest > maxEdge {
+            let ratio = maxEdge / longest
+            let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            format.opaque = !keepPNG
+            ready = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: size))
+            }
+        } else if keepPNG {
+            // Already small enough and already the format we'd write — leave the
+            // original bytes alone rather than round-tripping them.
+            return (data, type)
+        } else {
+            ready = image
+        }
+
+        if keepPNG {
+            guard let png = ready.pngData() else { return nil }
+            return (png, "image/png")
+        }
+        guard let jpeg = ready.jpegData(compressionQuality: quality) else { return nil }
+        return (jpeg, "image/jpeg")
     }
 }
 

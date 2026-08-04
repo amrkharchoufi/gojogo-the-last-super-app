@@ -301,6 +301,7 @@ final class MessagingStore {
             fileName: payload?.fileName,
             fileMeta: payload?.fileMeta,
             readLabel: mine ? "Delivered" : nil,
+            sentAt: BackendDate.parse(dto.createdAt),
             imageURL: firstImage?.imageUrl ?? firstVideo?.imageUrl,
             durationLabel: payload?.durationLabel
                 ?? (kind == .location ? nil : (firstImage ?? firstVideo)?.durationLabel),

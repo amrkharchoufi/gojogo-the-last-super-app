@@ -218,7 +218,10 @@ final class WorldMessageArchive {
             audioURL: m.audioURL, localAudioPath: m.localAudioURL?.path,
             videoURL: m.videoURL, localVideoPath: m.localVideoURL?.path,
             latitude: m.latitude, longitude: m.longitude,
-            createdAt: Date())
+            // The server's send time when we have it. `Date()` was always meant
+            // as a placeholder, and it is the field the receipt reads back to
+            // date a "Read" it has no clock for.
+            createdAt: m.sentAt ?? Date())
     }
 
     private static func toMessage(_ a: ArchivedMessage) -> WorldMessage {
@@ -228,7 +231,7 @@ final class WorldMessageArchive {
             text: a.text,
             fromUser: a.fromUser,
             fileName: a.fileName, fileMeta: a.fileMeta,
-            readLabel: a.readLabel, readAt: a.readAt,
+            readLabel: a.readLabel, readAt: a.readAt, sentAt: a.createdAt,
             imageURL: a.imageURL,
             durationLabel: a.durationLabel,
             senderName: a.senderName,

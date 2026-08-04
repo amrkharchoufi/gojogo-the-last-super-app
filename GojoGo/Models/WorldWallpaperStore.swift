@@ -41,11 +41,34 @@ enum WorldWallpaperStore {
         }
     }
 
+    /// Decoded wallpapers, kept in memory.
+    ///
+    /// This is not an optimisation, it is the difference between a usable thread
+    /// and an unusable one. `image(named:)` is read from a SwiftUI `body`, and
+    /// the chat's body runs on every keystroke, every socket tick and every
+    /// republish of AppState — so the un-cached version re-read a multi-megabyte
+    /// JPEG off disk and re-decoded it, on the main thread, for every one of
+    /// those. Only threads with a photo background were affected, which is
+    /// exactly the shape of the lag people reported: the plain ones were fine
+    /// and the decorated ones stuttered on everything, typing included.
+    private static let decoded: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 8
+        return cache
+    }()
+
     static func image(named name: String) -> UIImage? {
-        UIImage(contentsOfFile: url(for: name).path)
+        if let hit = decoded.object(forKey: name as NSString) { return hit }
+        guard let image = UIImage(contentsOfFile: url(for: name).path) else { return nil }
+        // Force the decode here rather than leaving it to the first draw, so the
+        // cost lands once instead of on a frame that has a keystroke in it.
+        let ready = image.preparingForDisplay() ?? image
+        decoded.setObject(ready, forKey: name as NSString)
+        return ready
     }
 
     static func delete(_ name: String) {
+        decoded.removeObject(forKey: name as NSString)
         try? FileManager.default.removeItem(at: url(for: name))
     }
 

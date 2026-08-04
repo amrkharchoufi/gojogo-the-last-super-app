@@ -983,6 +983,10 @@ struct WorldMessage: Identifiable {
     var readLabel: String?
     /// When the other side read this message (used for "Read 3:42 PM" etc.).
     var readAt: Date?
+    /// When the message was sent, as the server recorded it. The read receipt
+    /// dates itself by this whenever the read instant itself isn't known — see
+    /// `WorldChatView.receiptText`.
+    var sentAt: Date?
     var imageData: Data?
     /// Remote URL for live (backend) photo/video messages; `imageData` wins when set.
     var imageURL: String?
@@ -1017,7 +1021,7 @@ struct WorldMessage: Identifiable {
 
     init(id: UUID = UUID(), kind: WorldMessageKind = .text, text: String,
          fromUser: Bool = false, fileName: String? = nil, fileMeta: String? = nil,
-         readLabel: String? = nil, readAt: Date? = nil,
+         readLabel: String? = nil, readAt: Date? = nil, sentAt: Date? = nil,
          imageData: Data? = nil, imageURL: String? = nil,
          durationLabel: String? = nil,
          senderName: String? = nil, carouselItems: [WorldCarouselItem] = [],
@@ -1029,7 +1033,7 @@ struct WorldMessage: Identifiable {
          isUndecryptable: Bool = false) {
         self.id = id; self.kind = kind; self.text = text; self.fromUser = fromUser
         self.fileName = fileName; self.fileMeta = fileMeta
-        self.readLabel = readLabel; self.readAt = readAt
+        self.readLabel = readLabel; self.readAt = readAt; self.sentAt = sentAt
         self.imageData = imageData; self.imageURL = imageURL; self.durationLabel = durationLabel
         self.senderName = senderName; self.carouselItems = carouselItems
         self.reactions = reactions; self.replyTo = replyTo

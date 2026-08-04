@@ -1,4 +1,5 @@
 import CryptoKit
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -12,7 +13,22 @@ final class ImageCache {
 
     private let memory = NSCache<NSString, UIImage>()
     private let directory: URL
+    /// Writes and housekeeping. Serial, and deliberately kept away from reads.
     private let io = DispatchQueue(label: "app.gojogo.imagecache", qos: .utility)
+    /// Reads. Concurrent and at a higher priority, because a cache hit is on the
+    /// path to a frame. Sharing the serial queue meant every disk hit queued
+    /// behind whatever writes were outstanding — and behind the startup prune,
+    /// which stats every file in a cache up to 400 MB — so the first screenful
+    /// after launch waited on directory housekeeping before it could draw.
+    private let reads = DispatchQueue(label: "app.gojogo.imagecache.read",
+                                      qos: .userInitiated, attributes: .concurrent)
+
+    /// Longest edge a cached decode is allowed. Past the physical width of the
+    /// largest phone screen, so nothing on screen is softer for it — but a
+    /// 4000px camera photo costs roughly a quarter of the decode and a quarter
+    /// of the memory it used to, which is most of why a feed of them scrolled
+    /// badly and evicted itself.
+    private static let maxDecodedEdge: CGFloat = 2048
 
     private init() {
         memory.countLimit = 400
@@ -43,7 +59,7 @@ final class ImageCache {
         // URL with no key is used exactly as before, which is what keeps
         // non-chat images and pre-Phase-D attachments rendering.
         let data = try Self.decrypted(raw, for: url)
-        guard let image = UIImage(data: data) else { throw CacheError.decodeFailed }
+        guard let image = Self.decode(data) else { throw CacheError.decodeFailed }
         // Plaintext on both tiers, deliberately: caching ciphertext would mean
         // decrypting on every scroll tick, and the disk cache already holds
         // decoded photos from every other surface in the app.
@@ -66,10 +82,11 @@ final class ImageCache {
 
     private func diskImage(for url: URL) async -> UIImage? {
         await withCheckedContinuation { continuation in
-            io.async { [weak self] in
+            reads.async { [weak self] in
                 guard let self,
-                      let data = try? Data(contentsOf: self.fileURL(for: url)),
-                      let image = UIImage(data: data) else {
+                      let data = try? Data(contentsOf: self.fileURL(for: url),
+                                           options: .mappedIfSafe),
+                      let image = Self.decode(data) else {
                     continuation.resume(returning: nil)
                     return
                 }
@@ -77,6 +94,33 @@ final class ImageCache {
                 continuation.resume(returning: image)
             }
         }
+    }
+
+    /// Decodes at display scale rather than at the camera's.
+    ///
+    /// Two things matter here and `UIImage(data:)` does neither. It decodes at
+    /// full source resolution — a 4032×3024 photo becomes ~48 MB of bitmap for a
+    /// cell a few hundred points wide, which is what pushes everything else out
+    /// of the memory cache and makes scrolling back re-fetch. And it decodes
+    /// *lazily*, on the main thread, at the moment the image is first drawn —
+    /// so the work lands inside a frame instead of on this background queue.
+    /// ImageIO's thumbnail path solves both, and never upscales, so a small
+    /// image (an avatar) comes back untouched.
+    private static func decode(_ data: Data) -> UIImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDecodedEdge,
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        else {
+            // Anything ImageIO won't open (an animated or exotic format) still
+            // gets the old path rather than nothing.
+            return UIImage(data: data)
+        }
+        return UIImage(cgImage: thumb)
     }
 
     private func fileURL(for url: URL) -> URL {

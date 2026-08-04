@@ -159,7 +159,14 @@ extension AppState {
         guard index < end else { return }
         let urls: [URL] = posts[index..<end].flatMap { post -> [URL] in
             var out: [URL] = []
-            if let s = post.imageURL, let u = URL(string: s) { out.append(u) }
+            // Every slide, not just the first. `imageURL` is only the post's
+            // opening photo, so on a carousel the second slide onwards had
+            // nothing warmed and hit the network at the moment of the swipe —
+            // the one moment there is no time for it.
+            for slide in post.carouselSlides where !slide.isVideo {
+                if let s = slide.imageURL, let u = URL(string: s) { out.append(u) }
+            }
+            if out.isEmpty, let s = post.imageURL, let u = URL(string: s) { out.append(u) }
             if let a = post.avatarURL, let u = URL(string: a) { out.append(u) }
             return out
         }
@@ -694,17 +701,15 @@ extension AppState {
         }
 
         if let data = imageData {
-            let type = APIClient.imageContentType(for: data)
-            let payload: Data
-            if type == "image/jpeg" || type == "image/png" || type == "image/gif" {
-                payload = data
-            } else if let jpeg = UIImage(data: data)?.jpegData(compressionQuality: 0.9) {
-                payload = jpeg
-            } else {
-                payload = data
-            }
-            let finalType = payload == data ? type : "image/jpeg"
-            imageUrl = try await APIClient.shared.uploadMedia(payload, contentType: finalType)
+            // A JPEG straight off the camera roll used to go up whole, so every
+            // reader downloaded several megabytes to look at a photo the feed
+            // draws a few hundred points wide — the slowness people describe as
+            // "loading" is mostly that download. `displayImage` hands back the
+            // original for anything it shouldn't touch.
+            let sized = APIClient.displayImage(data)
+            imageUrl = try await APIClient.shared.uploadMedia(
+                sized?.data ?? data,
+                contentType: sized?.contentType ?? APIClient.imageContentType(for: data))
         }
 
         if imageUrl == nil && videoUrl == nil { return nil }

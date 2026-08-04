@@ -1064,24 +1064,41 @@ struct WorldChatView: View {
     private func receiptText(for msg: WorldMessage) -> String? {
         guard let label = msg.readLabel else { return nil }
         if receiptBucket(label) == "Read" {
-            if let at = msg.readAt {
-                return "Read \(Self.formatReadAt(at))"
-            }
+            // The read instant, when this device was connected to watch it
+            // happen. Otherwise the receipt came off the server's stored
+            // pointer, which has no clock attached — so it dates the message
+            // instead, and says which of the two it is showing. Inventing a read
+            // time is what made a week-old message read as though it had just
+            // been opened.
+            if let at = msg.readAt { return "Read \(Self.formatReadAt(at))" }
+            if let sent = msg.sentAt { return "Read · sent \(Self.formatReadAt(sent))" }
             return "Read"
         }
         return "Delivered"
     }
 
-    /// Today → time · yesterday → "Yesterday 3:42 PM" · older → "Jul 12, 3:42 PM".
+    /// Today → "3:42 PM" · yesterday → "Yesterday 3:42 PM" · this week → "Thu at
+    /// 3:42 PM" · this year → "Thu 17 Jul at 3:42 PM" · older → "17 Jul 2025 at
+    /// 3:42 PM".
+    ///
+    /// A bare time is only ever readable as *today*, so anything older has to
+    /// carry the day — a receipt on a week-old message that says "22:35" reads
+    /// as having been read this evening.
     private static func formatReadAt(_ date: Date) -> String {
         let cal = Calendar.current
         let time = date.formatted(date: .omitted, time: .shortened)
         if cal.isDateInToday(date) { return time }
         if cal.isDateInYesterday(date) { return "Yesterday \(time)" }
+        let weekday = date.formatted(.dateTime.weekday(.abbreviated))
+        let daysBack = cal.dateComponents([.day], from: cal.startOfDay(for: date),
+                                          to: cal.startOfDay(for: Date())).day ?? 0
+        // Inside the last week the weekday alone places it.
+        if daysBack < 7 { return "\(weekday) at \(time)" }
         if cal.component(.year, from: date) == cal.component(.year, from: Date()) {
-            return date.formatted(.dateTime.month(.abbreviated).day()) + ", \(time)"
+            return weekday + " " + date.formatted(.dateTime.day().month(.abbreviated))
+                + " at \(time)"
         }
-        return date.formatted(.dateTime.month(.abbreviated).day().year()) + ", \(time)"
+        return date.formatted(.dateTime.day().month(.abbreviated).year()) + " at \(time)"
     }
 
     private func revealReceipt(_ id: UUID) {

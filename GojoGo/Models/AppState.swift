@@ -76,6 +76,14 @@ final class AppState: ObservableObject {
     /// messages because a refresh replaces the newest page wholesale and would
     /// take the scrolled-back history with it.
     var worldOlderPages: [UUID: [WorldMessage]] = [:]
+    /// Server activity time each thread's list preview has actually been brought
+    /// up to date with. The server can't read an envelope, so it previews every
+    /// encrypted thread as the constant "Message" and only this device can say
+    /// what the last message was — this is what stops the row from repeating a
+    /// stale preview, and what keeps the backfill that fixes it from re-running
+    /// on every poll. In memory on purpose: a launch is exactly when the list
+    /// should re-derive its previews.
+    var worldPreviewSyncedAt: [UUID: Date] = [:]
     /// Message the tapback/action overlay is focused on (long-press target).
     @Published var worldReactionTarget: UUID? = nil
     /// Message the composer is currently quoting as an inline reply.
@@ -1099,6 +1107,7 @@ final class AppState: ObservableObject {
         if worldTypingConversationID == id { worldTypingConversationID = nil }
         worldOlderCursor[id] = nil
         worldOlderPages[id] = nil
+        worldPreviewSyncedAt[id] = nil
         if selectedWorldConversationID == id { closeWorldConversation() }
         showWorldContact = false
         let wasLive = MessagingStore.shared.isLive(id)
@@ -2139,6 +2148,7 @@ final class AppState: ObservableObject {
         worldConversations = []
         worldOlderCursor = [:]
         worldOlderPages = [:]
+        worldPreviewSyncedAt = [:]
         worldContacts = []
         worldCircles = []
         worldGraphContacts = []

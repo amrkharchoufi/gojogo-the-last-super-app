@@ -441,8 +441,16 @@ extension AppState {
         guard !live.isEmpty else { return }
         var merged: [WorldConversation] = []
         merged.reserveCapacity(worldConversations.count + live.count)
+        // Threads whose newest message this device has never opened, with the
+        // server activity time a successful pull would bring them up to.
+        var needsBackfill: [(id: UUID, coveredUpTo: Date)] = []
 
         for var incoming in live {
+            // What the *server* said, before any of the substitutions below
+            // stand in for it. "Message" is its placeholder for an envelope it
+            // cannot read, and it is the tell that this row's preview is ours
+            // to derive rather than the server's to supply.
+            let serverPreview = incoming.preview
             // The wallpaper you chose on this device outranks the one the row
             // was created with — otherwise every refresh quietly undoes it.
             if let mine = WorldPreference.background(for: incoming.id) {
@@ -469,10 +477,50 @@ extension AppState {
                let derived = WorldMessageArchive.shared.lastPreview(incoming.id) {
                 incoming.preview = derived
             }
+            // …but a derived preview only describes the messages this device has
+            // already opened, and the row it stands in for has moved on. A
+            // message that lands while the app is closed arrives as a push, not
+            // through the socket, so nothing decrypted it: the row came back
+            // with a fresh unread badge, a fresh timestamp and last week's
+            // sentence under it, and the real message only appeared once the
+            // thread was opened. Pull that page here instead — but never mark it
+            // read, because clearing the badge is what opening the thread means.
+            //
+            // Once per new message, not once per poll: the guard is the server's
+            // own activity time on both sides, so no clock but the server's is
+            // involved.
+            //
+            // Only rows that are actually behind: something unread, or nothing
+            // to show at all. A cold launch must not turn a long list into one
+            // fetch per thread to re-confirm sentences nobody is waiting on.
+            if serverPreview == "Message",
+               incoming.unread > 0 || incoming.preview == "Message",
+               selectedWorldConversationID != incoming.id,
+               MessagingStore.shared.isLive(incoming.id),
+               worldPreviewSyncedAt[incoming.id] != incoming.lastActivityAt {
+                needsBackfill.append((incoming.id, incoming.lastActivityAt))
+            }
             merged.append(incoming)
         }
         let liveIds = Set(live.map(\.id))
         merged.append(contentsOf: worldConversations.filter { !liveIds.contains($0.id) })
+
+        defer {
+            // Only a screenful, most recent first — the list arrives in whatever
+            // order the server's memberships came back in, not by activity, so
+            // this sorts rather than assumes. The rest catch up on the next poll
+            // or when they are opened.
+            let batch = needsBackfill.sorted { $0.coveredUpTo > $1.coveredUpTo }.prefix(8)
+            for row in batch {
+                Task { [weak self] in
+                    // Claimed only once the page is in hand: a pull that failed
+                    // has to be free to try again on the next poll.
+                    guard await self?.reloadLiveConversation(row.id, markRead: false) == true
+                    else { return }
+                    self?.worldPreviewSyncedAt[row.id] = row.coveredUpTo
+                }
+            }
+        }
 
         // The 30s safety-net poll usually confirms what's already on screen. A
         // publish that changed nothing still re-renders every observer of
@@ -509,11 +557,17 @@ extension AppState {
     /// Pulls the newest page for a thread and reconciles it with what's on screen,
     /// keeping optimistic bubbles and local media (recorded audio, staged photos)
     /// that the server copy can't carry.
-    func reloadLiveConversation(_ id: UUID) async {
-        guard MessagingStore.shared.isLive(id) else { return }
+    ///
+    /// `markRead` is false for the list's preview backfill: that fetch happens
+    /// because the row needs a sentence under it, and the reader has not opened
+    /// anything. Returns whether the page actually arrived, so a caller that
+    /// records having caught up can tell a failure from a no-op.
+    @discardableResult
+    func reloadLiveConversation(_ id: UUID, markRead: Bool = true) async -> Bool {
+        guard MessagingStore.shared.isLive(id) else { return false }
         do {
             let page = try await MessagingStore.shared.fetchMessages(id)
-            guard let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
+            guard let i = worldConversations.firstIndex(where: { $0.id == id }) else { return false }
             let scrolledBack = worldOlderPages[id] ?? []
             // The cursor tracks the newest page's far edge only until something
             // older has been pulled — after that the loaded pages own everything
@@ -542,13 +596,24 @@ extension AppState {
                 worldConversations[i].messages = next
             }
             if let last = next.last(where: { $0.kind != .timestamp && $0.kind != .system }) {
-                try? await MessagingStore.shared.markRead(id, lastMessageId: last.id)
+                // The one place the list's preview can be made true for an
+                // encrypted thread: the server sends the constant "Message", and
+                // this is where the real last message finishes being decrypted.
+                let derived = last.fromUser ? "You: \(last.snippetText)" : last.snippetText
+                if worldConversations[i].preview != derived {
+                    worldConversations[i].preview = derived
+                }
+                if markRead {
+                    try? await MessagingStore.shared.markRead(id, lastMessageId: last.id)
+                }
             }
             archiveWorldMessages(id)
+            return true
         } catch {
             #if DEBUG
             print("Live message load failed: \(error.localizedDescription)")
             #endif
+            return false
         }
     }
 
@@ -683,10 +748,15 @@ extension AppState {
     private func applyReadCutoff(_ cutoffId: UUID?, to messages: inout [WorldMessage]) {
         guard let cutoffId,
               let cutoff = messages.firstIndex(where: { $0.id == cutoffId }) else { return }
-        let now = Date()
         for j in 0...cutoff where messages[j].fromUser {
             messages[j].readLabel = "Read"
-            if messages[j].readAt == nil { messages[j].readAt = now }
+            // `readAt` is left alone on purpose — it used to be stamped `Date()`
+            // here, and that is what made a message read last Thursday say
+            // "Read 22:35" after every relaunch, dated to the relaunch. This
+            // mark comes from the server's stored high-water pointer, which
+            // carries no clock: it says *that* the peer has read this, never
+            // when. So the receipt says only what it knows, and the bubble's
+            // own send time is what dates it (see `receiptText`).
         }
     }
 
@@ -1282,6 +1352,10 @@ extension AppState {
             worldConversations[i].lastActivityAt = BackendDate.parse(dto.createdAt) ?? Date()
             worldConversations[i].timeAgo = "now"
         }
+        // The socket already decrypted this one, so the row's preview is true up
+        // to here — the list's backfill must not re-fetch the thread to learn
+        // what it just watched arrive.
+        worldPreviewSyncedAt[dto.conversationId] = BackendDate.parse(dto.createdAt)
         archiveWorldMessages(dto.conversationId)
         if worldTypingConversationID == dto.conversationId {
             withAnimation(.ggSnappy) { worldTypingConversationID = nil }
@@ -1326,8 +1400,14 @@ extension AppState {
         let now = Date()
         withAnimation(.ggSnappy) {
             for j in 0...cutoff where worldConversations[i].messages[j].fromUser {
+                // This event is the peer reading, right now — but only for the
+                // messages this is news about. A cutoff sweeps up everything
+                // behind it, including bubbles that were already marked read
+                // days ago off the server's stored pointer, and re-dating those
+                // to this moment is the same lie by another route.
+                let isNews = worldConversations[i].messages[j].readLabel != "Read"
                 worldConversations[i].messages[j].readLabel = "Read"
-                if worldConversations[i].messages[j].readAt == nil {
+                if isNews, worldConversations[i].messages[j].readAt == nil {
                     worldConversations[i].messages[j].readAt = now
                 }
             }
