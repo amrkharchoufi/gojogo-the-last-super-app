@@ -25,3 +25,7 @@ backend/target/
 infra/node_modules/
 infra/cdk.out/
 infra/.env.deploy
+
+# Vendored libsignal — ~560MB of prebuilt Rust static libs, fetched by scripts/fetch-libsignal.sh
+Vendor/LibSignalClient/Sources/
+Vendor/LibSignalClient/lib/
