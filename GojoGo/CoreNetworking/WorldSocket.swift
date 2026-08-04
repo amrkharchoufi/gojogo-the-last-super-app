@@ -55,6 +55,21 @@ final class WorldSocket: NSObject {
     private var attempt = 0
     private let decoder = JSONDecoder()
 
+    /// Whether this backend can still be asked for connect tickets.
+    ///
+    /// Starts optimistic and latches off for the rest of the session the first
+    /// time a ticket is refused or cannot be minted, so a backend that predates
+    /// the ticket endpoint — or an authorizer that predates ticket support —
+    /// costs one failed dial rather than an unbreakable reconnect loop. A fresh
+    /// launch tries tickets again.
+    private var ticketsAvailable = true
+
+    /// The socket never opened. Distinguished from an ordinary drop because it
+    /// is the one failure that says something about *how* we authenticated.
+    private enum SocketError: Error {
+        case handshakeRefused
+    }
+
     func connect() {
         guard !shouldRun else { return }
         shouldRun = true
@@ -91,8 +106,10 @@ final class WorldSocket: NSObject {
 
     private func openAndListen() async {
         while shouldRun, !Task.isCancelled {
+            var usedTicket = false
             do {
-                let credential = try await handshakeCredential()
+                let (credential, isTicket) = try await handshakeCredential()
+                usedTicket = isTicket
                 guard var comps = URLComponents(string: BackendConfig.messagingSocketURL) else { return }
                 // Named `token` because that is the API's declared identity
                 // source — API Gateway rejects a handshake missing it before the
@@ -104,12 +121,37 @@ final class WorldSocket: NSObject {
                 let socket = URLSession.shared.webSocketTask(with: url)
                 task = socket
                 socket.resume()
+
+                // Wait for the handshake to actually complete before claiming to
+                // be connected. `resume()` only queues the dial: a socket the
+                // authorizer refuses looks identical to a live one until the
+                // first read fails, so setting `isConnected` here used to
+                // announce a connection that did not exist and fire the
+                // resync that follows one. A ping is the cheapest thing that
+                // cannot round-trip until the socket is genuinely up.
+                guard await ping(socket) else { throw SocketError.handshakeRefused }
+
                 startPinging(socket)
                 isConnected = true
                 if attempt > 0 { onReconnect?() }
                 attempt = 0
                 try await receiveLoop(socket)
             } catch {
+                // A refused handshake on a ticket means this backend cannot
+                // spend one — the ticket endpoint and the $connect authorizer
+                // ship separately, so a deploy can legitimately land in an order
+                // where the app is minting tickets nothing will accept. Drop to
+                // the ID token rather than retrying the same rejection forever;
+                // the next launch tries tickets again, by which time the other
+                // half is usually out.
+                // `handshakeRefused` is SocketError's only case, so the type
+                // test is the whole check.
+                if usedTicket, error is SocketError {
+                    ticketsAvailable = false
+                    #if DEBUG
+                    print("WorldSocket: ticket refused, falling back to ID token")
+                    #endif
+                }
                 #if DEBUG
                 print("WorldSocket dropped: \(error.localizedDescription)")
                 #endif
@@ -124,23 +166,43 @@ final class WorldSocket: NSObject {
         }
     }
 
-    /// A fresh connect ticket, falling back to the ID token if the backend has
-    /// no ticket endpoint yet.
+    /// A fresh connect ticket, or the ID token when this backend cannot mint one.
     ///
-    /// The fallback is for one situation only: an app build newer than the
-    /// deployed backend. Losing real-time chat because a rollout landed in the
-    /// wrong order would be a worse failure than the log exposure the ticket
-    /// removes, and the server-side switch (`WS_ALLOW_TOKEN_AUTH=false`) is what
-    /// closes this path for good once both sides have shipped.
-    private func handshakeCredential() async throws -> String {
-        do {
-            let ticket: SocketTicket = try await APIClient.shared.post("/v1/messaging/socket/ticket")
-            return ticket.ticket
-        } catch {
-            #if DEBUG
-            print("WorldSocket ticket unavailable, falling back to ID token: \(error)")
-            #endif
-            return try await AuthSession.shared.validIdToken()
+    /// The ticket endpoint and the `$connect` authorizer that spends tickets are
+    /// deployed separately from the app, so every ordering of those three is
+    /// reachable in practice. Chat going permanently silent because a rollout
+    /// landed in an awkward order is a worse outcome than the log exposure the
+    /// ticket removes, so the legacy path stays until the server closes it
+    /// (`WS_ALLOW_TOKEN_AUTH=false`) — at which point tickets are the only thing
+    /// that works and this fallback simply stops helping.
+    /// - Returns: the credential, and whether it is a ticket — the caller needs
+    ///   to know which one a refusal was about.
+    private func handshakeCredential() async throws -> (credential: String, isTicket: Bool) {
+        if ticketsAvailable {
+            do {
+                let ticket: SocketTicket =
+                    try await APIClient.shared.post("/v1/messaging/socket/ticket")
+                return (ticket.ticket, true)
+            } catch {
+                // No endpoint on this backend. Latch off so every later reconnect
+                // skips the wasted round trip.
+                ticketsAvailable = false
+                #if DEBUG
+                print("WorldSocket: no ticket endpoint, using ID token: \(error)")
+                #endif
+            }
+        }
+        return (try await AuthSession.shared.validIdToken(), false)
+    }
+
+    /// One ping, awaited — true if it round-tripped.
+    ///
+    /// Used as the "is this socket actually open" probe, because a WebSocket the
+    /// server refused is indistinguishable from a healthy one until something is
+    /// read from it.
+    private func ping(_ socket: URLSessionWebSocketTask) async -> Bool {
+        await withCheckedContinuation { cont in
+            socket.sendPing { error in cont.resume(returning: error == nil) }
         }
     }
 
@@ -168,9 +230,7 @@ final class WorldSocket: NSObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 guard !Task.isCancelled else { return }
-                let alive: Bool = await withCheckedContinuation { cont in
-                    socket.sendPing { error in cont.resume(returning: error == nil) }
-                }
+                let alive = (await self?.ping(socket)) ?? false
                 if !alive {
                     socket.cancel(with: .abnormalClosure, reason: nil)
                     self?.isConnected = false
