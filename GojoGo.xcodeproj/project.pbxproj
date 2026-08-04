@@ -9,10 +9,42 @@
 /* Begin PBXBuildFile section */
 		GGMAPBOX000000000000001 /* MapboxMaps in Frameworks */ = {isa = PBXBuildFile; productRef = GGMAPBOX000000000000002 /* MapboxMaps */; };
 		GGSUMSUB000000000000001 /* IdensicMobileSDK in Frameworks */ = {isa = PBXBuildFile; productRef = GGSUMSUB000000000000002 /* IdensicMobileSDK */; };
+		GGNSE00000000000000001 /* LibSignalClient in Frameworks */ = {isa = PBXBuildFile; productRef = GGNSE00000000000000002 /* LibSignalClient */; };
+		GGNSE00000000000000003 /* GojoGoNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = GGNSE00000000000000004 /* GojoGoNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		GGNSE0000000000000000D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = GG00000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = GGNSE00000000000000009;
+			remoteInfo = GojoGoNotificationService;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		GGNSE00000000000000006 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				GGNSE00000000000000003 /* GojoGoNotificationService.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		GGNSE00000000000000004 /* GojoGoNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = GojoGoNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		GG00000000000000000002 /* GojoGo */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = GojoGo; sourceTree = "<group>"; };
+		GGSHARED000000000000001 /* GojoGoShared */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = GojoGoShared; sourceTree = "<group>"; };
+		GGNSE00000000000000005 /* GojoGoNotificationService */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = GojoGoNotificationService; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -25,6 +57,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		GGNSE00000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				GGNSE00000000000000001 /* LibSignalClient in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -32,6 +72,8 @@
 			isa = PBXGroup;
 			children = (
 				GG00000000000000000002 /* GojoGo */,
+				GGSHARED000000000000001 /* GojoGoShared */,
+				GGNSE00000000000000005 /* GojoGoNotificationService */,
 				GG00000000000000000005 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -39,6 +81,7 @@
 		GG00000000000000000005 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				GGNSE00000000000000004 /* GojoGoNotificationService.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -53,13 +96,16 @@
 				GG00000000000000000007 /* Sources */,
 				GG00000000000000000003 /* Frameworks */,
 				GG00000000000000000008 /* Resources */,
+				GGNSE00000000000000006 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				GGNSE00000000000000008 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				GG00000000000000000002 /* GojoGo */,
+				GGSHARED000000000000001 /* GojoGoShared */,
 			);
 			name = GojoGo;
 			packageProductDependencies = (
@@ -69,6 +115,30 @@
 			);
 			productName = GojoGo;
 			productType = "com.apple.product-type.application";
+		};
+		GGNSE00000000000000009 /* GojoGoNotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = GGNSE0000000000000000A /* Build configuration list for PBXNativeTarget "GojoGoNotificationService" */;
+			buildPhases = (
+				GGNSE0000000000000000B /* Sources */,
+				GGNSE00000000000000007 /* Frameworks */,
+				GGNSE0000000000000000C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				GGNSE00000000000000005 /* GojoGoNotificationService */,
+				GGSHARED000000000000001 /* GojoGoShared */,
+			);
+			name = GojoGoNotificationService;
+			packageProductDependencies = (
+				GGNSE00000000000000002 /* LibSignalClient */,
+			);
+			productName = GojoGoNotificationService;
+			productReference = GGNSE00000000000000004 /* GojoGoNotificationService.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -81,6 +151,9 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					GG00000000000000000006 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					GGNSE00000000000000009 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
@@ -104,12 +177,20 @@
 			projectRoot = "";
 			targets = (
 				GG00000000000000000006 /* GojoGo */,
+				GGNSE00000000000000009 /* GojoGoNotificationService */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		GG00000000000000000008 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		GGNSE0000000000000000C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -126,7 +207,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		GGNSE0000000000000000B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		GGNSE00000000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = GGNSE00000000000000009 /* GojoGoNotificationService */;
+			targetProxy = GGNSE0000000000000000D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		GG0000000000000000000B /* Debug */ = {
@@ -348,6 +444,82 @@
 			};
 			name = Release;
 		};
+		GGNSE0000000000000000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;
+				CODE_SIGN_ENTITLEMENTS = GojoGoNotificationService/GojoGoNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 33;
+				DEVELOPMENT_TEAM = T8348X4CNY;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = GojoGoNotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/LibSignalClient/lib/device",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/LibSignalClient/lib/simulator",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gojo.gojogo.NotificationService;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		GGNSE0000000000000000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;
+				CODE_SIGN_ENTITLEMENTS = GojoGoNotificationService/GojoGoNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 33;
+				DEVELOPMENT_TEAM = T8348X4CNY;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = GojoGoNotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/LibSignalClient/lib/device",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/LibSignalClient/lib/simulator",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gojo.gojogo.NotificationService;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -365,6 +537,15 @@
 			buildConfigurations = (
 				GG0000000000000000000B /* Debug */,
 				GG0000000000000000000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		GGNSE0000000000000000A /* Build configuration list for PBXNativeTarget "GojoGoNotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				GGNSE0000000000000000E /* Debug */,
+				GGNSE0000000000000000F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -412,6 +593,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = GGSUMSUB000000000000003 /* XCRemoteSwiftPackageReference "IdensicMobileSDK-iOS" */;
 			productName = IdensicMobileSDK;
+		};
+		GGNSE00000000000000002 /* LibSignalClient */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = GGSIGNAL000000000000003 /* XCLocalSwiftPackageReference "Vendor/LibSignalClient" */;
+			productName = LibSignalClient;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

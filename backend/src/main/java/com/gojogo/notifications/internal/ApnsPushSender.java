@@ -84,22 +84,26 @@ class ApnsPushSender {
     }
 
     /** Best-effort push for a chat message (title = sender, body = preview). */
-    void notifyMessage(UUID recipientId, String title, String body, UUID conversationId) {
+    void notifyMessage(UUID recipientId, String title, String body, UUID conversationId,
+                       UUID messageId, UUID senderId, Integer envelopeVersion, String cipherBody) {
         if (!props.enabled() || keyBroken) return;
         executor.submit(() -> {
             try {
-                deliverMessage(recipientId, title, body, conversationId);
+                deliverMessage(recipientId, title, body, conversationId, messageId, senderId,
+                    envelopeVersion, cipherBody);
             } catch (Exception e) {
                 log.debug("APNs message push failed: {}", e.toString());
             }
         });
     }
 
-    private void deliverMessage(UUID recipientId, String title, String body, UUID conversationId)
-            throws Exception {
+    private void deliverMessage(UUID recipientId, String title, String body, UUID conversationId,
+                                UUID messageId, UUID senderId, Integer envelopeVersion,
+                                String cipherBody) throws Exception {
         var devices = tokens.findByProfileId(recipientId);
         if (devices.isEmpty()) return;
-        byte[] payload = messagePayload(title, body, conversationId);
+        byte[] payload = messagePayload(title, body, conversationId, messageId, senderId,
+            envelopeVersion, cipherBody);
         String jwt = jwt();
         for (DeviceToken device : devices) {
             send(device, jwt, payload);
@@ -147,17 +151,51 @@ class ApnsPushSender {
         return json.writeValueAsBytes(root);
     }
 
-    private byte[] messagePayload(String title, String body, UUID conversationId) throws Exception {
+    /** APNs refuses a payload over 4 KB outright, so the envelope is dropped
+     *  rather than the notification. See {@link #messagePayload}. */
+    private static final int APNS_PAYLOAD_LIMIT = 4096;
+
+    /**
+     * The message push (E2EE Phase G).
+     *
+     * <p>{@code mutable-content} is what lets the recipient's notification
+     * service extension rewrite this banner. Everything it needs travels
+     * alongside: the ids, and — when it fits — the envelope itself, which this
+     * process cannot read and does not try to.
+     *
+     * <p>The size check is not a nicety. APNs rejects an oversized payload
+     * whole, so a first (PreKey) message, which carries an identity key, a base
+     * key and a Kyber ciphertext and runs to a couple of kilobytes of base64,
+     * would take the entire notification down with it. Dropping {@code
+     * cipherBody} instead leaves a push that still arrives, still says who it
+     * is from, and tells the extension to fetch the body by id. Built and then
+     * measured rather than estimated: the alert title is a display name of
+     * unknown length, so the only honest size is the serialized one.
+     */
+    // Package-private rather than private so the size rule can be tested: the
+    // failure it guards against — an oversized push rejected whole — is only
+    // visible in APNs' response, i.e. in production.
+    byte[] messagePayload(String title, String body, UUID conversationId, UUID messageId,
+                          UUID senderId, Integer envelopeVersion, String cipherBody)
+            throws Exception {
         Map<String, Object> alert = new LinkedHashMap<>();
         alert.put("title", title);
         alert.put("body", body);
         Map<String, Object> aps = new LinkedHashMap<>();
         aps.put("alert", alert);
         aps.put("sound", "default");
+        aps.put("mutable-content", 1);
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("aps", aps);
         root.put("type", "message");
         if (conversationId != null) root.put("conversationId", conversationId.toString());
+        if (messageId != null) root.put("messageId", messageId.toString());
+        if (senderId != null) root.put("senderId", senderId.toString());
+        if (envelopeVersion != null) root.put("envelopeVersion", envelopeVersion);
+        if (cipherBody != null) root.put("cipherBody", cipherBody);
+        byte[] payload = json.writeValueAsBytes(root);
+        if (payload.length <= APNS_PAYLOAD_LIMIT) return payload;
+        root.remove("cipherBody");
         return json.writeValueAsBytes(root);
     }
 

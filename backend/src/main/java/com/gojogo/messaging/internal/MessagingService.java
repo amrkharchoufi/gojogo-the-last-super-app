@@ -159,6 +159,24 @@ class MessagingService {
     }
 
     /**
+     * One message by id (E2EE Phase G).
+     *
+     * <p>Exists for the notification service extension. APNs caps a payload at
+     * 4 KB and a first (PreKey) message is most of that on its own, so the push
+     * carries the envelope when it fits and the ids when it doesn't; this is
+     * what the extension calls in the second case. Participant-guarded like
+     * every other read here — being sent a message id is not authorisation to
+     * read it.
+     */
+    MessageDto message(UUID userId, UUID convId, UUID msgId) {
+        requireParticipant(userId, convId);
+        StoredMessage stored = repo.getMessage(convId, msgId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message not found"));
+        return toMessageDto(stored, profiles.findByIds(List.of(stored.senderId())),
+            repo.worldProfilesByIds(List.of(stored.senderId())));
+    }
+
+    /**
      * The newest message every OTHER participant has read up to — i.e. the "Read"
      * high-water mark for the caller's own messages. Null while anyone still has
      * the caller's messages unread, so a group only shows "Read" once everyone has
@@ -225,9 +243,14 @@ class MessagingService {
     private void notifyRecipients(ConversationMeta meta, StoredMessage msg) {
         List<UUID> recipients = otherThan(meta.participants(), msg.senderId());
         if (recipients.isEmpty()) return;
-        events.publishEvent(new MessageSent(msg.conversationId(), msg.senderId(),
+        // The envelope rides along (E2EE Phase G) so the recipient's device can
+        // decrypt the banner it is about to show. Nothing here is readable by
+        // this process — `cipherBody` is the blob as stored, and `snippet`
+        // still returns the "New message" constant for an encrypted message.
+        events.publishEvent(new MessageSent(msg.conversationId(), msg.id(), msg.senderId(),
             worldName(msg.senderId()), snippet(msg), recipients,
-            senderNamesFor(recipients, msg.senderId())));
+            senderNamesFor(recipients, msg.senderId()),
+            msg.envelopeVersion(), msg.cipherBody()));
     }
 
     /**

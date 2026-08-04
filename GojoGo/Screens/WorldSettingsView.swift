@@ -15,6 +15,7 @@ struct WorldSettingsView: View {
     @State private var avatarItem: PhotosPickerItem?
     @State private var cacheSize: Int64 = 0
     @State private var backupFrequency = WorldBackupSync.frequency
+    @State private var messagePreviews = WorldAppGroup.messagePreviewsEnabled
     @State private var backingUpNow = false
     @State private var backupTick = 0
     @FocusState private var nameFocused: Bool
@@ -226,6 +227,18 @@ struct WorldSettingsView: View {
         section("NOTIFICATIONS") {
             VStack(spacing: 0) {
                 toggleRow("Push notifications", icon: "bell", isOn: $app.worldPushEnabled)
+                divider
+                // E2EE Phase G. The server has not been able to write a message
+                // into a push since Phase A — it only holds ciphertext — so the
+                // banner content is decrypted on this device, by the
+                // notification extension. Which means the device can also
+                // decline to: off leaves the generic "New message" the server
+                // sent. Stored in the shared suite, because the process that
+                // reads it is not this one.
+                toggleRow("Show message previews", icon: "text.bubble",
+                          isOn: Binding(get: { messagePreviews },
+                                        set: { messagePreviews = $0
+                                               WorldAppGroup.messagePreviewsEnabled = $0 }))
                 divider
                 Button {
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }

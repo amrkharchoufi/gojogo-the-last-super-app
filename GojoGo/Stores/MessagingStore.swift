@@ -9,7 +9,13 @@ final class MessagingStore {
 
     static let shared = MessagingStore()
 
-    var myProfileId: UUID?
+    /// Mirrored into the shared defaults suite on the way in (Phase G): the
+    /// notification extension has no session to ask who is signed in, and it
+    /// needs this for one thing — our own end of the ratchet address. A profile
+    /// id is not a secret; it is on every message on the wire.
+    var myProfileId: UUID? {
+        didSet { WorldAppGroup.localProfileId = myProfileId }
+    }
 
     /// Conversations confirmed to exist on the backend.
     private(set) var liveConversationIds: Set<UUID> = []
@@ -331,57 +337,67 @@ final class MessagingStore {
     /// loaded yet) and would otherwise become permanent.
     private func openedEnvelope(_ dto: MessageDTO) -> WorldEnvelopePayload? {
         guard dto.kind == "encrypted" else { return nil }
-        let vault = WorldEnvelopeVault.shared
-        if let banked = vault.payload(for: dto.id, in: dto.conversationId) {
-            // Cheap and idempotent — the key store is persisted, but the vault
-            // is the record of what was actually opened, so re-registering from
-            // it is what keeps the two from drifting.
+        // Phase G: the lookup, the decrypt and the banking all happen inside
+        // `WorldEnvelopeOpener`, under the cross-process ratchet lock, because
+        // the notification extension is opening the same messages from its own
+        // process. Registering the media keys stays here — it is the app that
+        // renders pictures.
+        if let version = dto.envelopeVersion, let body = dto.cipherBody, let me = myProfileId {
+            do {
+                let payload = try WorldEnvelopeOpener.payload(
+                    version: version, body: body,
+                    messageId: dto.id, clientId: dto.clientId,
+                    conversationId: dto.conversationId,
+                    from: dto.senderId, as: me,
+                    identityChanged: { [weak self] in
+                        self?.peerIdentityChanged?(dto.conversationId, dto.senderId)
+                    })
+                // Phase D: the attachment keys came out of the same sealed body
+                // as the text. Registering them here — at the wire boundary,
+                // before any view has asked for a URL — is what lets
+                // `ImageCache` decrypt without every media surface in the app
+                // knowing keys exist. Cheap and idempotent: the key store is
+                // persisted, but the vault is the record of what was actually
+                // opened, so re-registering from it keeps the two from drifting.
+                if let keys = payload.mediaKeys { WorldMediaKeyStore.shared.register(keys) }
+                return payload
+            } catch WorldEnvelope.EnvelopeError.unsupportedVersion {
+                return WorldEnvelopePayload(
+                    kind: "text",
+                    text: "This message needs a newer version of GojoGo.")
+            } catch WorldEnvelope.EnvelopeError.downgraded {
+                // Not a decryption failure and not phrased as one: the bytes
+                // were readable, which is exactly the problem. Said plainly,
+                // because a user who sees this should be suspicious rather than
+                // reassured.
+                return WorldEnvelopePayload(
+                    kind: Self.undecryptableKind,
+                    text: "This message wasn't encrypted and was not shown.")
+            } catch {
+                #if DEBUG
+                print("Envelope open failed (\(dto.id)): \(error)")
+                #endif
+                return WorldEnvelopePayload(
+                    kind: Self.undecryptableKind,
+                    text: "This message couldn't be decrypted.")
+            }
+        }
+        // No body on the wire, or no profile id yet. A payload the extension or
+        // an earlier pass already opened still resolves; anything else is a
+        // message this device cannot show.
+        if let banked = WorldEnvelopeOpener.bankedPayload(messageId: dto.id,
+                                                          clientId: dto.clientId,
+                                                          conversationId: dto.conversationId) {
             if let keys = banked.mediaKeys { WorldMediaKeyStore.shared.register(keys) }
             return banked
         }
-        if let clientId = dto.clientId,
-           let banked = vault.payload(for: clientId, in: dto.conversationId) {
-            vault.store(banked, for: dto.id, in: dto.conversationId)
-            if let keys = banked.mediaKeys { WorldMediaKeyStore.shared.register(keys) }
-            return banked
-        }
-        guard let version = dto.envelopeVersion, let body = dto.cipherBody else {
+        guard dto.envelopeVersion != nil, dto.cipherBody != nil else {
             return WorldEnvelopePayload(kind: "text", text: "Message can't be displayed.")
         }
-        // Sealed to a session with the *sender*. Our own messages never reach
-        // here — they resolve from the vault above or not at all.
-        do {
-            let payload = try WorldEnvelope.open(
-                version: version, body: body, from: dto.senderId,
-                identityChanged: { [weak self] in
-                    self?.peerIdentityChanged?(dto.conversationId, dto.senderId)
-                })
-            vault.store(payload, for: dto.id, in: dto.conversationId)
-            // Phase D: the attachment keys came out of the same sealed body as
-            // the text. Registering them here — at the wire boundary, before
-            // any view has asked for a URL — is what lets `ImageCache` decrypt
-            // without every media surface in the app knowing keys exist.
-            if let keys = payload.mediaKeys { WorldMediaKeyStore.shared.register(keys) }
-            return payload
-        } catch WorldEnvelope.EnvelopeError.unsupportedVersion {
-            return WorldEnvelopePayload(
-                kind: "text",
-                text: "This message needs a newer version of GojoGo.")
-        } catch WorldEnvelope.EnvelopeError.downgraded {
-            // Not a decryption failure and not phrased as one: the bytes were
-            // readable, which is exactly the problem. Said plainly, because a
-            // user who sees this should be suspicious rather than reassured.
-            return WorldEnvelopePayload(
-                kind: Self.undecryptableKind,
-                text: "This message wasn't encrypted and was not shown.")
-        } catch {
-            #if DEBUG
-            print("Envelope open failed (\(dto.id)): \(error)")
-            #endif
-            return WorldEnvelopePayload(
-                kind: Self.undecryptableKind,
-                text: "This message couldn't be decrypted.")
-        }
+        // Transient by construction — messaging hasn't finished connecting, so
+        // this is never banked and opens fine on the next pass.
+        return WorldEnvelopePayload(kind: Self.undecryptableKind,
+                                    text: "This message couldn't be decrypted.")
     }
 
     /// Marks a payload this device couldn't open. Not a wire kind — nothing

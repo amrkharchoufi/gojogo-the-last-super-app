@@ -82,8 +82,8 @@ class GojoMessagesPrivacyTests {
         UUID renamer = UUID.randomUUID();
         UUID everyoneElse = UUID.randomUUID();
 
-        MessageSent event = new MessageSent(UUID.randomUUID(), sender, "Youssef", "hey",
-            List.of(renamer, everyoneElse), Map.of(renamer, "Boss"));
+        MessageSent event = new MessageSent(UUID.randomUUID(), UUID.randomUUID(), sender,
+            "Youssef", "hey", List.of(renamer, everyoneElse), Map.of(renamer, "Boss"), 2, "AAAA");
 
         assertEquals("Boss", event.titleFor(renamer), "the renamer sees their own name for him");
         assertEquals("Youssef", event.titleFor(everyoneElse), "everybody else sees the real name");
@@ -93,8 +93,8 @@ class GojoMessagesPrivacyTests {
     @Test
     void pushTitleFallsBackWhenThereAreNoRenames() {
         UUID recipient = UUID.randomUUID();
-        MessageSent noMap = new MessageSent(UUID.randomUUID(), UUID.randomUUID(), "Youssef",
-            "hey", List.of(recipient), null);
+        MessageSent noMap = new MessageSent(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+            "Youssef", "hey", List.of(recipient), null, null, null);
         assertEquals("Youssef", noMap.titleFor(recipient));
     }
 

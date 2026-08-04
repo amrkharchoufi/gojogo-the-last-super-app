@@ -20,5 +20,16 @@
 	<array>
 		<string>group.com.gojo.gojogo</string>
 	</array>
+	<!-- Phase G. The app's own group is listed FIRST on purpose: the first
+	     entry is what an unqualified SecItemAdd writes to, so every keychain
+	     write in the app and its SDKs lands exactly where it always has. The
+	     shared group is the one the notification extension can also be granted,
+	     and KeychainStore names it explicitly for the handful of items that
+	     have to cross into that process. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.gojo.gojogo</string>
+		<string>$(AppIdentifierPrefix)com.gojo.gojogo.shared</string>
+	</array>
 </dict>
 </plist>

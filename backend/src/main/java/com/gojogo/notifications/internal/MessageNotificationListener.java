@@ -33,8 +33,13 @@ class MessageNotificationListener {
             // Resolved per recipient: whoever privately renamed the sender sees
             // the name they chose, not the one the sender set.
             String title = event.titleFor(recipient);
+            // The body stays generic for an encrypted message — it always has,
+            // and it is what a device with no extension, or a locked keychain,
+            // or previews turned off, will show. The envelope beside it is what
+            // a device that *can* decrypt uses to replace it (E2EE Phase G).
             apns.notifyMessage(recipient, title != null ? title : "New message",
-                body, event.conversationId());
+                body, event.conversationId(), event.messageId(), event.senderId(),
+                event.envelopeVersion(), event.cipherBody());
         }
     }
 }

@@ -2201,6 +2201,14 @@ final class AppState: ObservableObject {
         // the next account's contacts, and the downgrade mark is per-identity.
         WorldVerificationStore.shared.wipe()
         WorldSignalSession.forgetSealedPeers()
+        // Phase G: the notification extension reads the signed-in profile id
+        // from the shared suite. Left behind, it would keep decrypting the
+        // departed account's pushes into banners on this device. (The store's
+        // own `reset()` below clears it too, via `myProfileId`'s didSet — this
+        // is the belt to that pair of braces, because the consequence of one of
+        // them being reordered away is an account's messages on a stranger's
+        // lock screen.)
+        WorldAppGroup.clearAccountState()
         SocialStore.shared.reset()
         StoriesStore.shared.reset()
         WatchStore.shared.reset()

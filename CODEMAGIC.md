@@ -69,9 +69,18 @@ The pipeline lives in [codemagic.yaml](codemagic.yaml). Two workflows:
    Codemagic's own counter — which starts at 1 and can collide with builds you have already uploaded —
    and the step prints a `WARNING:` line saying so. Grep the log for it if a build number looks off.
 
-6. **Capabilities on the App ID.** `GojoGo/GojoGo.entitlements` asks for **Push Notifications** and
-   **Sign in with Apple**. Both have to be enabled on the App ID in the developer portal, otherwise the
-   App Store profile Codemagic fetches won't grant them and the export step fails after a full build.
+6. **Capabilities on the App ID.** `GojoGo/GojoGo.entitlements` asks for **Push Notifications**,
+   **Sign in with Apple**, **iCloud (CloudKit)**, **App Groups** and **Keychain Sharing**. All have to be
+   enabled on the App ID in the developer portal, otherwise the App Store profile Codemagic fetches
+   won't grant them and the export step fails after a full build.
+
+7. **The notification extension's App ID** (E2EE Phase G). The app now embeds
+   `com.gojo.gojogo.NotificationService`, which is a *second* App ID with its own profile. The build
+   fetches signing files for it automatically, but `--create` only mints the identifier — it does not
+   turn capabilities on. Enable **App Groups** (associated with `group.com.gojo.gojogo`) and **Keychain
+   Sharing** on it once, by hand, or the extension will build, sign, and then silently fail to read the
+   session store it exists to decrypt with. Nothing about that failure is visible in the build log: the
+   symptom is a banner that stays "New message" forever.
 
 ## Cutting a version
 

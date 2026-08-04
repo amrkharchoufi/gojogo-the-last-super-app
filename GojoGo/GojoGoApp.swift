@@ -73,6 +73,16 @@ struct GojoGoApp: App {
     @StateObject private var appState = AppState()
 
     init() {
+        // Phase G, and it has to be first. The notification extension can only
+        // read keychain items in the shared access group, and everything this
+        // device already has — the auth tokens and, critically, the libsignal
+        // identity — was written to the app's own group. Moving them here, in
+        // `init`, means nothing has read a token or an identity yet: there is
+        // one process, no ratchet in flight, and no chance of a half-migrated
+        // read minting a second identity and changing this device's safety
+        // number with every contact it has.
+        KeychainStore.migrateToSharedAccessGroup()
+
         // Gate for Phase C: verifies the five protocol stores against the real
         // Double Ratchet before any live message depends on them. Debug-only.
         #if DEBUG

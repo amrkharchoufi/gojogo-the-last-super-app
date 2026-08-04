@@ -200,6 +200,57 @@ enum WorldSignalSelfCheck {
         try framing()
         try mediaCrypto()
         try backupCodec()
+        try sharedState()
+    }
+
+    /// Phase G: the two things that only break once there are two processes.
+    ///
+    /// The ratchet itself is unchanged — what changes is who may touch it. The
+    /// notification extension runs the same `WorldEnvelopeOpener` over the same
+    /// files, and the whole design rests on two properties that are trivial to
+    /// state and silent to break:
+    ///
+    ///  - the lock must not deadlock a caller against itself. `flock` is held by
+    ///    the open file description, so a nested acquisition on a second
+    ///    descriptor blocks forever — and it would do it inside a decrypt, with
+    ///    the message key already spent.
+    ///  - a banked payload must be on disk by the time the lock is released.
+    ///    A debounced write would let the other process ask libsignal to reopen
+    ///    a ciphertext this one has already opened, which loses the message.
+    private static func sharedState() throws {
+        // Re-entrancy. If this hangs, it hangs — which is exactly the point:
+        // a deadlock here is a deadlock in production, found at launch instead
+        // of at 3am on somebody's lock screen.
+        let nested: Int = WorldRatchetLock.withLock {
+            WorldRatchetLock.withLock { 7 }
+        }
+        guard nested == 7 else { throw Failure(step: "the ratchet lock did not return its value") }
+
+        // Durability. Written through one instance, read back through the same
+        // shared instance *after* a lookup that re-stats the file — which is
+        // how the app notices what the extension wrote.
+        let conversation = UUID()
+        let message = UUID()
+        let vault = WorldEnvelopeVault.shared
+        defer { vault.remove(conversation) }
+        vault.store(WorldEnvelopePayload(kind: "text", text: "banked"),
+                    for: message, in: conversation)
+        guard vault.payload(for: message, in: conversation)?.text == "banked" else {
+            throw Failure(step: "a banked payload did not come back out of the vault")
+        }
+        guard WorldEnvelopeOpener.bankedPayload(messageId: message, clientId: nil,
+                                                conversationId: conversation)?.text == "banked" else {
+            throw Failure(step: "the opener did not see the banked payload")
+        }
+        // The client-id path: an outgoing message is banked before the server
+        // has given it an id, and resolves through the echo's `clientId`.
+        let clientId = UUID()
+        vault.store(WorldEnvelopePayload(kind: "text", text: "mine"),
+                    for: clientId, in: conversation)
+        guard WorldEnvelopeOpener.bankedPayload(messageId: UUID(), clientId: clientId,
+                                                conversationId: conversation)?.text == "mine" else {
+            throw Failure(step: "an outgoing payload did not resolve through its client id")
+        }
     }
 
     /// Phase F: the snapshot codec. Checked here because the failure is

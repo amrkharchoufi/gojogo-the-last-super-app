@@ -475,14 +475,87 @@ exercise.
 
 **Still open:** the manual recovery code for the iCloud-off fallback.
 
-### Phase G — notification previews (NSE)
-- New extension target + App Group (storage already positioned by day-one rules).
-  APNs payload carries the envelope when ≤ 4 KB (`mutable-content: 1`); larger →
-  fetch by id (auth token via shared access group).
-- **The hard part:** decryption advances the ratchet, and the NSE and app are
-  two processes — one serialized session store with file coordination, or
-  double-decrypt corrupts sessions. This is why G is last.
-- Codemagic: second bundle id through `xcode-project use-profiles`.
+### Phase G — notification previews (NSE) *(built 2026-08-04, not yet exercised on a device)*
+
+Since Phase A the server has been unable to write a message into a push — it
+holds `cipherBody` and nothing it can read — so every banner has said "New
+message". This is the phase that gets the content back, by decrypting it on the
+device.
+
+**Landed:**
+- `GojoGoNotificationService`: a `UNNotificationServiceExtension` target
+  (`com.gojo.gojogo.NotificationService`), embedded in the app, linking
+  libsignal through the same vendored local package.
+- **A shared source folder, `GojoGoShared/`**, compiled into both targets: the
+  signal store, the vault, the envelope codec, the store-injectable half of
+  `WorldSignalSession`, the keychain and `BackendConfig`. Source sharing rather
+  than a framework, and a *split* rather than wholesale sharing: everything that
+  needs the app — who is signed in, the network round trip that turns a stranger
+  into a session — stayed in the app target. An extension that could establish
+  sessions would be an extension that could consume a one-time prekey and mint
+  an identity, in a process iOS kills for using 24 MB.
+- Backend: the message push carries `mutable-content: 1`, the message and sender
+  ids, and the envelope itself **when the serialized payload stays under 4 KB**.
+  Measured, not estimated — the alert title is a display name of unknown length,
+  and APNs rejects an oversized payload *whole*, which would take the whole
+  notification down rather than the preview. Over the limit, `cipherBody` is
+  dropped and the extension fetches the message from the new
+  `GET /v1/conversations/{convId}/messages/{msgId}` (participant-guarded; being
+  sent an id is not authorisation to read it). Three tests pin this, because
+  every failure here is invisible from the server: APNs answers an oversized
+  push with a 4xx logged at debug, and a missing `mutable-content` produces a
+  notification that arrives perfectly and is simply never decrypted.
+- **The hard part, and how it is answered.** `WorldRatchetLock` is a `flock` on
+  a file in the App Group container, and `WorldEnvelopeOpener` runs the whole
+  atom inside it — *look in the vault → ask libsignal → write the session →
+  bank the payload* — in both processes. Two failures follow if that is split:
+  a duplicate decrypt (one side gets `duplicatedMessage`, and the message is
+  unreadable by anyone forever), or a session record written from both sides,
+  which silently rolls back a chain key and kills every *later* message from
+  that peer. `flock` and not a pid file, because the kernel releases it when a
+  process dies — and the extension being killed is its normal life, not an
+  incident.
+- The vault moved into the App Group container (with the same one-time move the
+  signal store does) and became **write-through**: a payload still in memory
+  when the lock is released defeats the lock. Reads re-stat the file, which is
+  how a payload the extension opened reaches the app without a relaunch.
+- **The keychain moved into a shared access group**, because an item is
+  reachable only from the group it was written to and the app's own group is
+  its `application-identifier` — which no other bundle id can ever hold. The
+  migration runs once, in `GojoGoApp.init`, before anything reads. Two
+  safeguards, since getting this wrong signs everyone out and loses the identity
+  key: a probe decides whether the group is writable at all (an unentitled build
+  falls back to the old behaviour rather than failing every write silently), and
+  the legacy copy is deleted only after the new one is confirmed written.
+- `WorldSignalStore.mintsIdentity` is **false in the extension**. Over there a
+  missing identity never means "we need one" — it means the keychain isn't
+  readable yet — and minting one would hand every contact a changed safety
+  number, which is exactly the alarm Phase E raises for a substitution. Failing
+  to decrypt one banner is the cheaper mistake by an enormous margin.
+- Every failure path leaves the server's generic text. A lock-screen banner
+  saying "couldn't be decrypted" tells the user something they can do nothing
+  about; the app's bubble is where that sentence belongs.
+- **Previews can be turned off** (GojoMessages settings → Notifications). The
+  device is what renders the content now, so the device is also what can decline
+  to; off leaves the generic banner. Stored in the shared suite, because the
+  process that reads it is not the one that writes it.
+- Self-check extended: lock re-entrancy (a nested `flock` on a second descriptor
+  would deadlock *inside a decrypt*, with the message key already spent), vault
+  write-through, and the client-id resolution path.
+- Codemagic fetches signing files for the second bundle id; one
+  `xcode-project use-profiles` covers both.
+
+**Remaining:** everything that needs real hardware. APNs does not reach the
+simulator, so the extension has never run: the live checks owed are a preview
+appearing on a locked device, the >4 KB fetch-by-id path, and a message arriving
+over the socket and the push *simultaneously* — which is the case the lock
+exists for and the only one that can prove it. The Phase A push generic-text
+check is subsumed by this and still owed.
+
+**Note for the first device build:** the extension's App ID needs App Groups
+(associated with `group.com.gojo.gojogo`) and Keychain Sharing enabled in the
+developer portal. `--create` mints the identifier but does not enable
+capabilities, and the failure is silent — a banner that stays "New message".
 
 ## Known limitations (accepted)
 
@@ -498,3 +571,9 @@ exercise.
   makes that message unreadable forever, by anyone. That is forward secrecy
   working, not a bug — and it is what Phase F's encrypted backup answers.
 - **Server-side previews are gone** — that is the point, not a regression.
+- **APNs now carries the ciphertext** (Phase G). Apple's infrastructure sees an
+  opaque blob it cannot open, the same one our own server stores, plus who is
+  messaging whom and roughly how large the message is — metadata it already had
+  from the push existing at all. The alternative was leaving the preview
+  permanently generic, or having the extension fetch every message, which trades
+  the same blob for a request pattern that leaks the same facts more slowly.

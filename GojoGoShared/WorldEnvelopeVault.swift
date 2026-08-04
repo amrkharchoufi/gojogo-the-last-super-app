@@ -28,24 +28,49 @@ import Foundation
 // unreadable before first unlock; the profile id isn't loaded yet), and caching
 // those would turn a message that will open fine in a second into a permanent
 // "couldn't be decrypted".
+//
+// **Phase G made this shared and synchronous.** The notification extension
+// opens messages too, in its own process, and the two stay consistent only if:
+//
+//  - the files live in the **App Group container** (with the same one-time move
+//    the signal store does, for installs that predate the entitlement);
+//  - a write reaches disk **before** the ratchet lock is released — a debounced
+//    flush would let the other process ask libsignal to open a ciphertext this
+//    one had already spent; and
+//  - a read notices when the *other* process has written. Hence the mtime
+//    check: an in-memory cache that never re-reads is worse than no cache here.
 
 final class WorldEnvelopeVault {
     static let shared = WorldEnvelopeVault()
 
     private let directory: URL
-    private let io = DispatchQueue(label: "app.gojogo.envelope-vault", qos: .utility)
     private let lock = NSLock()
     /// conversationId -> (messageId -> payload). Loaded lazily per conversation
     /// and kept in memory: the read happens on the render path.
     private var cache: [UUID: [UUID: WorldEnvelopePayload]] = [:]
-    private var dirty: Set<UUID> = []
-    private var flushScheduled = false
+    /// The modification date each cached conversation was loaded at. A file
+    /// newer than this was written by the other process.
+    private var loadedAt: [UUID: Date] = [:]
 
     private init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask)[0]
-        directory = base.appendingPathComponent("world-envelopes", isDirectory: true)
-        try? FileManager.default.createDirectory(
+        let fm = FileManager.default
+        let legacy = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("world-envelopes", isDirectory: true)
+        if let container = WorldAppGroup.containerURL {
+            let moved = container.appendingPathComponent("world-envelopes", isDirectory: true)
+            // The same one-time move `WorldSignalStore` does, load-bearing for
+            // the same reason: the vault *relocates* on the first launch after
+            // the App Group entitlement lands, and a vault that reads as empty
+            // is a vault that asks libsignal to reopen every spent ciphertext in
+            // the newest page. Safe in `init` — one process, nothing mid-flight.
+            if !fm.fileExists(atPath: moved.path), fm.fileExists(atPath: legacy.path) {
+                try? fm.moveItem(at: legacy, to: moved)
+            }
+            directory = moved
+        } else {
+            directory = legacy
+        }
+        try? fm.createDirectory(
             at: directory, withIntermediateDirectories: true,
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
     }
@@ -59,51 +84,44 @@ final class WorldEnvelopeVault {
 
     // MARK: Writing
 
+    /// Records an opened payload and returns once it is on disk.
+    ///
+    /// Synchronous on purpose (Phase G): the caller is holding the ratchet lock,
+    /// and the point of that lock is that the *other* process finds this payload
+    /// rather than spending the message key a second time. A write still sitting
+    /// in memory when the lock is released would defeat it.
     func store(_ payload: WorldEnvelopePayload, for messageId: UUID, in conversationId: UUID) {
-        lock.lock()
+        lock.lock(); defer { lock.unlock() }
         var thread = loaded(conversationId)
         thread[messageId] = payload
         cache[conversationId] = thread
-        dirty.insert(conversationId)
-        let schedule = !flushScheduled
-        flushScheduled = true
-        lock.unlock()
-        guard schedule else { return }
-        io.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.flush() }
+        write(thread, to: conversationId)
     }
 
     /// A deleted thread's payloads go with its history.
     func remove(_ conversationId: UUID) {
-        lock.lock()
+        lock.lock(); defer { lock.unlock() }
         cache[conversationId] = nil
-        dirty.remove(conversationId)
-        lock.unlock()
-        let url = fileURL(conversationId)
-        io.async { try? FileManager.default.removeItem(at: url) }
+        loadedAt[conversationId] = nil
+        try? FileManager.default.removeItem(at: fileURL(conversationId))
     }
 
     /// Sign-out: these payloads are the account's plaintext, exactly like the
     /// archive, and must not outlive the account on a shared device.
     func wipe() {
-        lock.lock()
+        lock.lock(); defer { lock.unlock() }
         cache = [:]
-        dirty = []
-        lock.unlock()
-        let dir = directory
-        io.async {
-            try? FileManager.default.removeItem(at: dir)
-            try? FileManager.default.createDirectory(
-                at: dir, withIntermediateDirectories: true,
-                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-        }
+        loadedAt = [:]
+        let fm = FileManager.default
+        try? fm.removeItem(at: directory)
+        try? fm.createDirectory(
+            at: directory, withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
     }
-
-    // MARK: Plumbing
 
     // MARK: Backup (Phase F)
 
     func exportFiles() -> [String: Data] {
-        flush()
         var out: [String: Data] = [:]
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         for name in names where name.hasSuffix(".json") {
@@ -114,16 +132,23 @@ final class WorldEnvelopeVault {
     }
 
     func importFiles(_ files: [String: Data]) {
-        lock.lock(); cache = [:]; dirty = []; lock.unlock()
+        lock.lock(); cache = [:]; loadedAt = [:]; lock.unlock()
         for (id, data) in files {
             try? data.write(to: directory.appendingPathComponent("\(id).json"),
                             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
     }
 
-    /// Caller holds `lock`.
+    // MARK: Plumbing
+
+    /// Caller holds `lock`. Re-reads whenever the file on disk is newer than the
+    /// copy in memory — which is how a payload the *extension* opened reaches
+    /// the app without a relaunch.
     private func loaded(_ conversationId: UUID) -> [UUID: WorldEnvelopePayload] {
-        if let cached = cache[conversationId] { return cached }
+        let stamp = modifiedAt(conversationId)
+        if let cached = cache[conversationId], loadedAt[conversationId] == stamp {
+            return cached
+        }
         let thread: [UUID: WorldEnvelopePayload]
         if let data = try? Data(contentsOf: fileURL(conversationId)),
            let decoded = try? JSONDecoder().decode([String: WorldEnvelopePayload].self, from: data) {
@@ -134,26 +159,26 @@ final class WorldEnvelopeVault {
             thread = [:]
         }
         cache[conversationId] = thread
+        loadedAt[conversationId] = stamp
         return thread
     }
 
-    private func flush() {
-        lock.lock()
-        let batch = dirty
-        let snapshot = cache
-        dirty = []
-        flushScheduled = false
-        lock.unlock()
-        for id in batch {
-            guard let thread = snapshot[id] else { continue }
-            // JSON object keys must be strings; UUID keys would encode as an
-            // array of alternating keys and values and read back as neither.
-            let keyed = Dictionary(uniqueKeysWithValues:
-                thread.map { ($0.key.uuidString.lowercased(), $0.value) })
-            guard let data = try? JSONEncoder().encode(keyed) else { continue }
-            try? data.write(to: fileURL(id),
-                            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        }
+    /// Caller holds `lock`.
+    private func write(_ thread: [UUID: WorldEnvelopePayload], to conversationId: UUID) {
+        // JSON object keys must be strings; UUID keys would encode as an array
+        // of alternating keys and values and read back as neither.
+        let keyed = Dictionary(uniqueKeysWithValues:
+            thread.map { ($0.key.uuidString.lowercased(), $0.value) })
+        guard let data = try? JSONEncoder().encode(keyed) else { return }
+        try? data.write(to: fileURL(conversationId),
+                        options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        loadedAt[conversationId] = modifiedAt(conversationId)
+    }
+
+    private func modifiedAt(_ conversationId: UUID) -> Date? {
+        let attributes = try? FileManager.default
+            .attributesOfItem(atPath: fileURL(conversationId).path)
+        return attributes?[.modificationDate] as? Date
     }
 
     private func fileURL(_ id: UUID) -> URL {

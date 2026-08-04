@@ -43,6 +43,18 @@ final class WorldSignalStore {
     private var ephemeralIdentity: (IdentityKeyPair, UInt32)?
     private let usesKeychain: Bool
 
+    /// Whether this process may *create* an identity when it finds none
+    /// (Phase G). True in the app, false in the notification extension.
+    ///
+    /// The extension shares this store, so a missing identity there is never
+    /// "we need one" — it means the keychain isn't readable yet (before first
+    /// unlock) or the migration to the shared access group hasn't run. Minting
+    /// one would overwrite the device's real identity and hand every contact a
+    /// changed safety number, which is exactly the alarm Phase E raises for a
+    /// key substitution. Failing to decrypt one banner is the cheaper mistake
+    /// by an enormous margin.
+    var mintsIdentity = true
+
     /// `root: nil` is the real store — App Group container when the entitlement
     /// exists, Application Support until then.
     init(root: URL? = nil, usesKeychain: Bool = true) {
@@ -108,6 +120,7 @@ final class WorldSignalStore {
            let reg = UInt32(regRaw) {
             return (try IdentityKeyPair(bytes: bytes), reg)
         }
+        guard mintsIdentity else { throw StoreError.identityUnavailable }
         let identity = IdentityKeyPair.generate()
         // 14 bits, nonzero — the range the protocol reserves for registration ids.
         let registrationId = UInt32.random(in: 1...0x3FFF)
@@ -196,6 +209,9 @@ final class WorldSignalStore {
 
     enum StoreError: Error {
         case missingRecord(String)
+        /// No identity, and this process isn't allowed to create one — see
+        /// `mintsIdentity`. Always transient from the extension's side.
+        case identityUnavailable
     }
 }
 

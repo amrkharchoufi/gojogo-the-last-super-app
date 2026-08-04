@@ -75,6 +75,17 @@ class MessagingController {
         return messaging.listMessages(current.require(jwt).id(), convId, beforeInstant, limit);
     }
 
+    /**
+     * One message, for the notification service extension (E2EE Phase G): the
+     * push carries the envelope when it fits under APNs' 4 KB and the ids when
+     * it doesn't, and this is the second case.
+     */
+    @GetMapping("/v1/conversations/{convId}/messages/{msgId}")
+    MessageDto message(@AuthenticationPrincipal Jwt jwt,
+                       @PathVariable UUID convId, @PathVariable UUID msgId) {
+        return messaging.message(current.require(jwt).id(), convId, msgId);
+    }
+
     @PostMapping("/v1/conversations/{convId}/messages")
     @ResponseStatus(HttpStatus.CREATED)
     MessageDto send(@AuthenticationPrincipal Jwt jwt,

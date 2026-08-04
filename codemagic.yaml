@@ -68,6 +68,13 @@ workflows:
         XCODE_PROJECT: "GojoGo.xcodeproj"
         XCODE_SCHEME: "GojoGo"
         BUNDLE_ID: "com.gojo.gojogo"
+        # The notification service extension (E2EE Phase G) is a second bundle
+        # id and therefore a second App ID, certificate-signed separately. Its
+        # App ID needs App Groups enabled and `group.com.gojo.gojogo`
+        # associated, plus keychain sharing — `--create` mints the identifier
+        # but does not turn capabilities on, so that part is done once, by hand,
+        # in the developer portal. See CODEMAGIC.md.
+        EXTENSION_BUNDLE_ID: "com.gojo.gojogo.NotificationService"
         # Numeric Apple ID of the app in App Store Connect — the build number is
         # read from there and bumped by one. Clear it and the build number falls
         # back to Codemagic's own counter, which starts at 1.
@@ -118,7 +125,19 @@ workflows:
             --certificate-key "@env:CERTIFICATE_PRIVATE_KEY" \
             --create
 
+          # The extension is signed separately — an .appex has its own bundle
+          # id and its own provisioning profile, and an archive missing it fails
+          # at the embed step rather than at compile. Same certificate: the
+          # second call reuses the one the first fetched.
+          app-store-connect fetch-signing-files "$EXTENSION_BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --platform IOS \
+            --certificate-key "@env:CERTIFICATE_PRIVATE_KEY" \
+            --create
+
           keychain add-certificates
+          # Applies every profile fetched above, matching each to its target by
+          # bundle id — so this one call covers the app and the extension.
           xcode-project use-profiles
 
       - name: Switch push notifications to the production environment
