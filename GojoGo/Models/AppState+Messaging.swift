@@ -440,6 +440,10 @@ extension AppState {
                     incoming.preview = existing.preview
                 }
             }
+            if incoming.preview == "Message",
+               let derived = WorldMessageArchive.shared.lastPreview(incoming.id) {
+                incoming.preview = derived
+            }
             merged.append(incoming)
         }
         let liveIds = Set(live.map(\.id))
@@ -515,11 +519,20 @@ extension AppState {
             if let last = next.last(where: { $0.kind != .timestamp && $0.kind != .system }) {
                 try? await MessagingStore.shared.markRead(id, lastMessageId: last.id)
             }
+            archiveWorldMessages(id)
         } catch {
             #if DEBUG
             print("Live message load failed: \(error.localizedDescription)")
             #endif
         }
+    }
+
+    /// Snapshots a thread into the on-device archive. Called from every site
+    /// that mutates a conversation's messages; the archive debounces, so the
+    /// cost of calling it liberally is one write per burst.
+    func archiveWorldMessages(_ id: UUID) {
+        guard let convo = worldConversations.first(where: { $0.id == id }) else { return }
+        WorldMessageArchive.shared.save(id, messages: convo.messages)
     }
 
     /// Whether this thread has history the app hasn't pulled yet.
@@ -547,6 +560,7 @@ extension AppState {
             guard !older.isEmpty else { return }
             worldOlderPages[id] = older + (worldOlderPages[id] ?? [])
             worldConversations[i].messages.insert(contentsOf: older, at: 0)
+            archiveWorldMessages(id)
         } catch {
             #if DEBUG
             print("Older message load failed: \(error.localizedDescription)")
@@ -769,6 +783,7 @@ extension AppState {
               let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
         else { return }
         worldConversations[i].messages[j].audioURL = url
+        archiveWorldMessages(conversationId)
     }
 
     private func adoptUploadedVideo(_ url: String, for messageID: UUID, in conversationId: UUID) {
@@ -776,6 +791,7 @@ extension AppState {
               let j = worldConversations[i].messages.firstIndex(where: { $0.id == messageID })
         else { return }
         worldConversations[i].messages[j].videoURL = url
+        archiveWorldMessages(conversationId)
     }
 
     /// Uploads a picked/captured movie. Videos are big and the upload can fail
@@ -1059,6 +1075,7 @@ extension AppState {
             worldConversations[i].lastActivityAt = BackendDate.parse(dto.createdAt) ?? Date()
             worldConversations[i].timeAgo = "now"
         }
+        archiveWorldMessages(dto.conversationId)
         if worldTypingConversationID == dto.conversationId {
             withAnimation(.ggSnappy) { worldTypingConversationID = nil }
         }
@@ -1080,6 +1097,7 @@ extension AppState {
                     WorldReaction(tapback: tapback, fromUser: mine))
             }
         }
+        archiveWorldMessages(convoId)
     }
 
     private func applyPollUpdate(_ dto: MessageDTO) {
@@ -1088,6 +1106,7 @@ extension AppState {
         withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
             worldConversations[i].messages[j] = MessagingStore.shared.map(dto)
         }
+        archiveWorldMessages(dto.conversationId)
     }
 
     private func applyReadReceipt(_ event: WorldSocketEvent) {
@@ -1106,6 +1125,7 @@ extension AppState {
                 }
             }
         }
+        archiveWorldMessages(convoId)
     }
 
     private func applyTyping(_ event: WorldSocketEvent) {

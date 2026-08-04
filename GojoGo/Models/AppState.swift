@@ -987,6 +987,14 @@ final class AppState: ObservableObject {
         PushRegistrar.shared.activeConversationID = id
         if let i = worldConversations.firstIndex(where: { $0.id == id }) {
             worldConversations[i].unread = 0
+            // Local-first history (E2EE Phase A): the thread renders instantly
+            // from the on-device archive; the fetch below reconciles on top.
+            // Once the ratchet lands, the archive is the *only* copy of
+            // anything already decrypted — the server's is a one-time delivery.
+            if worldConversations[i].messages.isEmpty {
+                let archived = WorldMessageArchive.shared.load(id)
+                if !archived.isEmpty { worldConversations[i].messages = archived }
+            }
         }
         loadLiveConversationIfNeeded(id)
     }
@@ -1086,6 +1094,8 @@ final class AppState: ObservableObject {
         worldMutedConversations.remove(id)
         WorldPreference.mutedConversations = worldMutedConversations
         clearWorldContextCardPreference(id)
+        // A deleted thread's local history goes with it.
+        WorldMessageArchive.shared.remove(id)
         // A live thread deleted only on-device reappears on the next refresh.
         guard wasLive else { return }
         Task { [weak self] in
@@ -1366,6 +1376,7 @@ final class AppState: ObservableObject {
             if !scheduled { worldConversations[i].preview = preview }
         }
         bumpWorldConversationActivity(at: i)
+        archiveWorldMessages(id)
         showWorldAppsMenu = false
 
         // Every thread is the server's now. A message that can't be sent isn't
@@ -1398,6 +1409,7 @@ final class AppState: ObservableObject {
             }
             worldConversations[i].messages[j].reactions = reactions
         }
+        archiveWorldMessages(id)
         if MessagingStore.shared.isLive(id) {
             let mine = worldConversations[i].messages[j].reactions.first { $0.fromUser }
             liveReact(mine?.tapback, on: messageID, in: id)
@@ -1419,6 +1431,7 @@ final class AppState: ObservableObject {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             worldConversations[i].messages.removeAll { $0.id == messageID }
         }
+        archiveWorldMessages(id)
         worldReactionTarget = nil
     }
 
@@ -2155,6 +2168,9 @@ final class AppState: ObservableObject {
         partnerJobTask?.cancel()
         SessionStore.clear()
         AuthSession.shared.clear()
+        // The message archive is the account's plaintext history — it must not
+        // outlive the account on a shared device.
+        WorldMessageArchive.shared.wipe()
         SocialStore.shared.reset()
         StoriesStore.shared.reset()
         WatchStore.shared.reset()

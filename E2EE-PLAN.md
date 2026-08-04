@@ -126,19 +126,33 @@ the legacy geo media item entirely.
   would be a downgrade-attack surface. A message that can't be sealed isn't
   sent.
 
-**⚠ `WorldEnvelope.sendingEnabled = false` until the backend deploys.** The
-live backend drops unknown JSON fields, so an envelope sent to it would store
-with *no body* — content silently lost. Flip the flag in the same change that
-confirms the rollout; the read path ships enabled either way.
+**Envelope live since 2026-08-04.** The envelope-aware backend deployed green
+(`fecbce2`), `WorldEnvelope.sendingEnabled` flipped to `true`, and an envelope
+message was verified against the **live API**: sent, cold-restarted the app,
+and the message came back from the server as `kind: "encrypted"` +
+`cipherBody` and rendered its text. (A backend that dropped the body would
+have rendered the "can't be displayed" fallback — that render path is itself
+the detector.)
+
+**Local message archive landed** (`WorldMessageArchive`): one JSON file per
+conversation under Application Support,
+`completeUntilFirstUserAuthentication` file protection (the keychain tokens'
+standard), debounced writes, wiped on sign-out and on thread delete. Persisted
+from every mutation site via `archiveWorldMessages(_:)`; threads seed from it
+in `openWorldConversation`, and list previews fall back to
+`lastPreview(_:)` when the server's row says the `"Message"` constant. Media
+*bytes* deliberately not archived — URLs only; `ImageCache` keeps the bytes.
+Verified: cold start rendered the thread from disk while "Connecting…" was
+still up, and the archive-derived preview showed on the list before any fetch.
 
 **Remaining for Phase A:**
-- **Local message store** (persistent, per conversation); server fetch becomes
-  "new ciphertext only". List preview derives from the last locally-stored
-  message (replaces the merge heuristic above), so the list isn't blank on
-  cold start.
-- Push generic text end-to-end check once the backend is deployed.
-- **Done when:** two builds exchange messages through the new envelope, old
-  threads render, previews and push behave, history survives relaunch offline.
+- Two-build exchange (needs a second signed-in account/device — single-account
+  round-trip through the live server is verified).
+- Push generic-text check on a real device (the backend change is deployed;
+  APNs doesn't reach the simulator).
+- Later, with the ratchet: server fetch narrows to "new ciphertext only" —
+  today the fetch still reconciles full pages, which is correct while the
+  no-op cipher makes server copies re-readable.
 
 ### Phase B — key infrastructure *(parallel-safe; touches no product surface)*
 - Rewrite `fetch-libsignal.sh` packaging → per-destination layout; local package

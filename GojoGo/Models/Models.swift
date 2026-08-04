@@ -838,7 +838,9 @@ struct ComposeAttachment: Identifiable, Equatable {
 
 // MARK: - My World (private social · iMessage-inspired)
 
-enum WorldMessageKind {
+// String-backed so the local message archive can persist it; raw values match
+// the wire kinds (see AppState.wireKind).
+enum WorldMessageKind: String, Codable {
     case text
     case emoji
     case file

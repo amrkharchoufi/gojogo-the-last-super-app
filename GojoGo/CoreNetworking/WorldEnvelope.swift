@@ -63,13 +63,11 @@ enum WorldEnvelope {
 
     /// Whether outgoing 1:1 content is wrapped.
     ///
-    /// **Off until the envelope-aware backend is deployed.** The live backend
-    /// doesn't know `cipherBody`; Jackson drops unknown fields silently, so an
-    /// envelope sent to it stores as `kind: "encrypted"` with *no body* — the
-    /// content never reaches the server at all. Flip to `true` in the same
-    /// change that confirms the backend rollout; the read path below is
-    /// already live either way, so old and new builds interoperate.
-    static let sendingEnabled = false
+    /// Requires the envelope-aware backend: one that doesn't know `cipherBody`
+    /// drops the field silently (Jackson), storing an envelope with *no body*.
+    /// Flipped on 2026-08-04 after the `fecbce2` deploy went green and an
+    /// envelope message round-tripped through the live API.
+    static let sendingEnabled = true
 
     static var cipher: WorldMessageCipher = WorldPlaintextCipher()
 
