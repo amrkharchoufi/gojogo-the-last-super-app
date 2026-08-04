@@ -47,8 +47,8 @@ enum WorldSignalSelfCheck {
         do {
             try loopback()
             print("✅ E2EE self-check passed — X3DH handshake, ratchet, persistence, "
-                  + "opacity, message framing, replay fatality, reinstall recovery "
-                  + "and per-file media crypto all verified")
+                  + "opacity, message framing, replay fatality, reinstall recovery, "
+                  + "per-file media crypto and the backup codec all verified")
         } catch {
             print("❌ \(error)")
         }
@@ -199,6 +199,39 @@ enum WorldSignalSelfCheck {
         // every message unreadable if it is wrong.
         try framing()
         try mediaCrypto()
+        try backupCodec()
+    }
+
+    /// Phase F: the snapshot codec. Checked here because the failure is
+    /// asymmetric — a backup that cannot be opened is discovered on the worst
+    /// day the user will ever have with this app.
+    private static func backupCodec() throws {
+        let account = UUID()
+        var snapshot = WorldBackupSnapshot(profileId: account.uuidString.lowercased(),
+                                           createdAt: Date())
+        snapshot.archives = ["thread-a": Data("the messages themselves".utf8)]
+        snapshot.mediaKeys = ["https://cdn/x.jpg": "a-media-key"]
+
+        let sealed = try WorldBackup.seal(snapshot, for: account)
+        if sealed.range(of: Data("the messages themselves".utf8)) != nil {
+            throw Failure(step: "backup plaintext found inside the sealed snapshot")
+        }
+        let opened = try WorldBackup.open(sealed, for: account)
+        guard opened.archives == snapshot.archives,
+              opened.mediaKeys == snapshot.mediaKeys else {
+            throw Failure(step: "backup snapshot did not round-trip")
+        }
+        // A snapshot belonging to somebody else must be refused, not merged:
+        // one Apple ID can sign into two accounts, and restoring the wrong
+        // history is worse than restoring none.
+        do {
+            _ = try WorldBackup.open(sealed, for: UUID())
+            throw Failure(step: "a snapshot opened under the wrong account")
+        } catch is Failure {
+            throw Failure(step: "a snapshot opened under the wrong account")
+        } catch {
+            // Expected — either no key for that account, or wrongAccount.
+        }
     }
 
     /// Phase D: the per-file media transform. Cheap to check and expensive to

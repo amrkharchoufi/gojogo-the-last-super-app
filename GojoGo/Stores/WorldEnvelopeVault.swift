@@ -100,6 +100,27 @@ final class WorldEnvelopeVault {
 
     // MARK: Plumbing
 
+    // MARK: Backup (Phase F)
+
+    func exportFiles() -> [String: Data] {
+        flush()
+        var out: [String: Data] = [:]
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names where name.hasSuffix(".json") {
+            guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)) else { continue }
+            out[String(name.dropLast(5))] = data
+        }
+        return out
+    }
+
+    func importFiles(_ files: [String: Data]) {
+        lock.lock(); cache = [:]; dirty = []; lock.unlock()
+        for (id, data) in files {
+            try? data.write(to: directory.appendingPathComponent("\(id).json"),
+                            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
     /// Caller holds `lock`.
     private func loaded(_ conversationId: UUID) -> [UUID: WorldEnvelopePayload] {
         if let cached = cache[conversationId] { return cached }

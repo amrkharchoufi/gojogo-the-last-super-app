@@ -157,6 +157,20 @@ final class WorldVerificationStore {
         return key.serialize().base64EncodedString()
     }
 
+    /// Backup (Phase F). Restoring these matters more than it looks: the
+    /// identity comes back with the backup, so a contact verified before the
+    /// restore is still legitimately verified after it — dropping the record
+    /// would demand the user re-verify everyone for no reason.
+    func exportAll() -> [String: String] {
+        lock.lock(); defer { lock.unlock() }
+        loadIfNeeded()
+        return verifiedKeys
+    }
+
+    func importAll(_ keys: [String: String]) {
+        write { $0.merge(keys) { _, new in new } }
+    }
+
     private func storedKey(for peer: UUID) -> String? {
         lock.lock(); defer { lock.unlock() }
         loadIfNeeded()

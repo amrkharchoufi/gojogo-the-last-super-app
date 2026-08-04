@@ -394,16 +394,86 @@ computed independently, with local/remote roles reversed. Matching is the proof
 each side holds the key the other believes it holds. Marking verified persists
 and reads back (green shield, action flips to "Clear verification").
 
-**Not covered:** QR scanning (`ScannableFingerprint` exists in the vendored
-sources and would remove the read-aloud step) and blocking sends to a
-changed-key contact until re-verified. Both are additive.
+**Both follow-ups landed 2026-08-04:**
+- **QR verification** (`SafetyNumberScanner`): renders this side's
+  `ScannableFingerprint` as a QR and compares a scanned one through libsignal's
+  `compare(againstEncoding:)` — never string equality, because the encoding
+  carries a version and a mismatched version must fail loudly rather than
+  quietly compare bytes that mean different things. Raw bytes come from the
+  QR descriptor's `errorCorrectedPayload`, not `stringValue`, which would have
+  already lost anything that isn't valid text. The digits remain, and must:
+  they are the path that works on a phone call or a bad camera.
+- **Sends are blocked to a contact whose *verified* key changed**, until they
+  look at it again. Scoped to verified contacts deliberately — blocking every
+  key change would wall off the common case (a reinstall) against the plan's
+  explicit "a line, never a modal", but once a user has established what the
+  right key was, sending anyway means encrypting to a key they never agreed to.
 
-### Phase F — backup & restore *(the WhatsApp behaviour, minus the code)*
-- Continuous encrypted export of the local store → CloudKit private DB; backup
-  key + wrapped identity key → iCloud Keychain (`kSecAttrSynchronizable`).
-- Reinstall: phone verify (exists) → find CloudKit backup → key from iCloud
-  Keychain → silent restore, same identity, fresh sessions. Contacts see nothing.
-- Manual recovery code only as the iCloud-off fallback.
+### Phase F — backup & restore *(crypto landed 2026-08-04; transport blocked)*
+
+Forward secrecy has a bill and this phase is it: a ciphertext opens once, so the
+server's copy is a delivery and not an archive, and the only copy of a
+conversation is the one on the device.
+
+**Landed and self-checked:**
+- `ICloudKeychainStore` — a second keychain, deliberately the opposite of the
+  first. Everything in `KeychainStore` is `ThisDeviceOnly` precisely so it
+  cannot leave the phone; these two items exist to survive it, so they are
+  `kSecAttrSynchronizable` + `AfterFirstUnlock` (`ThisDeviceOnly` is the
+  attribute that *blocks* syncing). Scoped by profile id, because one Apple ID
+  can sign into two GojoGo accounts.
+- Random per-account **backup key**, minted once and then stable — rotating it
+  would orphan every existing snapshot.
+- The **identity keypair**, wrapped under that key. This is the one that
+  matters: restore it and a reinstall is invisible, because contacts keep the
+  same safety number. Without it every restore would look exactly like the
+  substitution Phase E just taught the app to warn about, which would teach
+  users the warning means nothing.
+- `WorldBackupSnapshot` — archive files, vault files, media keys and
+  verification records, carried as **files verbatim** rather than re-encoded
+  models, so a future field can't be silently dropped in the round trip. Sealed
+  with AES-GCM under the backup key, so the transport never sees plaintext.
+- **Sessions are not in it.** A restored ratchet is stale on arrival and fails
+  *silently*; sessions re-establish from the prekey directory under the
+  unchanged identity for one round trip.
+- Self-check: plaintext absent from the sealed snapshot, round-trip, and a
+  snapshot refused under a different account.
+
+**Unblocked 2026-08-04** — iCloud container `iCloud.com.gojo.gojogo` and App
+Group `group.com.gojo.gojogo` registered, entitlements added.
+
+- `WorldBackupSync`: one record per account in the **private** database,
+  overwritten each time rather than versioned — the only snapshot anybody wants
+  is the newest, and versions would multiply storage by however many times the
+  app was opened. The payload rides as a `CKAsset`, because CloudKit caps an
+  inline field at 1 MB and a real history passes that quickly.
+- Export is debounced 30s off the same mutation sites that touch the archive, so
+  the backup tracks history rather than a clock without a socket burst becoming
+  a burst of uploads.
+- Restore runs on connect, **before** `WorldKeyPublisher`. Order is load-bearing:
+  publishing a bundle mints an identity if none exists, so a publish that beat
+  the restore would hand every contact a changed safety number — indistinguishable
+  from the substitution Phase E warns about.
+- Every failure is a no-op. No iCloud account, no record, or an unopenable
+  record all mean "carry on as a new install"; the local stores are still live.
+
+**The App Group entitlement had a trap, now fixed.** `WorldSignalStore` prefers
+the App Group container, so turning the entitlement on *relocates* the store —
+and the "one-time file move" the day-one rule promised had never been written.
+Without it, the first launch after the entitlement would have read every
+session, every prekey private half and the published-keys flag as absent:
+sessions failing silently, and the publisher believing it had never published.
+The move now runs in `init`, which is the only safe place (one process, no live
+ratchet to move under). Verified on device — the session with the peer and
+`meta.json` moved across, the legacy path is gone, and the safety number is
+unchanged.
+
+**Not yet verified:** CloudKit itself. The simulators have no iCloud account
+signed in, so `accountStatus()` is not `.available` and export/restore no-op by
+design. This needs a device (or a simulator signed into an Apple ID) to
+exercise.
+
+**Still open:** the manual recovery code for the iCloud-off fallback.
 
 ### Phase G — notification previews (NSE)
 - New extension target + App Group (storage already positioned by day-one rules).

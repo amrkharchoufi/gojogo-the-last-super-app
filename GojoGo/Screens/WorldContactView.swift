@@ -19,6 +19,7 @@ struct WorldContactView: View {
     /// Bumped when the safety-number card writes, so it re-reads the on-disk
     /// verification state — that state is deliberately not `@Published`.
     @State private var verificationTick = 0
+    @State private var scanningSafetyNumber = false
 
     enum ContactTab: String, CaseIterable, Identifiable {
         case info = "Info"
@@ -599,23 +600,35 @@ struct WorldContactView: View {
                         .foregroundStyle(IMColor.secondary)
                 }
 
-                Button {
-                    // Marking verified stores the key being vouched for, not a
-                    // flag — a flag would go on claiming "verified" after the
-                    // key it referred to was replaced.
-                    if status == .verified {
-                        WorldVerificationStore.shared.clearVerification(contactID)
-                    } else {
-                        WorldVerificationStore.shared.markVerified(contactID)
+                HStack(spacing: 18) {
+                    // Scanning first: it is the path that cannot be
+                    // half-completed, and a half-compared safety number is
+                    // worse than none because it produces false confidence.
+                    Button { scanningSafetyNumber = true } label: {
+                        Label("Scan", systemImage: "qrcode.viewfinder")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(IMColor.blue)
                     }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    verificationTick &+= 1
-                } label: {
-                    Text(status == .verified ? "Clear verification" : "Mark as verified")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(status == .verified ? IMColor.secondary : IMColor.blue)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        // Marking verified stores the key being vouched for,
+                        // not a flag — a flag would go on claiming "verified"
+                        // after the key it referred to was replaced.
+                        if status == .verified {
+                            WorldVerificationStore.shared.clearVerification(contactID)
+                        } else {
+                            WorldVerificationStore.shared.markVerified(contactID)
+                        }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        verificationTick &+= 1
+                    } label: {
+                        Text(status == .verified ? "Clear verification" : "Mark as verified")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(status == .verified ? IMColor.secondary : IMColor.blue)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
@@ -624,6 +637,11 @@ struct WorldContactView: View {
             // Verification state lives on disk, not in @Published state, so the
             // card needs a nudge to re-read it after the button writes.
             .id(verificationTick)
+            .sheet(isPresented: $scanningSafetyNumber) {
+                SafetyNumberScanner(peer: contactID, displayName: displayName) {
+                    verificationTick &+= 1
+                }
+            }
         }
     }
 

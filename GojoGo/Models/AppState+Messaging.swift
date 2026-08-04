@@ -64,7 +64,21 @@ extension AppState {
         // screen never waits on key material, and a failure retries on the
         // next connect.
         if worldSetupComplete {
-            Task.detached(priority: .utility) { await WorldKeyPublisher.syncIfNeeded() }
+            // Phase F must run *before* the publisher: restoring the identity
+            // has to beat anything that would mint a fresh one, and publishing
+            // a bundle is exactly such a thing. A publish under a throwaway
+            // identity would hand every contact a changed safety number —
+            // indistinguishable, to them, from the substitution Phase E warns
+            // about.
+            if let profileId = SocialStore.shared.myProfileId {
+                Task.detached(priority: .utility) {
+                    await WorldBackupSync.restoreIfNeeded(for: profileId)
+                    await WorldKeyPublisher.syncIfNeeded()
+                    try? WorldBackup.backUpIdentity(for: profileId)
+                }
+            } else {
+                Task.detached(priority: .utility) { await WorldKeyPublisher.syncIfNeeded() }
+            }
         }
 
         worldConversationsLoading = false
@@ -586,6 +600,13 @@ extension AppState {
     func archiveWorldMessages(_ id: UUID) {
         guard let convo = worldConversations.first(where: { $0.id == id }) else { return }
         WorldMessageArchive.shared.save(id, messages: convo.messages)
+        // Phase F: the backup follows the history rather than a clock, so it is
+        // never much staler than the device. Heavily coalesced — this is called
+        // from every mutation site, and a socket burst must not become a burst
+        // of uploads.
+        if let profileId = SocialStore.shared.myProfileId {
+            WorldBackupSync.scheduleExport(for: profileId)
+        }
     }
 
     /// Whether this thread has history the app hasn't pulled yet.
@@ -888,6 +909,18 @@ extension AppState {
             // no session and no way to tell whether one exists, so this is the
             // conservative half of the rule, not the permissive one.
             return try WorldEnvelope.sealPlaintext(payload)
+        }
+        // Phase E: refuse to send to a contact whose *verified* key changed,
+        // until the user looks at it again.
+        //
+        // Scoped to verified contacts on purpose. Blocking every key change
+        // would interrupt the common case — a reinstall — with an obstacle the
+        // user can do nothing useful about, and the plan is explicit that a new
+        // device gets a neutral line and never a wall. But when the user has
+        // already established what the right key was, sending anyway would mean
+        // encrypting to a key they never agreed to.
+        if WorldVerificationStore.shared.status(of: peer) == .changedAfterVerification {
+            throw WorldSignalSession.SessionError.verificationStale
         }
         do {
             return try await WorldEnvelope.seal(payload, to: peer)

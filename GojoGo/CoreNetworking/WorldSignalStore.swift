@@ -51,9 +51,28 @@ final class WorldSignalStore {
         if let root {
             self.root = root
         } else {
-            let base = fm.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup)
-                ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            self.root = base.appendingPathComponent("signal", isDirectory: true)
+            let legacy = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("signal", isDirectory: true)
+            if let group = fm.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) {
+                let moved = group.appendingPathComponent("signal", isDirectory: true)
+                // The one-time move the day-one rule promised. It fires exactly
+                // once — the launch after the App Group entitlement lands — and
+                // it has to, because the store silently *relocates* when the
+                // container appears: without this, every existing session,
+                // every prekey private half and the published-keys flag would
+                // read as absent. Sessions would fail with no error, and the
+                // publisher would think it had never published.
+                //
+                // Safe here and nowhere else: this runs during `init`, before
+                // the extension exists, so there is exactly one process and no
+                // live ratchet to move out from under.
+                if !fm.fileExists(atPath: moved.path), fm.fileExists(atPath: legacy.path) {
+                    try? fm.moveItem(at: legacy, to: moved)
+                }
+                self.root = moved
+            } else {
+                self.root = legacy
+            }
         }
         let root = self.root
         for sub in ["sessions", "prekeys", "signed-prekeys", "kyber-prekeys", "identities"] {
@@ -95,6 +114,22 @@ final class WorldSignalStore {
         KeychainStore.set(identity.serialize().base64EncodedString(), for: .signalIdentity)
         KeychainStore.set(String(registrationId), for: .signalRegistrationId)
         return (identity, registrationId)
+    }
+
+    /// Adopts an identity restored from the encrypted backup (Phase F).
+    ///
+    /// Writing it *before* anything asks for one is what makes a reinstall
+    /// invisible: `ensureIdentity` generates lazily on first access, so a
+    /// single message sent before the restore would mint a throwaway identity
+    /// and hand every contact a changed safety number.
+    func adoptRestoredIdentity(_ identity: IdentityKeyPair, registrationId: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        guard usesKeychain else {
+            ephemeralIdentity = (identity, registrationId)
+            return
+        }
+        KeychainStore.set(identity.serialize().base64EncodedString(), for: .signalIdentity)
+        KeychainStore.set(String(registrationId), for: .signalRegistrationId)
     }
 
     // MARK: File plumbing

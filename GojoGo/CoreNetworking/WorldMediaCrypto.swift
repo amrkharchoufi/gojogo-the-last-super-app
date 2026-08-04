@@ -157,6 +157,14 @@ final class WorldMediaKeyStore {
         io.async { try? FileManager.default.removeItem(at: url) }
     }
 
+    /// Backup (Phase F): media keys are as irreplaceable as the messages —
+    /// without them every restored attachment is an unopenable CDN object.
+    func exportAll() -> [String: String] {
+        lock.lock(); defer { lock.unlock() }
+        loadIfNeeded()
+        return keysByURL
+    }
+
     /// Caller holds `lock`.
     private func loadIfNeeded() {
         guard !loaded else { return }

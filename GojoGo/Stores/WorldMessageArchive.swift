@@ -151,6 +151,31 @@ final class WorldMessageArchive {
         }
     }
 
+    // MARK: Backup (Phase F)
+    //
+    // Files verbatim, not re-encoded models. The archive's on-disk shape is
+    // already the thing worth keeping, and decoding to `WorldMessage` and back
+    // would quietly drop any field a future build added.
+
+    func exportFiles() -> [String: Data] {
+        flush()
+        var out: [String: Data] = [:]
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names where name.hasSuffix(".json") {
+            guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)) else { continue }
+            out[String(name.dropLast(5))] = data
+        }
+        return out
+    }
+
+    func importFiles(_ files: [String: Data]) {
+        lock.lock(); pending = [:]; lock.unlock()
+        for (id, data) in files {
+            try? data.write(to: directory.appendingPathComponent("\(id).json"),
+                            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
     private func flush() {
         lock.lock()
         let batch = pending

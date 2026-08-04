@@ -42,12 +42,18 @@ enum WorldSignalSession {
         /// Transient by construction: never cache a failure caused by it.
         case identityUnavailable
         case malformedCiphertext
+        /// The peer's identity key changed after the user verified it, and
+        /// they haven't looked at the new one. Phase E: only a *verified*
+        /// contact blocks a send — see `sealedBody`.
+        case verificationStale
 
         var errorDescription: String? {
             switch self {
             case .peerHasNoKeys: return "That contact hasn't set up encryption yet."
             case .identityUnavailable: return "Encryption isn't ready yet."
             case .malformedCiphertext: return "The message body was damaged."
+            case .verificationStale:
+                return "Their safety number changed. Verify it again before sending."
             }
         }
     }

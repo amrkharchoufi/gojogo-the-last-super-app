@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "GG00000000000000000006"
-               BuildableName = "GojoGo.app"
+               BuildableName = "GojoGo"
                BlueprintName = "GojoGo"
                ReferencedContainer = "container:GojoGo.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "GG00000000000000000006"
-            BuildableName = "GojoGo.app"
+            BuildableName = "GojoGo"
             BlueprintName = "GojoGo"
             ReferencedContainer = "container:GojoGo.xcodeproj">
          </BuildableReference>
@@ -62,7 +62,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "GG00000000000000000006"
-            BuildableName = "GojoGo.app"
+            BuildableName = "GojoGo"
             BlueprintName = "GojoGo"
             ReferencedContainer = "container:GojoGo.xcodeproj">
          </BuildableReference>
