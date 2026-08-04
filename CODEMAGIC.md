@@ -70,17 +70,29 @@ The pipeline lives in [codemagic.yaml](codemagic.yaml). Two workflows:
    and the step prints a `WARNING:` line saying so. Grep the log for it if a build number looks off.
 
 6. **Capabilities on the App ID.** `GojoGo/GojoGo.entitlements` asks for **Push Notifications**,
-   **Sign in with Apple**, **iCloud (CloudKit)**, **App Groups** and **Keychain Sharing**. All have to be
-   enabled on the App ID in the developer portal, otherwise the App Store profile Codemagic fetches
-   won't grant them and the export step fails after a full build.
+   **Sign in with Apple**, **iCloud (CloudKit)** and **App Groups**. All have to be enabled on the App ID
+   in the developer portal, otherwise the App Store profile Codemagic fetches won't grant them and the
+   export step fails after a full build. Keychain sharing is *not* in that list and needs no portal
+   action: `keychain-access-groups` is validated by team prefix, and a profile already carries
+   `<TeamID>.*`.
 
 7. **The notification extension's App ID** (E2EE Phase G). The app now embeds
    `com.gojo.gojogo.NotificationService`, which is a *second* App ID with its own profile. The build
    fetches signing files for it automatically, but `--create` only mints the identifier — it does not
-   turn capabilities on. Enable **App Groups** (associated with `group.com.gojo.gojogo`) and **Keychain
-   Sharing** on it once, by hand, or the extension will build, sign, and then silently fail to read the
-   session store it exists to decrypt with. Nothing about that failure is visible in the build log: the
-   symptom is a banner that stays "New message" forever.
+   turn capabilities on. **Enable App Groups on it and associate `group.com.gojo.gojogo`**, by hand,
+   before the next signed build.
+
+   Two different failures hide behind that one step, and they look nothing alike:
+
+   - *Capability off entirely* → the profile has no `com.apple.security.application-groups` key, the
+     extension's entitlements ask for one, and the **export step fails loudly** — "provisioning profile
+     doesn't include the com.apple.security.application-groups entitlement", after a full build.
+   - *Capability on but the group not associated* (or associated with a different group) → the profile
+     carries the key with the wrong contents, signing can pass, and the failure moves to **runtime and
+     goes silent**: the extension cannot open the shared container, so it finds no session store and no
+     profile id, and every banner stays "New message" forever. Nothing in the build log mentions it.
+
+   The second is the one to actually watch for, because a green build reads as proof and isn't.
 
 ## Cutting a version
 

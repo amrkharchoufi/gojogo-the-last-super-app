@@ -552,10 +552,14 @@ over the socket and the push *simultaneously* — which is the case the lock
 exists for and the only one that can prove it. The Phase A push generic-text
 check is subsumed by this and still owed.
 
-**Note for the first device build:** the extension's App ID needs App Groups
-(associated with `group.com.gojo.gojogo`) and Keychain Sharing enabled in the
-developer portal. `--create` mints the identifier but does not enable
-capabilities, and the failure is silent — a banner that stays "New message".
+**Note for the first device build:** the extension's App ID needs **App Groups**
+enabled *and `group.com.gojo.gojogo` associated with it* in the developer
+portal; `--create` mints the identifier but not its capabilities. Keychain
+sharing needs nothing there — `keychain-access-groups` is validated by team
+prefix and profiles already carry `<TeamID>.*`. The capability being off fails
+the export loudly; the capability being on with the group *unassociated* signs
+cleanly and fails at runtime in silence, which is the one to watch for. See
+CODEMAGIC.md §7.
 
 ## Known limitations (accepted)
 
