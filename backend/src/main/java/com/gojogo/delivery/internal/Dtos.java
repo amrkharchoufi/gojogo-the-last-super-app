@@ -31,7 +31,15 @@ record MerchantDto(UUID id, String name, String cuisine, double rating, int revi
                    int etaMinutes, int deliveryFeeCents, String imageUrl, String promo,
                    List<String> tags, List<String> categories,
                    double latitude, double longitude, List<MenuSectionDto> menu,
-                   StorefrontDocument storefront) {
+                   StorefrontDocument storefront,
+                   /* Collection (Phase 4 M4). {@code pickupEnabled} is what the
+                    * app draws the "Collect in store" choice from at all;
+                    * {@code pickupEtaMinutes} is what that choice promises, and
+                    * is the merchant's own pickup time or their delivery ETA
+                    * when they have not set one. A client that predates these
+                    * fields simply never offers collection, which is the right
+                    * behaviour for a build that could not price it. */
+                   boolean pickupEnabled, int pickupEtaMinutes, String pickupAddress) {
 }
 
 // MARK: The owner's view of their own restaurant (MerchantManagementService)
@@ -55,9 +63,18 @@ record MyMerchantDto(UUID id, String name, String cuisine, String imageUrl, Stri
                      int etaMinutes, int deliveryFeeCents, double rating, int reviewCount,
                      double latitude, double longitude,
                      List<String> categories, List<String> tags,
-                     boolean open, boolean suspended, List<MyMenuSectionDto> menu) {
+                     boolean open, boolean suspended,
+                     /* Collection (Phase 4 M4). {@code pickupPrepMinutes} is
+                      * null for "the same as delivery" — the owner's editor
+                      * shows a placeholder rather than a number nobody chose. */
+                     boolean pickupEnabled, Integer pickupPrepMinutes, String pickupAddress,
+                     List<MyMenuSectionDto> menu) {
 }
 
+/** The pickup fields are optional on the wire: a client that predates Phase 4
+ *  M4 sends none of them, and a save from it must not silently switch
+ *  collection off for a restaurant that had it on. Absent means unchanged; the
+ *  service reads them that way. */
 record UpdateMerchantRequest(@NotBlank @Size(max = 120) String name,
                              @NotBlank @Size(max = 80) String cuisine,
                              @Size(max = 600) String imageUrl,
@@ -66,7 +83,10 @@ record UpdateMerchantRequest(@NotBlank @Size(max = 120) String name,
                              @Min(0) @Max(100_000) int deliveryFeeCents,
                              Double latitude, Double longitude,
                              @Size(max = 8) List<@Size(max = 40) String> categories,
-                             @Size(max = 8) List<@Size(max = 40) String> tags) {
+                             @Size(max = 8) List<@Size(max = 40) String> tags,
+                             Boolean pickupEnabled,
+                             @Min(1) @Max(1440) Integer pickupPrepMinutes,
+                             @Size(max = 200) String pickupAddress) {
 }
 
 record MenuSectionRequest(@NotBlank @Size(max = 80) String name) {
@@ -124,7 +144,18 @@ record SubOrderDto(UUID id, UUID merchantId, String merchantName, String merchan
                    String status, boolean cancellable, List<OrderLineDto> lines,
                    int subtotalCents, int deliveryFeeCents, int discountCents,
                    String promotionCode, int prepMinutes, OffsetDateTime readyAt,
-                   OffsetDateTime collectedAt, String cancelReason) {
+                   OffsetDateTime collectedAt, String cancelReason,
+                   /* Collection (Phase 4 M4), and empty on every delivery
+                    * order. {@code collectionCode} is the same six digits M2
+                    * minted and M3 put on the slice — returned to the customer
+                    * here, because for a pickup it is the *merchant* who types
+                    * it. One rule underneath both milestones: the code is shown
+                    * to the party that does not type it. {@code readyToCollect}
+                    * is the kitchen's own word that the food is on the counter,
+                    * which an estimate cannot say. */
+                   String collectionCode, boolean readyToCollect,
+                   String pickupAddress, Double pickupLatitude, Double pickupLongitude,
+                   OffsetDateTime readyMarkedAt) {
 }
 
 /** A saved delivery address. */
@@ -171,6 +202,14 @@ record SaveAddressRequest(@Size(max = 40) String label,
  * thread with whoever is carrying the food.
  */
 record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinutes,
+                /* DELIVERY | PICKUP (Phase 4 M4). The one field a client has to
+                 * read before rendering anything else about fulfilment: a
+                 * PICKUP order has no courier and never visits two of the six
+                 * statuses, so a screen that draws "looking for a courier" from
+                 * courierSearch = NONE would be describing a search nobody
+                 * opened. Absent on a client that predates it, which only ever
+                 * receives DELIVERY orders — it cannot place any other kind. */
+                String fulfilmentKind,
                 double courierProgress, CourierDto courier,
                 String courierSearch, String cancelReason, OffsetDateTime readyAt,
                 List<OrderLineDto> lines,
@@ -225,6 +264,14 @@ record MerchantOrderDto(UUID id, String status, List<OrderLineDto> lines,
                         long earningsMinor, String note, String addressLabel,
                         String courierName, String courierSearch, int prepMinutes,
                         String cancelReason, String pickupCode,
+                        /* DELIVERY | PICKUP (Phase 4 M4). What decides which
+                         * screen the kitchen gets: a courier coming for it, or
+                         * a customer at the counter with a code to be typed in.
+                         * On a PICKUP slice {@code pickupCode} above is
+                         * deliberately <b>blank</b> — the kitchen types that
+                         * code, so a kitchen that could read it could hand the
+                         * food to nobody and settle the order. */
+                        String fulfilmentKind, boolean readyMarked,
                         OffsetDateTime placedAt, OffsetDateTime acceptedAt,
                         OffsetDateTime readyAt, OffsetDateTime statusChangedAt) {
 }
@@ -236,6 +283,31 @@ record AcceptOrderRequest(@Min(1) @Max(1440) Integer prepMinutes) {
 }
 
 record RejectOrderRequest(@Size(max = 240) String reason) {
+}
+
+/** The code the customer is holding up, as the kitchen typed it. Optional, for
+ *  the same reason the courier's is: "I typed nothing" is an outcome this
+ *  endpoint has an answer for rather than a validation failure. */
+record CollectOrderRequest(@Size(max = 16) String code) {
+}
+
+/**
+ * The answer to a collection attempt — a 200 whether or not the code matched,
+ * exactly as the courier's two handoff verbs are, and for the same reason: a
+ * mistyped digit at a counter is not a bad request, and an error banner in
+ * front of somebody holding a paid-for bag of food is the wrong thing to draw.
+ *
+ * @param attemptsLeft always <b>-1</b>, meaning "not counted". The asymmetry M2
+ *                     drew is about who is standing there: at a counter the
+ *                     other party is present, so the code is a check rather than
+ *                     a gate, and locking a kitchen out of handing over food
+ *                     they have already made is the worse failure by far
+ * @param order        the slice as it now stands, present on a refusal too — a
+ *                     wrong code must not blank the screen the kitchen is
+ *                     working from
+ */
+record CollectionResultDto(boolean accepted, String message, int attemptsLeft,
+                           MerchantOrderDto order) {
 }
 
 // MARK: The courier's screen
@@ -359,6 +431,12 @@ record ProofUploadDto(String uploadUrl, String objectKey, String contentType,
 record QuoteDto(int subtotalCents, int deliveryFeeCents, int serviceFeeCents,
                 int discountCents, int tipCents, int totalCents, String currency,
                 String promotionCode, String promotionLabel,
+                /* Echoed back (Phase 4 M4), so a client can tell that the
+                 * server agreed to price a collection rather than assuming it:
+                 * a build talking to a backend that predates this field would
+                 * otherwise draw a pickup checkout over a quote with a delivery
+                 * fee in it. */
+                String fulfilmentKind,
                 /* The per-merchant breakdown (Phase 4 M3), so a checkout sheet
                  * can group by kitchen. Sums to the flat fields above. */
                 List<MerchantQuoteDto> merchants,
@@ -388,7 +466,11 @@ record QuoteRequest(UUID merchantId,
                     @Size(max = 40) List<@Valid OrderLineRequest> lines,
                     @Size(max = 10) List<@Valid BasketRequest> baskets,
                     @Size(max = 32) String promotionCode,
-                    @Min(0) @Max(100_000) int tipCents) {
+                    @Min(0) @Max(100_000) int tipCents,
+                    /* DELIVERY | PICKUP, optional (Phase 4 M4). Null, blank or
+                     * unrecognised is DELIVERY — the kind that works
+                     * everywhere. */
+                    @Size(max = 16) String fulfilmentKind) {
 }
 
 record TipRequest(@Min(1) @Max(100_000) int tipCents) {
@@ -466,7 +548,15 @@ record PlaceOrderRequest(UUID merchantId,
                           * word this build has never heard of all mean the
                           * configured default — a checkout must not fail on a
                           * word, and it can be changed later anyway. */
-                         @Size(max = 16) String handoffMode) {
+                         @Size(max = 16) String handoffMode,
+                         /* DELIVERY | PICKUP, optional (Phase 4 M4). Unlike the
+                          * handoff mode this one is *not* changeable later: it
+                          * is what the order was priced for. Unrecognised means
+                          * DELIVERY, and a PICKUP at a restaurant that does not
+                          * offer collection is refused out loud — that is a
+                          * refusal somebody can act on, unlike being silently
+                          * given the other kind. */
+                         @Size(max = 16) String fulfilmentKind) {
 }
 
 record RateOrderRequest(@Min(1) @Max(5) int rating) {

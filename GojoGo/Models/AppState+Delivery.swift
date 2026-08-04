@@ -30,10 +30,48 @@ extension AppState {
     }
 
     /// True when checkout can't proceed because there's nowhere to deliver to.
+    /// Never for a collection: the address of a pickup is the counter, and
+    /// asking for a home one anyway would stop somebody walking to a restaurant
+    /// until they had saved somewhere to live.
     func deliveryNeedsAddress(for merchantID: UUID?) -> Bool {
-        guard backendConnected, let merchantID,
+        guard !deliveryWantsPickup, backendConnected, let merchantID,
               DeliveryStore.shared.isRemote(merchantID) else { return false }
         return selectedDeliveryAddress == nil
+    }
+
+    // MARK: Collect in store (Phase 4 M4)
+
+    /// Whether every kitchen in the cart offers collection. The switch is only
+    /// shown when this is true — an order is one kind, so a cart with one
+    /// delivery-only restaurant in it cannot be collected at all.
+    var deliveryCartCanBeCollected: Bool {
+        guard !deliveryCart.isEmpty else { return false }
+        return deliveryCartMerchantIDs.allSatisfy { id in
+            deliveryRestaurants.first(where: { $0.id == id })?.offersPickup == true
+        }
+    }
+
+    /// Flips the whole checkout between delivery and collection, and re-prices
+    /// it — the fee, the tip and the discount all move, and a total on screen
+    /// that belonged to the other kind is the one thing this must never leave
+    /// behind.
+    func setDeliveryWantsPickup(_ pickup: Bool) {
+        guard pickup != deliveryWantsPickup else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.ggSnappy) {
+            deliveryWantsPickup = pickup
+            // A tip is the courier's, and a collection has none. Cleared rather
+            // than remembered, so the number on screen is the number charged.
+            if pickup { deliveryTipCents = 0 }
+        }
+        Task { await refreshDeliveryQuote() }
+    }
+
+    /// Where to walk to for the live order, per kitchen — the copy taken at
+    /// order time, so it survives the restaurant editing their own row.
+    func deliveryCollectionAddress(_ kitchen: SubOrderDTO) -> String {
+        let copied = kitchen.pickupAddress ?? ""
+        return copied.isEmpty ? kitchen.merchantName : copied
     }
 
     func refreshDeliveryAddresses() async {
@@ -295,10 +333,12 @@ extension AppState {
         let baskets = deliveryCartBaskets
         deliveryQuoting = true
         defer { deliveryQuoting = false }
+        let pickup = deliveryWantsPickup
         do {
             deliveryQuote = try await DeliveryStore.shared.quote(
                 baskets: baskets,
-                promotionCode: deliveryPromotionCode, tipCents: deliveryTipCents)
+                promotionCode: deliveryPromotionCode, tipCents: deliveryTipCents,
+                pickup: pickup)
         } catch {
             // A refused code is the common case and worth saying out loud; the
             // quote falls back to no code rather than blocking checkout. Since
@@ -309,7 +349,8 @@ extension AppState {
                 showDeliveryNotice(Self.message(from: error, fallback: "That code isn't valid here."))
                 deliveryPromotionCode = ""
                 deliveryQuote = try? await DeliveryStore.shared.quote(
-                    baskets: baskets, promotionCode: nil, tipCents: deliveryTipCents)
+                    baskets: baskets, promotionCode: nil, tipCents: deliveryTipCents,
+                    pickup: pickup)
             }
         }
     }
@@ -344,8 +385,17 @@ extension AppState {
         // The slowest kitchen sets the wait, which is what the server will say
         // too — a countdown from the fastest one is a countdown that is wrong
         // the moment the second restaurant accepts.
+        let pickup = deliveryWantsPickup
+        deliveryOrderIsPickup = pickup
         deliveryEtaMinutes = baskets.keys
-            .compactMap { id in deliveryRestaurants.first(where: { $0.id == id })?.etaMinutes }
+            .compactMap { id -> Int? in
+                guard let restaurant = deliveryRestaurants.first(where: { $0.id == id }) else {
+                    return nil
+                }
+                // A collection promises the kitchen's own time, which has no
+                // courier's journey in it.
+                return pickup ? restaurant.pickupEtaMinutes : restaurant.etaMinutes
+            }
             .max() ?? 25
         deliveryCourier = nil
         deliveryCourierProgress = 0
@@ -364,11 +414,13 @@ extension AppState {
                     addressId: selectedDeliveryAddress?.id,
                     note: "",
                     promotionCode: code,
-                    tipCents: tip)
+                    tipCents: tip,
+                    pickup: pickup)
                 applyLiveOrder(order)
                 startDeliveryPolling()
                 deliveryPromotionCode = ""
                 deliveryTipCents = 0
+                deliveryWantsPickup = false
                 deliveryQuote = nil
                 // The total just moved out of the spendable balance into escrow.
                 await refreshWallet()
@@ -380,6 +432,7 @@ extension AppState {
                 // and say so, rather than leaving the user to guess.
                 deliveryCart = lines
                 deliveryCartRestaurantID = lines.first?.merchantID ?? merchantID
+                deliveryWantsPickup = pickup
                 deliveryOrderRestaurantID = nil
                 withAnimation(.easeInOut(duration: 0.3)) { deliveryStatus = nil }
                 showDeliveryCheckout = true
@@ -476,6 +529,9 @@ extension AppState {
         deliveryOrderTotalLabel = DeliveryStore.money(cents: order.totalCents)
         deliveryOrderSummary = DeliveryStore.summary(order.lines)
         deliveryEtaMinutes = order.etaMinutes
+        // The server's answer, not this app's intention: an order placed as a
+        // delivery stays one however the checkout switch is set now.
+        deliveryOrderIsPickup = order.isPickup
         deliveryCourier = order.courier.map(DeliveryStore.courier)
         // "The kitchen is cooking and nobody has taken the delivery" is not a
         // stage of an order — it is a problem with one, which is why it rides
@@ -566,6 +622,7 @@ extension AppState {
         deliveryProofPhotoURL = nil
         deliveryConversationID = nil
         deliveryKitchens = []
+        deliveryOrderIsPickup = false
         deliveryRating = 0
         withAnimation(.easeInOut(duration: 0.3)) { deliveryStatus = nil }
     }

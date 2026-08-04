@@ -187,6 +187,9 @@ extension AppState {
 
     /// The food is done. Corrects the time the courier is expecting; it does not
     /// move the order, because "cooked" is not a stage the customer can act on.
+    ///
+    /// On a collection it is the tap that *does* something for the customer: it
+    /// is what sends "your order is ready" to somebody who has to walk here.
     func markMerchantOrderReady(_ orderId: UUID) async {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         do {
@@ -195,6 +198,39 @@ extension AppState {
             showMerchantNotice(Self.message(from: error, fallback: "Couldn't mark that ready."))
         }
         await refreshMerchantOrders()
+    }
+
+    // MARK: Handing a collection over (Phase 4 M4)
+
+    /// The customer is at the counter and this is the code on their screen.
+    ///
+    /// The mirror of the courier's pickup, with the typing on this side because
+    /// on a collection this kitchen is the one being paid for finishing the
+    /// step. A wrong code comes back as a sentence rather than an error — the
+    /// server answers 200 either way — and nothing is counted, because locking
+    /// a kitchen out of handing over food they have already made would be the
+    /// worse failure by far.
+    ///
+    /// - Returns: the refusal to show under the field, or nil when it matched.
+    func collectMerchantOrder(_ subOrderId: UUID, code: String) async -> String? {
+        let digits = code.filter(\.isNumber)
+        merchantCollectBusy = true
+        defer { merchantCollectBusy = false }
+        do {
+            let result = try await DeliveryStore.shared.collectOrder(subOrderId, code: digits)
+            if result.accepted {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                await refreshMerchantOrders()
+                return nil
+            }
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return result.message
+        } catch {
+            // A 409 — the slice moved under them, or this is a delivery after
+            // all. Re-read rather than leaving a field that will keep failing.
+            await refreshMerchantOrders()
+            return Self.message(from: error, fallback: "Couldn't complete that collection.")
+        }
     }
 
     // MARK: The menu

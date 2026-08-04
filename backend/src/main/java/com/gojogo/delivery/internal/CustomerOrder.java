@@ -38,6 +38,15 @@ class CustomerOrder {
     @Column(name = "status", nullable = false)
     private OrderStatus status = OrderStatus.CONFIRMED;
 
+    /**
+     * Delivered to a door, or collected at a counter (Phase 4 M4). Decided at
+     * checkout and never changed afterwards: it is what the money was priced
+     * for, and a customer who wants the other one cancels while they still can.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "fulfilment_kind", nullable = false)
+    private FulfilmentKind fulfilmentKind = FulfilmentKind.DELIVERY;
+
     @Column(name = "subtotal_cents", nullable = false)
     private int subtotalCents;
 
@@ -243,6 +252,11 @@ class CustomerOrder {
         this.etaAt = etaAt;
     }
 
+    /** Set once, at placement. */
+    void fulfilBy(FulfilmentKind kind) {
+        this.fulfilmentKind = kind;
+    }
+
     /** Copies the chosen address onto the order (see the field comment). */
     void deliverTo(UUID addressId, String label, String line, String note,
                    Double latitude, Double longitude) {
@@ -399,6 +413,14 @@ class CustomerOrder {
 
     OrderStatus getStatus() {
         return status;
+    }
+
+    FulfilmentKind getFulfilmentKind() {
+        return fulfilmentKind;
+    }
+
+    boolean isPickup() {
+        return fulfilmentKind.isPickup();
     }
 
     int getSubtotalCents() {

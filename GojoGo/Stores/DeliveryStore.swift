@@ -58,27 +58,33 @@ final class DeliveryStore {
     /// Prices a cart without placing it — one basket per kitchen since Phase 4
     /// M3, which is the only shape this app sends now.
     func quote(baskets: [UUID: [DeliveryCartLine]],
-               promotionCode: String?, tipCents: Int) async throws -> QuoteDTO {
+               promotionCode: String?, tipCents: Int, pickup: Bool = false) async throws -> QuoteDTO {
         let body = QuoteBody(
             merchantId: nil,
             lines: nil,
             baskets: Self.baskets(baskets),
             promotionCode: promotionCode?.isEmpty == false ? promotionCode : nil,
-            tipCents: tipCents)
+            tipCents: tipCents,
+            fulfilmentKind: pickup ? "PICKUP" : nil)
         return try await APIClient.shared.post("/v1/delivery/orders/quote", body: body)
     }
 
     func placeOrder(baskets: [UUID: [DeliveryCartLine]],
                     addressId: UUID?, note: String,
-                    promotionCode: String? = nil, tipCents: Int = 0) async throws -> OrderDTO {
+                    promotionCode: String? = nil, tipCents: Int = 0,
+                    pickup: Bool = false) async throws -> OrderDTO {
         let body = PlaceOrderBody(
             merchantId: nil,
             lines: nil,
             baskets: Self.baskets(baskets),
-            addressId: addressId,
+            // A collection has nowhere to go, and sending one anyway would have
+            // the server copy an address onto a receipt for an order nobody
+            // delivers.
+            addressId: pickup ? nil : addressId,
             note: note,
             promotionCode: promotionCode?.isEmpty == false ? promotionCode : nil,
-            tipCents: tipCents)
+            tipCents: pickup ? 0 : tipCents,
+            fulfilmentKind: pickup ? "PICKUP" : nil)
         return try await APIClient.shared.post("/v1/delivery/orders", body: body)
     }
 
@@ -156,9 +162,23 @@ final class DeliveryStore {
     }
 
     /// The food is done — sooner or later than they guessed. Corrects the time
-    /// the courier is expecting; does not move the order.
+    /// the courier is expecting; does not move the order. On a collection it is
+    /// also what tells the customer to come and get it.
     func markOrderReady(_ orderId: UUID) async throws -> MerchantOrderDTO {
         try await APIClient.shared.post("/v1/delivery/merchants/mine/orders/\(orderId)/ready")
+    }
+
+    /// The customer is at the counter and this is the code off their screen
+    /// (Phase 4 M4) — the mirror of the courier's `picked-up`, with the kitchen
+    /// doing the typing because on a collection the kitchen is the one being
+    /// paid for finishing the step.
+    ///
+    /// Answers 200 whether or not the code matched; the refusal is a sentence
+    /// to put under the field, not an error to apologise for.
+    func collectOrder(_ subOrderId: UUID, code: String) async throws -> CollectionResultDTO {
+        try await APIClient.shared
+            .post("/v1/delivery/merchants/mine/orders/\(subOrderId)/collected",
+                  body: CollectCodeBody(code: code))
     }
 
     // MARK: The courier's screen (Phase 4 M1)
@@ -297,7 +317,10 @@ final class DeliveryStore {
             },
             storefront: StorefrontBlock.page(dto.storefront),
             latitude: dto.latitude,
-            longitude: dto.longitude)
+            longitude: dto.longitude,
+            offersPickup: dto.offersPickup,
+            pickupEtaMinutes: dto.pickupEtaMinutes ?? dto.etaMinutes,
+            pickupAddress: dto.pickupAddress ?? "")
     }
 
     /// The server's fulfilment state → the enum the tracking screen renders.

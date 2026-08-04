@@ -77,6 +77,32 @@ class Merchant {
     @Column(name = "suspended", nullable = false)
     private boolean suspended;
 
+    /**
+     * Whether customers may collect in store (Phase 4 M4, SPECS §5).
+     *
+     * <p>Off until an owner turns it on: collection needs a counter and
+     * somebody standing at it, and defaulting it on would advertise a service
+     * on behalf of every restaurant already in the catalog. Deliberately
+     * <em>not</em> a second "open" switch — {@link #active} closes a restaurant
+     * for both, because whether the kitchen is cooking is one fact, and two
+     * switches would eventually disagree.
+     */
+    @Column(name = "pickup_enabled", nullable = false)
+    private boolean pickupEnabled;
+
+    /** How long a collection takes to prepare, when it differs from delivery.
+     *  Null means "the same": collection is usually quicker with no courier to
+     *  wait for, but a kitchen that has not said so is not one to invent a
+     *  faster number for. */
+    @Column(name = "pickup_prep_minutes")
+    private Integer pickupPrepMinutes;
+
+    /** Where to walk to, when that is not simply the restaurant's address —
+     *  "side door on Rue Ali", a mall unit. Blank falls back to the name and
+     *  the map pin every client already draws. */
+    @Column(name = "pickup_address", nullable = false)
+    private String pickupAddress = "";
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 
@@ -133,7 +159,11 @@ class Merchant {
     void apply(String name, String cuisine, String imageUrl, String promo,
                int etaMinutes, int deliveryFeeCents,
                Double latitude, Double longitude,
-               Set<String> categories, Set<String> tags) {
+               Set<String> categories, Set<String> tags,
+               boolean pickupEnabled, Integer pickupPrepMinutes, String pickupAddress) {
+        this.pickupEnabled = pickupEnabled;
+        this.pickupPrepMinutes = pickupPrepMinutes;
+        this.pickupAddress = pickupAddress == null ? "" : pickupAddress.trim();
         this.name = name;
         this.cuisine = cuisine;
         this.imageUrl = imageUrl;
@@ -172,6 +202,23 @@ class Merchant {
 
     boolean isSuspended() {
         return suspended;
+    }
+
+    boolean isPickupEnabled() {
+        return pickupEnabled;
+    }
+
+    Integer getPickupPrepMinutes() {
+        return pickupPrepMinutes;
+    }
+
+    String getPickupAddress() {
+        return pickupAddress;
+    }
+
+    /** Where a customer collecting from here actually walks to. */
+    String collectionAddress() {
+        return pickupAddress.isBlank() ? name : pickupAddress;
     }
 
     String getName() {

@@ -35,10 +35,12 @@ class PromotionService {
      * The discount for this basket, and what caused it.
      *
      * @param code what the customer typed, or blank for "whatever applies"
+     * @param pickup whether this basket is being collected, which makes a
+     *               free-delivery promotion inapplicable (SPECS §5, Phase 4 M4)
      */
     @Transactional(readOnly = true)
     Applied resolve(UUID merchantId, UUID userId, String code,
-                    int subtotalCents, int deliveryFeeCents) {
+                    int subtotalCents, int deliveryFeeCents, boolean pickup) {
         OffsetDateTime now = OffsetDateTime.now();
         if (code != null && !code.isBlank()) {
             Promotion promotion = promotions
@@ -49,6 +51,16 @@ class PromotionService {
             if (exhaustedBy(promotion, userId)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "You've already used that code");
+            }
+            // Free delivery on an order nobody delivers. Refused by name rather
+            // than falling through to "doesn't apply", and above all never
+            // allowed to become a discount on food: the point of a promotion
+            // being an order line (SPECS §6) is that what it took off is a
+            // thing somebody can read, and a free-delivery code that quietly
+            // took money off a pizza would be neither free delivery nor honest.
+            if (pickup && promotion.getKind() == Promotion.Kind.FREE_DELIVERY) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "That code is for delivery orders");
             }
             int discount = promotion.discountFor(subtotalCents, deliveryFeeCents);
             if (discount <= 0) {
@@ -63,6 +75,12 @@ class PromotionService {
         return promotions.findByMerchantIdAndActiveTrue(merchantId).stream()
             .filter(promotion -> promotion.getCode().isEmpty())
             .filter(promotion -> promotion.liveAt(now))
+            // An automatic free-delivery promotion is skipped rather than
+            // refused: nobody typed anything, so there is nobody to tell, and a
+            // customer who was never offered a discount cannot be disappointed
+            // by not getting it. (It would compute to zero on a pickup anyway —
+            // this is the rule stated rather than the arithmetic relied upon.)
+            .filter(promotion -> !(pickup && promotion.getKind() == Promotion.Kind.FREE_DELIVERY))
             .filter(promotion -> !exhaustedBy(promotion, userId))
             .map(promotion -> new Applied(promotion.getId(), "", promotion.getLabel(),
                 promotion.discountFor(subtotalCents, deliveryFeeCents)))

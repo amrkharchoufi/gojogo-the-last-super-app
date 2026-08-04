@@ -1367,6 +1367,31 @@ enum DeliveryOrderStatus: Int, Equatable, Comparable {
         case .delivered:           return "Enjoy your meal!"
         }
     }
+
+    /// The same states, said to somebody who is walking to the counter
+    /// themselves (Phase 4 M4). The six words on the wire did not change — this
+    /// is the rendering of them that a collection needs, and it is why the
+    /// order carries its fulfilment kind rather than a parallel set of statuses.
+    ///
+    /// A pickup only ever reaches three of these: the two courier states belong
+    /// to a journey nobody is making.
+    var pickupLabel: String {
+        switch self {
+        case .confirmed: return "Order confirmed"
+        case .preparing: return "Preparing your order"
+        case .delivered: return "Collected"
+        default:         return "Ready to collect"
+        }
+    }
+
+    var pickupDetail: String {
+        switch self {
+        case .confirmed: return "The restaurant received your order."
+        case .preparing: return "We'll tell you the moment it's ready."
+        case .delivered: return "Enjoy your meal!"
+        default:         return "Show your code at the counter."
+        }
+    }
 }
 
 struct DeliveryMenuItem: Identifiable {
@@ -1416,13 +1441,24 @@ struct DeliveryRestaurant: Identifiable {
     var storefront: [StorefrontBlock]
     var latitude: Double
     var longitude: Double
+    /// Whether you can collect in store (Phase 4 M4). False for every sample
+    /// restaurant and for any backend that predates collection, which is the
+    /// right answer in both cases: the choice is simply not offered.
+    var offersPickup: Bool
+    /// What collecting promises, when it is offered — the kitchen's own pickup
+    /// time, which has no courier's journey inside it.
+    var pickupEtaMinutes: Int
+    /// Where to walk to, when that is not simply the restaurant's address.
+    var pickupAddress: String
 
     init(id: UUID = UUID(), name: String, cuisine: String, rating: Double,
          reviews: String, etaMinutes: Int, feeLabel: String, feeCents: Int = 149,
          imageURL: String? = nil,
          tags: [String] = [], promo: String? = nil, categories: [String] = [],
          menu: [DeliveryMenuSection] = [], storefront: [StorefrontBlock] = [],
-         latitude: Double = 33.5731, longitude: Double = -7.5898) {
+         latitude: Double = 33.5731, longitude: Double = -7.5898,
+         offersPickup: Bool = false, pickupEtaMinutes: Int? = nil,
+         pickupAddress: String = "") {
         self.id = id; self.name = name; self.cuisine = cuisine
         self.rating = rating; self.reviews = reviews; self.etaMinutes = etaMinutes
         self.feeLabel = feeLabel; self.feeCents = feeCents
@@ -1430,6 +1466,9 @@ struct DeliveryRestaurant: Identifiable {
         self.promo = promo; self.categories = categories; self.menu = menu
         self.storefront = storefront
         self.latitude = latitude; self.longitude = longitude
+        self.offersPickup = offersPickup
+        self.pickupEtaMinutes = pickupEtaMinutes ?? etaMinutes
+        self.pickupAddress = pickupAddress
     }
 }
 

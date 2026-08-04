@@ -192,10 +192,11 @@ class DeliveryService {
      */
     @Transactional(readOnly = true)
     QuoteDto quote(UUID me, QuoteRequest request) {
-        List<PricedBasket> priced = price(me, basketsOf(request.baskets(),
+        FulfilmentKind kind = FulfilmentKind.parse(request.fulfilmentKind());
+        List<PricedBasket> priced = price(me, kind, basketsOf(request.baskets(),
             request.merchantId(), request.lines(), request.promotionCode()));
         Basket basket = Basket.of(priced.stream().map(PricedBasket::slice).toList(),
-            serviceFeeCents, request.tipCents(), payments.currency());
+            serviceFeeCents, tipFor(kind, request.tipCents()), payments.currency());
 
         long available = payments.required() ? payments.availableFor(me) : Long.MAX_VALUE;
         boolean covers = !payments.required() || available >= basket.totalCents();
@@ -209,6 +210,7 @@ class DeliveryService {
             basket.totalCents(), basket.currency(),
             first == null ? "" : first.promotionCode(),
             first == null ? "" : first.promotionLabel(),
+            kind.name(),
             priced.stream().map(p -> new MerchantQuoteDto(p.merchant().getId(),
                 p.merchant().getName(), p.slice().subtotalCents(),
                 p.slice().deliveryFeeCents(), p.slice().discountCents(),
@@ -239,35 +241,43 @@ class DeliveryService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "You already have an order in progress");
         });
-        List<PricedBasket> priced = price(me, basketsOf(request.baskets(),
+        FulfilmentKind kind = FulfilmentKind.parse(request.fulfilmentKind());
+        List<PricedBasket> priced = price(me, kind, basketsOf(request.baskets(),
             request.merchantId(), request.lines(), request.promotionCode()));
 
         // The slowest restaurant's advertised ETA is the best guess anybody has
         // until the kitchens accept and say how long they actually need — which
-        // is the number that replaces this one.
+        // is the number that replaces this one. For a collection it is the
+        // kitchen's own pickup time, which is the whole point of that column:
+        // an ETA that includes a courier's journey is a lie to somebody who is
+        // walking there themselves.
         OffsetDateTime now = OffsetDateTime.now();
-        int worstEta = priced.stream().mapToInt(p -> p.merchant().getEtaMinutes()).max().orElse(30);
+        int worstEta = priced.stream().mapToInt(p -> etaOf(p.merchant(), kind)).max().orElse(30);
         CustomerOrder order = new CustomerOrder(me, payments.currency(),
             request.note(), now.plusMinutes(worstEta));
+        order.fulfilBy(kind);
         // How they want it handed over, if they said. A word this build doesn't
         // recognise is the configured default rather than a 400 — checkout is
         // the worst place in the product to fail on a string, and the choice is
         // changeable right up until the courier is at the door anyway.
         order.chooseHandoffMode(HandoffMode.parse(request.handoffMode(),
             policy.defaultHandoffMode()));
-        applyAddress(me, request, order);
+        applyAddress(me, request, order, kind);
         for (PricedBasket basket : priced) {
             SubOrder subOrder = order.addSubOrder(basket.merchant().getId(),
                 basket.slice().subtotalCents(), basket.slice().deliveryFeeCents(),
                 basket.slice().discountCents(), basket.applied().promotionId(),
                 basket.applied().code());
+            if (kind.isPickup()) {
+                subOrder.collectFrom(basket.merchant().collectionAddress());
+            }
             basket.qtyByItem().forEach((itemId, qty) -> {
                 MenuItem item = basket.items().get(itemId);
                 order.addLine(subOrder, item.getId(), item.getName(), item.getPriceCents(), qty);
             });
         }
         order.priceIt(Basket.of(priced.stream().map(PricedBasket::slice).toList(),
-            serviceFeeCents, request.tipCents(), payments.currency()));
+            serviceFeeCents, tipFor(kind, request.tipCents()), payments.currency()));
 
         CustomerOrder saved = orders.save(order);
         payments.hold(saved, priced.getFirst().merchant().getName()
@@ -327,7 +337,7 @@ class DeliveryService {
      * nowhere, the first refusal is rethrown: somebody who typed WELCOME10 and
      * got nothing deserves to be told why, exactly as before.
      */
-    private List<PricedBasket> price(UUID me, List<BasketRequest> baskets) {
+    private List<PricedBasket> price(UUID me, FulfilmentKind kind, List<BasketRequest> baskets) {
         List<PricedBasket> priced = new ArrayList<>(baskets.size());
         ResponseStatusException firstRefusal = null;
         boolean codeAskedAnywhere = false;
@@ -336,9 +346,22 @@ class DeliveryService {
             Merchant merchant = merchants.findById(basket.merchantId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "No such restaurant"));
+            // A collection at a counter that does not do collections. Refused
+            // out loud rather than quietly turned into a delivery: the second
+            // would charge somebody a delivery fee for a journey they were
+            // planning to make themselves.
+            if (kind.isPickup() && !merchant.isPickupEnabled()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    merchant.getName() + " doesn't do collection — order it for delivery instead");
+            }
             Map<UUID, Integer> qtyByItem = mergeLines(basket.lines());
             Map<UUID, MenuItem> found = priceableItems(merchant, qtyByItem);
             int subtotal = subtotalOf(qtyByItem, found);
+            // No courier, no fee. The one number that changes, and every other
+            // consequence of a pickup's money — no tip, nothing under
+            // COURIER_FEE at settlement — falls out of this and the tip above
+            // rather than being decided again somewhere else.
+            int deliveryFee = kind.isPickup() ? 0 : merchant.getDeliveryFeeCents();
 
             String code = basket.promotionCode();
             PromotionService.Applied applied;
@@ -346,28 +369,50 @@ class DeliveryService {
                 codeAskedAnywhere = true;
                 try {
                     applied = promotions.resolve(merchant.getId(), me, code, subtotal,
-                        merchant.getDeliveryFeeCents());
+                        deliveryFee, kind.isPickup());
                     codeLandedAnywhere = true;
                 } catch (ResponseStatusException notHere) {
                     if (firstRefusal == null) firstRefusal = notHere;
                     // The code isn't this merchant's — fall back to whatever
                     // automatic promotion this kitchen runs.
                     applied = promotions.resolve(merchant.getId(), me, null, subtotal,
-                        merchant.getDeliveryFeeCents());
+                        deliveryFee, kind.isPickup());
                 }
             } else {
                 applied = promotions.resolve(merchant.getId(), me, null, subtotal,
-                    merchant.getDeliveryFeeCents());
+                    deliveryFee, kind.isPickup());
             }
             priced.add(new PricedBasket(merchant, qtyByItem, found, applied,
                 Basket.MerchantSlice.of(merchant.getId(), subtotal,
-                    merchant.getDeliveryFeeCents(), applied.discountCents(),
+                    deliveryFee, applied.discountCents(),
                     applied.promotionId(), applied.code(), applied.label())));
         }
         if (codeAskedAnywhere && !codeLandedAnywhere && firstRefusal != null) {
             throw firstRefusal;
         }
         return priced;
+    }
+
+    /**
+     * A tip belongs to whoever carried the food, so a collection has none.
+     *
+     * <p>Dropped silently rather than refused, because a tip arrives as a
+     * number on a checkout the customer may have switched to collection after
+     * setting — failing the whole order over it would be punishing somebody for
+     * changing their mind. What they are charged is what the quote showed, and
+     * the quote drops it the same way.
+     */
+    private static int tipFor(FulfilmentKind kind, int tipCents) {
+        return kind.isPickup() ? 0 : tipCents;
+    }
+
+    /** What to promise: the kitchen's own collection time for a pickup, their
+     *  delivery ETA otherwise. */
+    private static int etaOf(Merchant merchant, FulfilmentKind kind) {
+        if (kind.isPickup() && merchant.getPickupPrepMinutes() != null) {
+            return merchant.getPickupPrepMinutes();
+        }
+        return merchant.getEtaMinutes();
     }
 
     /** One basket, priced: the merchant, what's in it, and its money slice. */
@@ -412,7 +457,15 @@ class DeliveryService {
      * caller's default when none was named, or the legacy free-text label. An
      * order with nowhere to go is rejected — a courier needs an address.
      */
-    private void applyAddress(UUID me, PlaceOrderRequest request, CustomerOrder order) {
+    private void applyAddress(UUID me, PlaceOrderRequest request, CustomerOrder order,
+                              FulfilmentKind kind) {
+        // A collection has no address to go to — it has a counter to be
+        // collected from, which is the sub-order's and is copied there. Asking
+        // for a delivery address anyway is how a pickup ends up needing a
+        // saved address to exist before somebody can walk to a restaurant.
+        if (kind.isPickup()) {
+            return;
+        }
         Address address = request.addressId() != null
             ? requireAddress(me, request.addressId())
             : addresses.findFirstByUserIdAndIsDefaultTrue(me).orElse(null);
@@ -526,6 +579,14 @@ class DeliveryService {
                     ? "That order has already been delivered"
                     : "That order was cancelled");
         }
+        // There is no doorstep on a collection, so there is nothing to choose
+        // between. Said out loud rather than accepted and ignored: a control
+        // that stores a preference nothing will ever read is worse than one
+        // that isn't there.
+        if (order.isPickup()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "You're collecting this one — show your code at the counter");
+        }
         order.chooseHandoffMode(HandoffMode.parse(mode, policy.defaultHandoffMode()));
         return toOrderDto(order);
     }
@@ -552,6 +613,13 @@ class DeliveryService {
         if (order.getStatus() != OrderStatus.DELIVERED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "You can tip once your order has arrived");
+        }
+        // A tip is 100% the courier's (SPECS §1), and a collection had none.
+        // Refused rather than quietly paid to the platform, which is what the
+        // courier-account fallback in OrderPayments would otherwise do with it.
+        if (order.isPickup()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "You collected this one — there's nobody to tip");
         }
         payments.tipAfterDelivery(order, tipCents);
         return toOrderDto(order);
@@ -621,6 +689,7 @@ class DeliveryService {
             merchantDto,
             order.getStatus().name(),
             Eta.minutesLeft(order),
+            order.getFulfilmentKind().name(),
             Eta.courierProgress(order,
                 position == null ? null : position.latitude(),
                 position == null ? null : position.longitude(),
@@ -681,7 +750,30 @@ class DeliveryService {
             sub.getPrepMinutes() == null ? 0 : sub.getPrepMinutes(),
             sub.getReadyAt(),
             sub.getCollectedAt(),
-            sub.getCancelReason());
+            sub.getCancelReason(),
+            collectionCode(order, sub),
+            sub.getReadyMarkedAt() != null && sub.getStatus() == SubOrderStatus.PREPARING,
+            sub.getPickupAddress(),
+            order.isPickup() && merchant != null ? merchant.getLatitude() : null,
+            order.isPickup() && merchant != null ? merchant.getLongitude() : null,
+            sub.getReadyMarkedAt());
+    }
+
+    /**
+     * The digits the customer holds up at that counter — and the mirror image
+     * of {@code visiblePin} below, which is the same rule about the same kind
+     * of secret.
+     *
+     * <p>Only for a collection, and only while there is still something to
+     * collect: a code that outlives its handoff is a number sitting in a
+     * screenshot and in a history screen for a year. On a delivery it stays
+     * empty here, because there it is the <em>kitchen</em> that shows it and a
+     * customer who could read it could mark their own food collected.
+     */
+    private static String collectionCode(CustomerOrder order, SubOrder sub) {
+        return order.isPickup() && sub.getStatus() == SubOrderStatus.PREPARING
+            ? sub.getPickupCode()
+            : "";
     }
 
     /**
@@ -695,6 +787,7 @@ class DeliveryService {
      */
     private static String visiblePin(CustomerOrder order) {
         return order.getStatus().isTerminal() || order.getHandoffMode() != HandoffMode.PIN
+            || order.isPickup()
             ? ""
             : order.getDeliveryPin();
     }
@@ -758,6 +851,10 @@ class DeliveryService {
             merchant.getLatitude(),
             merchant.getLongitude(),
             menu,
-            storefront);
+            storefront,
+            merchant.isPickupEnabled(),
+            merchant.getPickupPrepMinutes() == null
+                ? merchant.getEtaMinutes() : merchant.getPickupPrepMinutes(),
+            merchant.getPickupAddress());
     }
 }

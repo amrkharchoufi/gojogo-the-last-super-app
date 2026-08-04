@@ -111,6 +111,9 @@ final class PartnerStore {
             tags: dto.tags,
             isOpen: dto.open,
             isSuspended: dto.suspended,
+            offersPickup: dto.offersPickup,
+            pickupPrepMinutes: dto.pickupPrepMinutes,
+            pickupAddress: dto.pickupAddress ?? "",
             menu: dto.menu.map { section in
                 MerchantMenuSection(id: section.id, name: section.name,
                     items: section.items.map {

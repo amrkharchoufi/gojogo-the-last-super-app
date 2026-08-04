@@ -537,6 +537,23 @@ private struct DeliveryRestaurantView: View {
             }
             .foregroundStyle(GGColor.textSecondary)
 
+            // Said on the restaurant page rather than only at checkout
+            // (Phase 4 M4): whether you can walk in and collect is something
+            // people decide on before they have chosen anything, and a switch
+            // they only meet at the end is one they never knew to look for.
+            if restaurant.offersPickup {
+                HStack(spacing: 5) {
+                    Image(systemName: "bag.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Collect in store · ready in ~\(restaurant.pickupEtaMinutes) min · no fee")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(GGColor.textPrimary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(GGColor.ink(0.10)))
+            }
+
             if !restaurant.tags.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(restaurant.tags, id: \.self) { tag in
@@ -972,24 +989,38 @@ private struct DeliveryCheckoutSheet: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     cartLines
+                    // Collect or deliver (Phase 4 M4) — above the money,
+                    // because it changes the money. Only where every kitchen
+                    // in the cart offers it: an order is one kind or the other.
+                    if app.deliveryCartIsLive && app.deliveryCartCanBeCollected {
+                        fulfilmentPicker
+                    }
                     // A live restaurant is a real payment: the totals, the tip
                     // and the discount all come from the server's quote. A
                     // SampleData one keeps the offline demo's arithmetic.
                     if app.deliveryCartIsLive {
-                        tipPicker
+                        // No courier, nobody to tip. The row is removed rather
+                        // than disabled: a greyed-out tip picker on a
+                        // collection is the app implying somebody was cheated
+                        // out of something.
+                        if !app.deliveryWantsPickup { tipPicker }
                         promotionField
                         quotedBreakdown
                     } else {
                         feeBreakdown
                     }
-                    Button {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        showAddresses = true
-                    } label: {
-                        detailRow(icon: "location.fill", title: "Deliver to",
-                                  value: app.deliveryAddressLabel)
+                    if app.deliveryWantsPickup {
+                        collectionRows
+                    } else {
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            showAddresses = true
+                        } label: {
+                            detailRow(icon: "location.fill", title: "Deliver to",
+                                      value: app.deliveryAddressLabel)
+                        }
+                        .buttonStyle(PressableStyle())
                     }
-                    .buttonStyle(PressableStyle())
                     if app.deliveryCartIsLive {
                         Button {
                             app.showWallet = true
@@ -1056,11 +1087,17 @@ private struct DeliveryCheckoutSheet: View {
     /// before starting for the door, so the fastest one's estimate is a promise
     /// nothing in the system is trying to keep.
     private var cartWaitLabel: String? {
-        let etas = app.deliveryCartMerchantIDs.compactMap { id in
-            app.deliveryRestaurants.first(where: { $0.id == id })?.etaMinutes
+        let pickup = app.deliveryWantsPickup
+        let etas = app.deliveryCartMerchantIDs.compactMap { id -> Int? in
+            guard let r = app.deliveryRestaurants.first(where: { $0.id == id }) else { return nil }
+            return pickup ? r.pickupEtaMinutes : r.etaMinutes
         }
         guard let slowest = etas.max() else { return nil }
-        return "Arrives in about \(slowest)–\(slowest + 10) min"
+        // "Arrives" is a sentence about a courier. Somebody collecting is
+        // waiting for a different thing and is told about that instead.
+        return pickup
+            ? "Ready in about \(slowest)–\(slowest + 10) min"
+            : "Arrives in about \(slowest)–\(slowest + 10) min"
     }
 
     private var cartLines: some View {
@@ -1190,8 +1227,13 @@ private struct DeliveryCheckoutSheet: View {
                                  -quote.discountCents)
                     }
                 }
-                quoteRow(quote.kitchens.count > 1 ? "Delivery fees" : "Delivery fee",
-                         quote.deliveryFeeCents, freeWhenZero: true)
+                // There is no delivery fee line on a collection at all: "Free"
+                // where a fee would be reads as a discount somebody was given,
+                // rather than a journey nobody is making.
+                if !quote.isPickup {
+                    quoteRow(quote.kitchens.count > 1 ? "Delivery fees" : "Delivery fee",
+                             quote.deliveryFeeCents, freeWhenZero: true)
+                }
                 quoteRow("Service fee", quote.serviceFeeCents)
                 if quote.tipCents > 0 { quoteRow("Courier tip", quote.tipCents) }
                 Divider().background(GGColor.ink(0.1))
@@ -1224,6 +1266,86 @@ private struct DeliveryCheckoutSheet: View {
         }
         .padding(14)
         .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
+    }
+
+    // MARK: Collect in store (Phase 4 M4)
+
+    /// Delivered, or collected. Two buttons rather than a toggle because the
+    /// difference between them is not on/off — it is where you will be in
+    /// twenty minutes, and each side says what it costs.
+    private var fulfilmentPicker: some View {
+        HStack(spacing: 8) {
+            fulfilmentOption(title: "Delivery", detail: deliveryOptionDetail,
+                             icon: "bicycle", selected: !app.deliveryWantsPickup) {
+                app.setDeliveryWantsPickup(false)
+            }
+            fulfilmentOption(title: "Collect", detail: collectOptionDetail,
+                             icon: "bag.fill", selected: app.deliveryWantsPickup) {
+                app.setDeliveryWantsPickup(true)
+            }
+        }
+    }
+
+    private func fulfilmentOption(title: String, detail: String, icon: String,
+                                  selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(title)
+                        .font(.system(size: 14, weight: .bold))
+                }
+                Text(detail)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                    .opacity(0.75)
+            }
+            .foregroundStyle(selected ? GGColor.onAccent : GGColor.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(selected ? GGColor.white : GGColor.ink(0.08)))
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    /// The fee across every kitchen in the cart, which is what switching away
+    /// from delivery actually saves.
+    private var deliveryOptionDetail: String {
+        let fees = app.deliveryCartMerchantIDs.compactMap { id in
+            app.deliveryRestaurants.first(where: { $0.id == id })?.feeCents
+        }
+        let total = fees.reduce(0, +)
+        return total == 0 ? "Free" : DeliveryStore.money(cents: total) + " fee"
+    }
+
+    private var collectOptionDetail: String {
+        let waits = app.deliveryCartMerchantIDs.compactMap { id in
+            app.deliveryRestaurants.first(where: { $0.id == id })?.pickupEtaMinutes
+        }
+        guard let slowest = waits.max() else { return "No fee" }
+        return "Ready in ~\(slowest) min"
+    }
+
+    /// Where to go, one row per counter. Named restaurants rather than a single
+    /// "Collection" line, because the thing somebody needs off this screen is
+    /// the address they are about to walk to.
+    private var collectionRows: some View {
+        VStack(spacing: 8) {
+            ForEach(app.deliveryCartByMerchant, id: \.merchantID) { kitchen in
+                let restaurant = app.deliveryRestaurants.first(where: { $0.id == kitchen.merchantID })
+                detailRow(icon: "bag.fill", title: "Collect from",
+                          value: (restaurant?.pickupAddress).flatMap { $0.isEmpty ? nil : $0 }
+                            ?? kitchen.name,
+                          chevron: false)
+            }
+            Text("We'll tell you the moment it's ready. Show the code on your order screen at the counter.")
+                .explanatory(11)
+                .foregroundStyle(GGColor.textTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var tipPicker: some View {
@@ -1303,7 +1425,8 @@ private struct DeliveryCheckoutSheet: View {
         }
     }
 
-    private func detailRow(icon: String, title: String, value: String) -> some View {
+    private func detailRow(icon: String, title: String, value: String,
+                           chevron: Bool = true) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
@@ -1319,9 +1442,11 @@ private struct DeliveryCheckoutSheet: View {
                     .foregroundStyle(GGColor.textPrimary)
             }
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(GGColor.textTertiary)
+            if chevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(GGColor.textTertiary)
+            }
         }
         .padding(12)
         .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.08)
@@ -1476,10 +1601,16 @@ private struct DeliveryTrackingView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(app.deliveryStatus?.label ?? "")
+                    // The same six statuses, rendered for whoever is coming to
+                    // the food rather than the other way round (Phase 4 M4).
+                    Text(app.deliveryOrderIsPickup
+                         ? (app.deliveryStatus?.pickupLabel ?? "")
+                         : (app.deliveryStatus?.label ?? ""))
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(GGColor.textPrimary)
-                    Text(app.deliveryStatus?.detail ?? "")
+                    Text(app.deliveryOrderIsPickup
+                         ? (app.deliveryStatus?.pickupDetail ?? "")
+                         : (app.deliveryStatus?.detail ?? ""))
                         .font(.system(size: 13))
                         .foregroundStyle(GGColor.textSecondary)
                 }
@@ -1530,6 +1661,12 @@ private struct DeliveryTrackingView: View {
             // handoff is a number sitting in a history screen for a year.
             // Re-deriving that rule here would give it a second definition to
             // drift from.
+            // The collection half of the same idea (Phase 4 M4). One code per
+            // counter, because a customer collecting from two kitchens proves
+            // each of them — the reason M3 moved the code down to the slice,
+            // reaching the customer's screen for the first time here.
+            collectionCodes
+
             if !app.deliveryPin.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("GIVE THIS TO YOUR COURIER")
@@ -1548,13 +1685,16 @@ private struct DeliveryTrackingView: View {
                 .glass(cornerRadius: 16, tint: GGColor.ink(0.10))
             }
 
-            handoffModeControl
+            // Nothing to configure about a doorstep nobody is coming to.
+            if !app.deliveryOrderIsPickup { handoffModeControl }
 
             // The one thing the six order statuses cannot say (Phase 4 M1): the
             // kitchen is cooking and nobody has taken the delivery. Silence here
             // would leave somebody watching a countdown that has stopped meaning
             // anything, and the honest thing to offer alongside it is the way out.
-            if app.deliveryCourierSearch == "FAILED" {
+            // Never on a collection: no search was ever opened, so there is
+            // nothing for it to have failed at.
+            if app.deliveryCourierSearch == "FAILED" && !app.deliveryOrderIsPickup {
                 Text("No courier picked this one up. The restaurant knows — cancel "
                      + "for a full refund if you'd rather not wait.")
                     .font(.system(size: 12, weight: .medium))
@@ -1622,6 +1762,47 @@ private struct DeliveryTrackingView: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
+    /// What to hold up at the counter (Phase 4 M4), one card per kitchen.
+    ///
+    /// Drawn on "the server sent a code" rather than on a status, exactly like
+    /// the delivery PIN above and for the same reason: the server already
+    /// decides when a code is live, and a second definition here is one that
+    /// can be a version out of date. The address underneath is the copy taken
+    /// at order time — where somebody is actually walking to.
+    @ViewBuilder
+    private var collectionCodes: some View {
+        let collectable = app.deliveryKitchens.filter { $0.showableCode != nil }
+        if !collectable.isEmpty {
+            VStack(spacing: 10) {
+                ForEach(collectable) { kitchen in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(kitchen.isReadyToCollect
+                             ? "READY — SHOW THIS AT \(kitchen.merchantName.uppercased())"
+                             : "SHOW THIS AT \(kitchen.merchantName.uppercased())")
+                            .font(.ggMono(10, .semibold))
+                            .tracking(0.8)
+                            .foregroundStyle(kitchen.isReadyToCollect
+                                             ? GGColor.textSecondary : GGColor.textTertiary)
+                            .lineLimit(1)
+                        Text(kitchen.showableCode ?? "")
+                            .font(.ggMono(32, .bold))
+                            .tracking(8)
+                            .foregroundStyle(GGColor.textPrimary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                        Text(app.deliveryCollectionAddress(kitchen))
+                            .font(.system(size: 12))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .glass(cornerRadius: 16, tint: GGColor.ink(0.10))
+                }
+            }
+        }
+    }
+
     /// One kitchen on a multi-restaurant order: where it has got to, and — only
     /// while that kitchen hasn't answered — the way to drop it without
     /// abandoning the rest of the order.
@@ -1642,7 +1823,7 @@ private struct DeliveryTrackingView: View {
                     .foregroundStyle(kitchen.isCancelled ? GGColor.textTertiary : GGColor.textPrimary)
                     .strikethrough(kitchen.isCancelled)
                     .lineLimit(1)
-                Text(kitchen.progressLabel)
+                Text(kitchen.progressLabel(pickup: app.deliveryOrderIsPickup))
                     .font(.system(size: 11))
                     .foregroundStyle(GGColor.textSecondary)
                     .lineLimit(2)
@@ -1674,7 +1855,12 @@ private struct DeliveryTrackingView: View {
     }
 
     private var timeline: some View {
-        let steps: [DeliveryOrderStatus] = [.confirmed, .preparing, .courierToRestaurant, .delivering]
+        // A collection has two steps, because it only ever visits two of the
+        // six statuses — four bars where two of them can never fill is a
+        // progress indicator that stops at half for everybody.
+        let steps: [DeliveryOrderStatus] = app.deliveryOrderIsPickup
+            ? [.confirmed, .preparing]
+            : [.confirmed, .preparing, .courierToRestaurant, .delivering]
         let current = app.deliveryStatus ?? .confirmed
         return HStack(spacing: 6) {
             ForEach(steps, id: \.rawValue) { step in
@@ -1756,7 +1942,7 @@ private struct DeliveryTrackingView: View {
                 .font(.system(size: 44))
                 .foregroundStyle(GGColor.white)
 
-            Text("Delivered")
+            Text(app.deliveryOrderIsPickup ? "Collected" : "Delivered")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(GGColor.textPrimary)
 

@@ -19,6 +19,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -78,7 +79,7 @@ class MultiMerchantOrderTests {
         when(menuItems.findForMerchant(eq(FORNO), any())).thenReturn(List.of(pizza));
         when(menuItems.findForMerchant(eq(SUSHI), any())).thenReturn(List.of(roll));
 
-        when(promotions.resolve(any(), any(), isNull(), anyInt(), anyInt()))
+        when(promotions.resolve(any(), any(), isNull(), anyInt(), anyInt(), anyBoolean()))
             .thenReturn(PromotionService.Applied.none());
         when(orders.save(any())).thenAnswer(returnsFirstArg());
         when(orders.findFirstByUserIdAndStatusNotInOrderByPlacedAtDesc(any(), any()))
@@ -115,7 +116,7 @@ class MultiMerchantOrderTests {
     @Test
     void theLegacySingleMerchantShapeStillPlaces() {
         OrderDto placed = delivery.place(ME, new PlaceOrderRequest(FORNO,
-            List.of(new OrderLineRequest(PIZZA_ITEM, 1)), null, null, "Home", "", null, 0, null));
+            List.of(new OrderLineRequest(PIZZA_ITEM, 1)), null, null, "Home", "", null, 0, null, null));
 
         assertThat(placed.subOrders()).hasSize(1);
         assertThat(placed.totalCents()).isEqualTo(2_000 + 300 + 99);
@@ -150,7 +151,7 @@ class MultiMerchantOrderTests {
     @Test
     void aRequestWithNeitherShapeIsA400() {
         assertThatThrownBy(() -> delivery.place(ME, new PlaceOrderRequest(null, null, null,
-            null, "Home", "", null, 0, null)))
+            null, "Home", "", null, 0, null, null)))
             .isInstanceOf(ResponseStatusException.class)
             .extracting(e -> ((ResponseStatusException) e).getStatusCode())
             .isEqualTo(HttpStatus.BAD_REQUEST);
@@ -190,16 +191,16 @@ class MultiMerchantOrderTests {
     @Test
     @DisplayName("a shared code lands on the kitchen it belongs to and nowhere else")
     void aSharedCodeLandsWhereItResolves() {
-        when(promotions.resolve(eq(FORNO), any(), eq("WELCOME10"), anyInt(), anyInt()))
+        when(promotions.resolve(eq(FORNO), any(), eq("WELCOME10"), anyInt(), anyInt(), anyBoolean()))
             .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND,
                 "That code isn't valid here"));
         UUID promo = UUID.randomUUID();
-        when(promotions.resolve(eq(SUSHI), any(), eq("WELCOME10"), anyInt(), anyInt()))
+        when(promotions.resolve(eq(SUSHI), any(), eq("WELCOME10"), anyInt(), anyInt(), anyBoolean()))
             .thenReturn(new PromotionService.Applied(promo, "WELCOME10", "10% off", 300));
 
         QuoteDto quote = delivery.quote(ME, new QuoteRequest(null, null,
             List.of(basket(FORNO, PIZZA_ITEM, 1), basket(SUSHI, ROLL_ITEM, 1)),
-            "WELCOME10", 0));
+            "WELCOME10", 0, null));
 
         assertThat(quote.discountCents()).isEqualTo(300);
         assertThat(quote.merchants())
@@ -218,12 +219,13 @@ class MultiMerchantOrderTests {
      *  told why — silence would look like a discount that never arrived. */
     @Test
     void aCodeThatLandsNowhereIsRefusedOutLoud() {
-        when(promotions.resolve(any(), any(), eq("NOPE"), anyInt(), anyInt()))
+        when(promotions.resolve(any(), any(), eq("NOPE"), anyInt(), anyInt(), anyBoolean()))
             .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND,
                 "That code isn't valid here"));
 
         assertThatThrownBy(() -> delivery.quote(ME, new QuoteRequest(null, null,
-            List.of(basket(FORNO, PIZZA_ITEM, 1), basket(SUSHI, ROLL_ITEM, 1)), "NOPE", 0)))
+            List.of(basket(FORNO, PIZZA_ITEM, 1), basket(SUSHI, ROLL_ITEM, 1)), "NOPE", 0,
+            null)))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("isn't valid here");
     }
@@ -253,7 +255,7 @@ class MultiMerchantOrderTests {
 
     private PlaceOrderRequest request(BasketRequest... baskets) {
         return new PlaceOrderRequest(null, null, List.of(baskets), null, "Home", "",
-            null, 0, null);
+            null, 0, null, null);
     }
 
     private static BasketRequest basket(UUID merchantId, UUID itemId, int qty) {

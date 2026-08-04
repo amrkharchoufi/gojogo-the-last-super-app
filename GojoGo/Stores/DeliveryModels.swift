@@ -40,6 +40,17 @@ struct MerchantDTO: Decodable {
     /// only, like the menu, and optional-decoded like every field added after a
     /// release — a backend that predates this milestone simply omits it.
     let storefront: StorefrontDTO?
+    /// Whether this restaurant lets customers collect in store (Phase 4 M4).
+    /// Optional-decoded and false when absent, which is the right answer for a
+    /// backend that cannot price a collection: the choice is simply not offered.
+    let pickupEnabled: Bool?
+    /// What collecting promises — the kitchen's own pickup time, or their
+    /// delivery ETA when they haven't set one.
+    let pickupEtaMinutes: Int?
+    /// Where to walk to, when that isn't just the restaurant's address.
+    let pickupAddress: String?
+
+    var offersPickup: Bool { pickupEnabled == true }
 }
 
 struct OrderMerchantDTO: Decodable {
@@ -100,21 +111,49 @@ struct SubOrderDTO: Decodable, Identifiable {
     let readyAt: String?
     let collectedAt: String?
     let cancelReason: String
+    /// The digits to hold up at this counter (Phase 4 M4) — and the exact
+    /// mirror of `deliveryPin`: on a collection the *kitchen* types this, so
+    /// this is the only screen it appears on. Empty on every delivery order and
+    /// once there is nothing left to collect.
+    let collectionCode: String?
+    /// The kitchen's own word that the food is on the counter, which an
+    /// estimate cannot say. False until they tap it.
+    let readyToCollect: Bool?
+    /// Where to walk to — copied at order time, so it survives the merchant
+    /// editing their row later.
+    let pickupAddress: String?
+    let pickupLatitude: Double?
+    let pickupLongitude: Double?
+    let readyMarkedAt: String?
 
     var itemCount: Int { lines.reduce(0) { $0 + $1.qty } }
     var isCancelled: Bool { status == "CANCELLED" }
     var isCollected: Bool { status == "COLLECTED" || status == "DELIVERED" }
+    var isReadyToCollect: Bool { readyToCollect == true }
+
+    /// The code, or nil when there is nothing to show. Reading "non-empty" as
+    /// "show it" rather than re-deriving the rule is deliberate: the server
+    /// already decides when a code is live, and two places deciding it is how
+    /// one of them ends up a version behind.
+    var showableCode: String? {
+        guard let code = collectionCode, !code.isEmpty else { return nil }
+        return code
+    }
 
     /// What this kitchen's row says it is doing, in the customer's words.
-    var progressLabel: String {
+    func progressLabel(pickup: Bool) -> String {
         switch status {
         case "CONFIRMED": return "Waiting for the restaurant"
-        case "PREPARING": return "Cooking"
-        case "COLLECTED": return "With your courier"
-        case "DELIVERED": return "Delivered"
+        case "PREPARING": return pickup
+            ? (isReadyToCollect ? "Ready to collect" : "Cooking")
+            : "Cooking"
+        case "COLLECTED": return pickup ? "Collected" : "With your courier"
+        case "DELIVERED": return pickup ? "Collected" : "Delivered"
         default:          return cancelReason.isEmpty ? "Cancelled" : cancelReason
         }
     }
+
+    var progressLabel: String { progressLabel(pickup: false) }
 }
 
 struct DeliveryAddressDTO: Decodable {
@@ -211,6 +250,15 @@ struct OrderDTO: Decodable {
     /// assignment. Nil until then, and nil forever if opening it failed —
     /// which is deliberate on that side, so it must be survivable on this one.
     let conversationId: UUID?
+    /// DELIVERY / PICKUP (Phase 4 M4). The first thing to read before drawing
+    /// anything about fulfilment: a collection has no courier and never visits
+    /// two of the six statuses, so a screen that drew "looking for a courier"
+    /// from `courierSearch == "NONE"` would be describing a search that was
+    /// never opened. Absent means DELIVERY — a backend without the field cannot
+    /// have produced any other kind.
+    let fulfilmentKind: String?
+
+    var isPickup: Bool { fulfilmentKind == "PICKUP" }
 
     /// What the handoff control starts on. A backend that predates M2 sends
     /// nothing, and the honest reading of that is CONFIRM: it is what those
@@ -260,6 +308,11 @@ struct PlaceOrderBody: Encodable {
     /// A code, never an amount — what a discount is worth is decided server-side.
     let promotionCode: String?
     let tipCents: Int
+    /// DELIVERY / PICKUP (Phase 4 M4). Sent as a word rather than an enum for
+    /// the usual reason — the server owns the list — and nil for a delivery, so
+    /// the body a pre-M4 build sends and the body this one sends for the common
+    /// case are byte-identical.
+    let fulfilmentKind: String?
 }
 
 struct RateOrderBody: Encodable {
@@ -285,6 +338,7 @@ struct QuoteBody: Encodable {
     let baskets: [BasketBody]?
     let promotionCode: String?
     let tipCents: Int
+    let fulfilmentKind: String?
 }
 
 /// One kitchen's slice of a quote (Phase 4 M3) — what the checkout sheet
@@ -321,8 +375,13 @@ struct QuoteDTO: Decodable {
     let walletAvailableMinor: Int
     let walletCovers: Bool
     let shortfallMinor: Int
+    /// Echoed back (Phase 4 M4). Read rather than assumed: a build talking to a
+    /// backend that predates collection would otherwise draw a pickup checkout
+    /// over a quote that still has a delivery fee in it.
+    let fulfilmentKind: String?
 
     var kitchens: [MerchantQuoteDTO] { merchants ?? [] }
+    var isPickup: Bool { fulfilmentKind == "PICKUP" }
 }
 
 struct DeliveryPromotionDTO: Decodable, Identifiable {
@@ -414,20 +473,55 @@ struct MerchantOrderDTO: Decodable, Identifiable {
     /// Minted when this restaurant accepted, and returned **only here** — a
     /// code the courier can read off their own screen proves nothing about
     /// where they are standing.
+    ///
+    /// **Blank on a collection (Phase 4 M4), and that is the point.** There the
+    /// direction reverses: the customer holds the code up and this kitchen
+    /// types it, so a kitchen that could read it here could hand the food to
+    /// nobody and close the order.
     let pickupCode: String?
+    /// DELIVERY / PICKUP (Phase 4 M4) — which of two screens this row is:
+    /// a courier coming for it, or somebody at the counter with a code.
+    let fulfilmentKind: String?
+    /// Whether this kitchen has already tapped "ready". On a collection that
+    /// tap is what tells the customer to come, so the button must not look
+    /// un-pressed afterwards.
+    let readyMarked: Bool?
 
     var itemCount: Int { lines.reduce(0) { $0 + $1.qty } }
     var needsAnswer: Bool { status == "CONFIRMED" }
-    var noCourier: Bool { courierSearch == "FAILED" }
+    var noCourier: Bool { courierSearch == "FAILED" && !isPickup }
+    var isPickup: Bool { fulfilmentKind == "PICKUP" }
+    var isReadyMarked: Bool { readyMarked == true }
+
+    /// Whether this counter is waiting for a customer to walk up to it.
+    var awaitingCollection: Bool { isPickup && status == "PREPARING" }
 
     /// Show the code once somebody is actually coming for the food, and stop
     /// showing it the moment they have it. A code on a delivered order is a
     /// number on a screen with nobody left to read it to.
     var readableCode: String? {
-        guard let code = pickupCode, !code.isEmpty else { return nil }
+        guard !isPickup, let code = pickupCode, !code.isEmpty else { return nil }
         guard status == "PREPARING" || status == "COURIER_TO_RESTAURANT" else { return nil }
         return courierName == nil ? nil : code
     }
+}
+
+/// The answer to "the customer is here and this is their code" (Phase 4 M4).
+///
+/// A 200 either way, like the courier's two handoff verbs and for the same
+/// reason: a mistyped digit at a counter is not a bad request, and the screen
+/// renders `message` under the field rather than as an error. `attemptsLeft` is
+/// always -1 here — nothing is counted at a counter, because locking a kitchen
+/// out of handing over food they have already made is the worse failure.
+struct CollectionResultDTO: Decodable {
+    let accepted: Bool
+    let message: String
+    let attemptsLeft: Int
+    let order: MerchantOrderDTO?
+}
+
+struct CollectCodeBody: Encodable {
+    let code: String
 }
 
 /// A prep estimate, or nil for the server's default. Not required, because an

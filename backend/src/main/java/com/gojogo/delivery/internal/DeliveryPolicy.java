@@ -50,6 +50,18 @@ class DeliveryPolicy {
         return (int) Math.clamp(config.number("delivery.prep.default.minutes", 20), 1, maxPrepMinutes());
     }
 
+    /**
+     * Used when a kitchen accepts a <em>collection</em> without saying how long
+     * they need and has set no pickup time of their own (Phase 4 M4). Shorter
+     * than the delivery default because nobody is waiting on a courier — and a
+     * separate knob rather than a discount on the delivery one, since the two
+     * are estimates about different work.
+     */
+    int defaultPickupPrepMinutes() {
+        return (int) Math.clamp(config.number("delivery.pickup.prep.default.minutes", 15),
+            1, maxPrepMinutes());
+    }
+
     /** A typo of 200 for 20 holds somebody's money for three hours. */
     int maxPrepMinutes() {
         return (int) Math.clamp(config.number("delivery.prep.max.minutes", 180), 1, 1440);

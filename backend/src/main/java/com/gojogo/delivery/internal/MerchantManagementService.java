@@ -89,11 +89,22 @@ class MerchantManagementService implements MerchantProvisioningApi {
     @Transactional
     MyMerchantDto update(UUID me, UpdateMerchantRequest request) {
         Merchant merchant = require(me);
+        // The pickup fields are absent-means-unchanged rather than
+        // absent-means-off: a client that predates Phase 4 M4 sends none of
+        // them on every save, and taking silence for "switch collection off"
+        // would have an old build quietly closing a service the owner turned on
+        // in a new one.
         merchant.apply(request.name(), request.cuisine(), request.imageUrl(), request.promo(),
             Math.clamp(request.etaMinutes(), 5, 180),
             Math.max(0, request.deliveryFeeCents()),
             request.latitude(), request.longitude(),
-            cleaned(request.categories()), cleaned(request.tags()));
+            cleaned(request.categories()), cleaned(request.tags()),
+            request.pickupEnabled() == null
+                ? merchant.isPickupEnabled() : request.pickupEnabled(),
+            request.pickupPrepMinutes() == null
+                ? merchant.getPickupPrepMinutes() : request.pickupPrepMinutes(),
+            request.pickupAddress() == null
+                ? merchant.getPickupAddress() : request.pickupAddress());
         media.markReferenced(Collections.singletonList(request.imageUrl()));
         return toDto(merchant);
     }
@@ -249,6 +260,9 @@ class MerchantManagementService implements MerchantProvisioningApi {
             merchant.getRating().doubleValue(), merchant.getReviewCount(),
             merchant.getLatitude(), merchant.getLongitude(),
             List.copyOf(merchant.getCategories()), List.copyOf(merchant.getTags()),
-            merchant.isActive(), merchant.isSuspended(), menu);
+            merchant.isActive(), merchant.isSuspended(),
+            merchant.isPickupEnabled(), merchant.getPickupPrepMinutes(),
+            merchant.getPickupAddress(),
+            menu);
     }
 }

@@ -74,8 +74,32 @@ class SubOrder {
     @Column(name = "ready_at")
     private OffsetDateTime readyAt;
 
+    /**
+     * When this kitchen actually said the food was ready, as opposed to when
+     * they guessed it would be (Phase 4 M4).
+     *
+     * <p>Kept beside {@link #readyAt} rather than overwriting it, because for a
+     * collection the two are different facts to a different person: the
+     * estimate is when to set off, and this is "it is on the counter, come and
+     * get it" — the push nobody can send from an estimate. Still a timestamp
+     * and still not a status, which is the decision M1 made about readiness and
+     * this milestone found no reason to reopen.
+     */
+    @Column(name = "ready_marked_at")
+    private OffsetDateTime readyMarkedAt;
+
     @Column(name = "collected_at")
     private OffsetDateTime collectedAt;
+
+    /**
+     * Where the customer walks to, copied at placement — the merchant's own
+     * pickup line, or their address when they have not written one. A copy for
+     * the same reason the delivery address on the parent is one: a receipt
+     * should not be rewritten by a merchant editing their row six months later.
+     * Blank on every delivery order, where the question does not arise.
+     */
+    @Column(name = "pickup_address", nullable = false)
+    private String pickupAddress = "";
 
     @Column(name = "cancel_reason", nullable = false)
     private String cancelReason = "";
@@ -118,6 +142,12 @@ class SubOrder {
 
     void readyNow(OffsetDateTime at) {
         this.readyAt = at;
+        this.readyMarkedAt = at;
+    }
+
+    /** Where this slice is collected from — set at placement for a pickup. */
+    void collectFrom(String address) {
+        this.pickupAddress = address == null ? "" : address;
     }
 
     void collected(OffsetDateTime at) {
@@ -190,6 +220,14 @@ class SubOrder {
 
     OffsetDateTime getReadyAt() {
         return readyAt;
+    }
+
+    OffsetDateTime getReadyMarkedAt() {
+        return readyMarkedAt;
+    }
+
+    String getPickupAddress() {
+        return pickupAddress;
     }
 
     OffsetDateTime getCollectedAt() {

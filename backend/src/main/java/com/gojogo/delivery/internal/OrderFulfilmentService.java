@@ -162,14 +162,21 @@ class OrderFulfilmentService {
                     : "You've already accepted that order");
         }
         int prep = requestedPrepMinutes == null || requestedPrepMinutes <= 0
-            ? policy.defaultPrepMinutes()
+            ? defaultPrepFor(order, merchant)
             : Math.min(requestedPrepMinutes, policy.maxPrepMinutes());
 
         OffsetDateTime now = OffsetDateTime.now();
         sub.accepted(now, prep);
         int digits = policy.handoffCodeLength();
+        // The same code either way — it is minted here, at this counter, for
+        // this slice, and what changes with the fulfilment kind is only who
+        // reads it and who types it. The delivery PIN is not minted for a
+        // collection: there is no door, and a number nobody will ever be asked
+        // for is a number sitting on a screen inviting somebody to read it out.
         sub.mintPickupCode(HandoffCodes.numeric(digits));
-        order.mintDeliveryPin(HandoffCodes.numeric(digits));
+        if (!order.isPickup()) {
+            order.mintDeliveryPin(HandoffCodes.numeric(digits));
+        }
         boolean firstAccept = order.getStatus() == OrderStatus.CONFIRMED;
         if (firstAccept) {
             order.moveTo(OrderStatus.PREPARING, now);
@@ -211,6 +218,15 @@ class OrderFulfilmentService {
      * on the courier's screen is drawn from it. It does not change any status,
      * because "cooked" is not a stage the customer can act on — their food is
      * still coming, and the screen still says so.
+     *
+     * <p><b>For a collection it is the other way round, and that is what Phase 4
+     * M4 added here.</b> The customer <em>is</em> the person who has to act, so
+     * this tap is the difference between an estimate and a fact, and it is the
+     * one push a pickup order genuinely needs. {@code READY_FOR_PICKUP} is a
+     * push-only word rather than a seventh status — the same shape M3 gave
+     * {@code SUB_CANCELLED}: the parent has not moved, {@code notifications}
+     * turns it into "your order is ready to collect", and a client that has
+     * never heard the word drops it in the default arm.
      */
     @Transactional
     MerchantOrderDto markReady(UUID ownerId, UUID subOrderId) {
@@ -220,9 +236,104 @@ class OrderFulfilmentService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "That order isn't being prepared");
         }
+        CustomerOrder order = sub.getOrder();
+        boolean alreadyAnnounced = sub.getReadyMarkedAt() != null;
         sub.readyNow(OffsetDateTime.now());
-        retime(sub.getOrder());
+        retime(order);
+        // Once per kitchen, however many times somebody taps it: a second push
+        // saying the same thing reads as a second order.
+        if (order.isPickup() && !alreadyAnnounced) {
+            events.publishEvent(new OrderStatusChanged(order.getId(), order.getUserId(),
+                merchant.getName(), "READY_FOR_PICKUP", 0, true));
+        }
         return toMerchantOrderDto(sub);
+    }
+
+    /**
+     * The customer is at the counter with their code, and the kitchen types it.
+     *
+     * <p><b>The direction is the opposite of the courier's pickup, and that is
+     * the rule rather than an exception to it.</b> M2 reversed SPECS §5 for a
+     * delivery because the courier is the one who cannot be paid until the step
+     * is done; here the payee is the person standing behind the counter — a
+     * collection settles the order and pays the kitchen — so the same reasoning
+     * lands on the merchant typing, which is what §5 asked for in the first
+     * place. Underneath both: <em>the code is displayed to the party that does
+     * not type it, and typed by the party who is paid for completing the
+     * step.</em>
+     *
+     * <p>A wrong code is a 200 carrying the message, like both handoff verbs,
+     * and for the mechanical reason as much as the human one — a thrown
+     * exception would roll back the very thing it was recording. Attempts are
+     * <b>not</b> counted here: the customer is standing right there with the
+     * code on their screen, so this is a check and not a gate, and a kitchen
+     * locked out of handing over food they have already made is by far the
+     * worse failure. That is the M2 asymmetry, applied at the same kind of
+     * counter it was written for.
+     *
+     * <p>The last live slice collected finishes the order: DELIVERED (the six
+     * words are unchanged, and a client renders "Collected" from the fulfilment
+     * kind), and settlement runs with the courier's two lines at zero, which
+     * the ledger skips because a zero fee is not an entry.
+     */
+    @Transactional
+    CollectionResultDto collected(UUID ownerId, UUID subOrderId, String typedCode) {
+        Merchant merchant = requireMine(ownerId);
+        SubOrder sub = requireSlice(merchant, subOrderId);
+        CustomerOrder order = sub.getOrder();
+        if (!order.isPickup()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "That order is being delivered — the courier collects it");
+        }
+        if (sub.getStatus() != SubOrderStatus.PREPARING) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                sub.getStatus() == SubOrderStatus.CONFIRMED
+                    ? "Accept the order first"
+                    : "That order has already been collected");
+        }
+        String typed = HandoffCodes.digitsOf(typedCode);
+        if (!typed.equals(sub.getPickupCode()) || typed.isEmpty()) {
+            // Never says how wrong it was: "one digit off" is a hint, and a hint
+            // is a shorter guess list. The empty case is folded in here rather
+            // than given its own message, because a blank submission at a
+            // counter is a mis-tap and not a situation — unlike the doorstep,
+            // where it is the only honest way to reach the fallback.
+            return new CollectionResultDto(false,
+                "That code doesn't match — check the customer's order screen",
+                -1, toMerchantOrderDto(sub));
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        sub.collected(now);
+        boolean anyLeft = order.getSubOrders().stream()
+            .anyMatch(s -> s.getStatus() == SubOrderStatus.CONFIRMED
+                || s.getStatus() == SubOrderStatus.PREPARING);
+        if (!anyLeft) {
+            finishCollectedOrder(order, now);
+            return new CollectionResultDto(true, "Collected", -1, toMerchantOrderDto(sub));
+        }
+        return new CollectionResultDto(true, "Collected — the customer has another counter to visit",
+            -1, toMerchantOrderDto(sub));
+    }
+
+    /**
+     * Every bag collected: the order is finished and the money moves.
+     *
+     * <p>Straight to DELIVERED rather than through DELIVERING, because there is
+     * nothing between a counter and the person at it. Dispatch is deliberately
+     * not told anything — it was never asked for this order, and
+     * {@code complete} on a job that does not exist is a question with no
+     * answer rather than a no-op worth relying on.
+     */
+    private void finishCollectedOrder(CustomerOrder order, OffsetDateTime at) {
+        Map<UUID, Merchant> byId = merchantsOf(List.of(order));
+        order.pickedUp(at);
+        order.moveTo(OrderStatus.DELIVERED, at);
+        order.getSubOrders().stream()
+            .filter(s -> s.getStatus() != SubOrderStatus.CANCELLED)
+            .forEach(SubOrder::deliveredWithParent);
+        payments.settle(order, byId.entrySet().stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().getName())));
+        publish(order, primaryMerchantName(order));
     }
 
     // MARK: Order-level clockwork
@@ -241,8 +352,28 @@ class OrderFulfilmentService {
             .max(OffsetDateTime::compareTo)
             .orElse(order.getReadyAt());
         if (latest != null) {
-            order.retime(latest, latest.plusMinutes(policy.dropoffMinutes()));
+            // A collection is ready when it is ready — no journey to add.
+            // Adding the dropoff anyway would put a countdown on the
+            // customer's screen that runs fifteen minutes past the moment the
+            // food is sitting on the counter going cold.
+            order.retime(latest, order.isPickup()
+                ? latest
+                : latest.plusMinutes(policy.dropoffMinutes()));
         }
+    }
+
+    /**
+     * How long this kitchen takes when they do not say — their own collection
+     * time for a pickup, the configured default otherwise. A merchant who has
+     * set no pickup time is not one to invent a faster number for, so it falls
+     * back to the shared pickup default rather than to their delivery ETA,
+     * which has a courier's journey inside it.
+     */
+    private int defaultPrepFor(CustomerOrder order, Merchant merchant) {
+        if (!order.isPickup()) return policy.defaultPrepMinutes();
+        return merchant.getPickupPrepMinutes() == null
+            ? policy.defaultPickupPrepMinutes()
+            : Math.clamp(merchant.getPickupPrepMinutes(), 1, policy.maxPrepMinutes());
     }
 
     /**
@@ -263,6 +394,14 @@ class OrderFulfilmentService {
      * at it.
      */
     private void maybeOpenCourierSearch(CustomerOrder order) {
+        // Nobody is coming for a collection. This is the whole of what "no
+        // dispatch" costs, and it is one line because the kind was modelled as
+        // a kind rather than as a delivery with a courier who happens to be
+        // nobody — that version would have had to teach dispatch about an
+        // order it must never be offered.
+        if (order.isPickup()) {
+            return;
+        }
         if (order.getCourierSearch() != CourierSearch.NONE || order.getStatus().isTerminal()) {
             return;
         }
@@ -720,7 +859,7 @@ class OrderFulfilmentService {
         // listener turns SUB_CANCELLED into "part of your order was refunded"
         // and clients that predate it drop it on the floor.
         events.publishEvent(new OrderStatusChanged(order.getId(), order.getUserId(),
-            merchantName, "SUB_CANCELLED", Eta.minutesLeft(order)));
+            merchantName, "SUB_CANCELLED", Eta.minutesLeft(order), order.isPickup()));
     }
 
     /**
@@ -744,7 +883,8 @@ class OrderFulfilmentService {
 
     private void publish(CustomerOrder order, String merchantName) {
         events.publishEvent(new OrderStatusChanged(order.getId(), order.getUserId(),
-            merchantName, order.getStatus().name(), Eta.minutesLeft(order)));
+            merchantName, order.getStatus().name(), Eta.minutesLeft(order),
+            order.isPickup()));
     }
 
     private Merchant requireMine(UUID ownerId) {
@@ -824,7 +964,12 @@ class OrderFulfilmentService {
             case PREPARING -> order.getStatus() == OrderStatus.COURIER_TO_RESTAURANT
                 ? OrderStatus.COURIER_TO_RESTAURANT.name()
                 : OrderStatus.PREPARING.name();
-            case COLLECTED -> OrderStatus.DELIVERING.name();
+            // "The courier has your bag" for a delivery; for a collection the
+            // bag has left with the person who ordered it, and as far as this
+            // kitchen is concerned that is the end of it.
+            case COLLECTED -> order.isPickup()
+                ? OrderStatus.DELIVERED.name()
+                : OrderStatus.DELIVERING.name();
             case DELIVERED -> OrderStatus.DELIVERED.name();
             case CANCELLED -> OrderStatus.CANCELLED.name();
         };
@@ -839,16 +984,23 @@ class OrderFulfilmentService {
             sub.getSubtotalCents(), sub.getDiscountCents(), order.getCurrency(),
             payments.merchantEarningsOn(sub),
             order.getNote(),
-            order.getAddressLabel(),
+            // "Collection" rather than a home the food is not going to. The
+            // kitchen's screen has one line for where an order is headed, and
+            // for a pickup the honest answer is that it is not headed anywhere.
+            order.isPickup() ? "Collection" : order.getAddressLabel(),
             order.getCourierName(),
             order.getCourierSearch().name(),
             sub.getPrepMinutes() == null ? 0 : sub.getPrepMinutes(),
             sub.getCancelReason().isEmpty() ? order.getCancelReason() : sub.getCancelReason(),
-            // The kitchen's copy of their own pickup code, and the only place
-            // it is returned. The delivery PIN is deliberately not here: a
-            // restaurant has no business knowing the number that confirms the
-            // food reached somebody's door.
-            sub.getPickupCode(),
+            // The kitchen's copy of their own pickup code — and blank on a
+            // collection, which is the inversion this milestone turns on. On a
+            // delivery the kitchen shows it and the courier types it; on a
+            // collection the customer shows it and the kitchen types it, so a
+            // kitchen that could read it here could hand the food to nobody and
+            // settle the order. The delivery PIN is on neither, as before.
+            order.isPickup() ? "" : sub.getPickupCode(),
+            order.getFulfilmentKind().name(),
+            sub.getReadyMarkedAt() != null,
             order.getPlacedAt(), sub.getAcceptedAt(), sub.getReadyAt(),
             order.getStatusChangedAt());
     }

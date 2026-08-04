@@ -638,6 +638,11 @@ private struct MerchantOrderCard: View {
     /// courier turns up — a keyboard here is how you get a 5 that meant 50.
     @State private var prep = 20
     @State private var busy = false
+    /// The collection code as the counter is typing it, and the server's answer
+    /// if it did not match (Phase 4 M4). Both local to this card: the person
+    /// they belong to is standing in front of this one row.
+    @State private var collectCode = ""
+    @State private var collectRefusal: String?
 
     private static let choices = [10, 15, 20, 25, 30, 45, 60]
 
@@ -747,7 +752,11 @@ private struct MerchantOrderCard: View {
                 Button {
                     act { await app.markMerchantOrderReady(order.id) }
                 } label: {
-                    Text("Food is ready")
+                    // On a collection this tap is not bookkeeping — it is what
+                    // tells somebody to set off, so it says who it reaches.
+                    Text(order.isPickup
+                         ? (order.isReadyMarked ? "Customer told it's ready" : "Ready for collection")
+                         : "Food is ready")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(GGColor.textPrimary)
                         .frame(maxWidth: .infinity)
@@ -755,17 +764,92 @@ private struct MerchantOrderCard: View {
                         .background(Capsule().fill(GGColor.ink(0.10)))
                 }
                 .buttonStyle(PressableStyle())
-                .disabled(busy)
-                .opacity(busy ? 0.5 : 1)
+                .disabled(busy || (order.isPickup && order.isReadyMarked))
+                .opacity(busy || (order.isPickup && order.isReadyMarked) ? 0.5 : 1)
+
+                // Handing it over (Phase 4 M4). The direction reverses here:
+                // the customer holds their code up and this kitchen types it,
+                // because on a collection the counter is the one being paid for
+                // finishing the step — which is what SPECS §5 asked for, and
+                // the same reasoning that made M2 do the opposite for a courier.
+                if order.awaitingCollection { collectField }
             }
         }
         .padding(14)
         .glass(cornerRadius: 18, tint: GGColor.ink(0.06))
     }
 
+    /// Four to eight digits and a button. A refusal lands under the field as a
+    /// sentence rather than as an error banner: a mistyped digit at a counter
+    /// is not a failure of the app, and nothing here is counted — locking a
+    /// kitchen out of handing over food they have already made would be far
+    /// worse than a wrong code being retried.
+    private var collectField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("CUSTOMER'S COLLECTION CODE")
+                .font(.ggMono(10, .semibold))
+                .tracking(0.8)
+                .foregroundStyle(GGColor.textTertiary)
+            HStack(spacing: 10) {
+                TextField("000000", text: $collectCode)
+                    .font(.ggMono(22, .bold))
+                    .tracking(4)
+                    .foregroundStyle(GGColor.textPrimary)
+                    .tint(GGColor.white)
+                    .keyboardType(.numberPad)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(GGColor.ink(0.10)))
+                Button {
+                    handOver()
+                } label: {
+                    Text("Hand over")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(GGColor.white))
+                }
+                .buttonStyle(PressableStyle())
+                .disabled(app.merchantCollectBusy || collectCode.count < 4)
+                .opacity(app.merchantCollectBusy || collectCode.count < 4 ? 0.5 : 1)
+            }
+            if let refusal = collectRefusal {
+                Text(refusal)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Leaves what they typed alone on a refusal — clearing the field would
+    /// make somebody who transposed one digit start from nothing.
+    private func handOver() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        let typed = collectCode
+        Task {
+            let refusal = await app.collectMerchantOrder(order.id, code: typed)
+            collectRefusal = refusal
+            if refusal == nil { collectCode = "" }
+        }
+    }
+
     /// What the restaurant needs to know at a glance, which is not the status
     /// name: it is whether this one is waiting on them.
     private var headline: String {
+        // A collection has no courier to be waiting for, so saying "finding a
+        // courier" over one would be describing a search nobody opened.
+        if order.isPickup {
+            switch order.status {
+            case "CONFIRMED": return "New collection · \(order.itemCount) items"
+            case "PREPARING": return order.isReadyMarked
+                ? "Waiting to be collected" : "Cooking · collection"
+            case "DELIVERED": return "Collected"
+            default:          return order.status.capitalized
+            }
+        }
         switch order.status {
         case "CONFIRMED":             return "New order · \(order.itemCount) items"
         case "PREPARING":             return order.courierName.map { "Cooking · \($0) is coming" }
@@ -804,6 +888,12 @@ private struct MerchantStorefrontForm: View {
     @State private var pick: PhotosPickerItem? = nil
     @State private var uploading = false
     @State private var loaded = false
+    /// Collection (Phase 4 M4). `pickupPrep` empty means "the same as delivery"
+    /// — the placeholder says so rather than the field pretending to a number
+    /// nobody chose.
+    @State private var pickupEnabled = false
+    @State private var pickupPrep = ""
+    @State private var pickupAddress = ""
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -831,6 +921,8 @@ private struct MerchantStorefrontForm: View {
                     .font(.system(size: 11))
                     .foregroundStyle(GGColor.textTertiary)
 
+                collectionSection
+
                 field("Tags", text: $tags, placeholder: "Halal, Family, Late night")
                 Text("Shown on your card. Order isn't preserved.")
                     .font(.system(size: 11))
@@ -854,6 +946,42 @@ private struct MerchantStorefrontForm: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .onAppear(perform: load)
+    }
+
+    /// Collect in store (Phase 4 M4). Off until an owner turns it on: it needs
+    /// a counter and somebody standing at it, and defaulting it on would
+    /// advertise a service on every restaurant's behalf.
+    private var collectionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: $pickupEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Collect in store")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Text("Customers order in the app and pick it up. No courier, no delivery fee.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(GGColor.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .tint(GGColor.white)
+
+            if pickupEnabled {
+                field("Ready in (minutes)", text: $pickupPrep,
+                      placeholder: "Same as delivery (\(storefront.etaMinutes))",
+                      keyboard: .numberPad)
+                field("Where to collect", text: $pickupAddress,
+                      placeholder: "Side door on Rue Ali")
+                Text("Leave blank to use your restaurant's own address.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textTertiary)
+                Text("Closing your restaurant closes it for both — collection isn't a second switch.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textTertiary)
+            }
+        }
+        .padding(14)
+        .glass(cornerRadius: 16, tint: GGColor.ink(0.05))
     }
 
     private var coverPicker: some View {
@@ -909,6 +1037,9 @@ private struct MerchantStorefrontForm: View {
         categories = storefront.categories.joined(separator: ", ")
         tags = storefront.tags.joined(separator: ", ")
         imageURL = storefront.imageURL
+        pickupEnabled = storefront.offersPickup
+        pickupPrep = storefront.pickupPrepMinutes.map(String.init) ?? ""
+        pickupAddress = storefront.pickupAddress
         loaded = true
     }
 
@@ -923,7 +1054,13 @@ private struct MerchantStorefrontForm: View {
             latitude: storefront.latitude,
             longitude: storefront.longitude,
             categories: splitList(categories),
-            tags: splitList(tags)))
+            tags: splitList(tags),
+            pickupEnabled: pickupEnabled,
+            // Blank is "the same as delivery", which on the wire is a null the
+            // server reads as "unchanged" — so it is sent as the current value
+            // rather than as nothing, or clearing the field would never take.
+            pickupPrepMinutes: Int(pickupPrep.trimmed) ?? storefront.pickupPrepMinutes,
+            pickupAddress: pickupAddress.trimmed))
     }
 
     private func splitList(_ text: String) -> [String] {

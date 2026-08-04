@@ -86,9 +86,37 @@ class MerchantOrderController {
     }
 
     /** The food is done — sooner or later than they guessed. Does not change any
-     *  status; it corrects the time the courier is expecting. */
+     *  status; it corrects the time the courier is expecting, and on a
+     *  collection it is what tells the customer to come and get it. */
     @PostMapping("/v1/delivery/merchants/mine/orders/{subOrderId}/ready")
     MerchantOrderDto ready(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID subOrderId) {
         return fulfilment.markReady(current.require(jwt).id(), subOrderId);
+    }
+
+    /**
+     * The customer is at the counter — the kitchen types the code off their
+     * screen and hands the food over (Phase 4 M4).
+     *
+     * <p>The mirror of the courier's {@code picked-up}: there the kitchen shows
+     * and the courier types, here the customer shows and the kitchen types.
+     * The rule is the same one both times — the code is displayed to whoever
+     * does not type it, and typed by whoever is paid for finishing the step.
+     *
+     * <p><b>200 whether or not the code matched</b>, like both courier verbs,
+     * with the message to show and the slice as it now stands. <b>409</b> for a
+     * delivery order (the courier collects that one) or a slice that is not
+     * being prepared.
+     *
+     * <pre>
+     * curl -X POST -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+     *   -d '{"code":"482913"}' \
+     *   https://api.gojogo.app/v1/delivery/merchants/mine/orders/$SUB_ORDER/collected
+     * </pre>
+     */
+    @PostMapping("/v1/delivery/merchants/mine/orders/{subOrderId}/collected")
+    CollectionResultDto collected(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID subOrderId,
+                                  @Valid @RequestBody(required = false) CollectOrderRequest request) {
+        return fulfilment.collected(current.require(jwt).id(), subOrderId,
+            request == null ? null : request.code());
     }
 }

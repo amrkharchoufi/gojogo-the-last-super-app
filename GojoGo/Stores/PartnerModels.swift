@@ -61,7 +61,16 @@ struct MyMerchantDTO: Decodable, Equatable {
     let tags: [String]
     let open: Bool
     let suspended: Bool
+    /// Collection (Phase 4 M4). Optional-decoded like every field added after a
+    /// release; false and nil are what a backend without collection means.
+    /// `pickupPrepMinutes` nil is "the same as delivery" — the editor shows a
+    /// placeholder rather than inventing a number nobody chose.
+    let pickupEnabled: Bool?
+    let pickupPrepMinutes: Int?
+    let pickupAddress: String?
     let menu: [MyMenuSectionDTO]
+
+    var offersPickup: Bool { pickupEnabled == true }
 }
 
 struct UpdateMerchantBody: Encodable {
@@ -75,6 +84,12 @@ struct UpdateMerchantBody: Encodable {
     var longitude: Double?
     var categories: [String]
     var tags: [String]
+    /// Nil means "leave it as it is" on the server, which is what lets this
+    /// build and an older one save the same restaurant without one of them
+    /// silently switching collection off.
+    var pickupEnabled: Bool?
+    var pickupPrepMinutes: Int?
+    var pickupAddress: String?
 }
 
 struct MenuSectionBody: Encodable {
@@ -162,6 +177,12 @@ struct MerchantStorefront: Equatable {
     var tags: [String]
     var isOpen: Bool
     var isSuspended: Bool
+    /// Collection (Phase 4 M4). `pickupPrepMinutes` nil means "the same as
+    /// delivery" — a kitchen that has not said so is not one to invent a faster
+    /// number for.
+    var offersPickup: Bool
+    var pickupPrepMinutes: Int?
+    var pickupAddress: String
     var menu: [MerchantMenuSection]
 
     var dishCount: Int { menu.reduce(0) { $0 + $1.items.count } }
