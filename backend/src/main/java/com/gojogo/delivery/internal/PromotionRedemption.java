@@ -49,4 +49,8 @@ class PromotionRedemption {
         this.orderId = orderId;
         this.amountCents = amountCents;
     }
+
+    UUID getPromotionId() {
+        return promotionId;
+    }
 }

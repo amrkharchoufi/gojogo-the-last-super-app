@@ -67,6 +67,39 @@ extension AppState {
         Task { await refreshDeliveryQuote() }
     }
 
+    // MARK: Booking for later (Phase 4 M5)
+
+    /// The window this cart may be booked in, straight from the quote.
+    ///
+    /// The app does not work it out: the earliest is the slowest kitchen in the
+    /// cart plus the window it gets to answer in, and a picker built on a fixed
+    /// number would offer a time the server refuses *after* somebody has
+    /// chosen it. Nil means the backend predates scheduling, and the control
+    /// simply isn't drawn.
+    var deliveryScheduleWindow: ClosedRange<Date>? { deliveryQuote?.scheduleWindow }
+
+    /// Books the checkout for a time, or puts it back to "now".
+    ///
+    /// No re-quote: the time changes nothing about what the food costs. What it
+    /// does change is where the picker starts next time somebody opens it, and
+    /// the earliest slot creeping past a chosen time is exactly what the server
+    /// re-validates at placement.
+    func setDeliveryScheduledFor(_ when: Date?) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.ggSnappy) { deliveryScheduledFor = when }
+    }
+
+    /// A booked time, written for somebody who is deciding whether to keep it:
+    /// the day when it is not today, and always the clock time.
+    static func deliveryScheduleLabel(_ when: Date) -> String {
+        let time = when.formatted(date: .omitted, time: .shortened)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(when) { return "Today at \(time)" }
+        if calendar.isDateInTomorrow(when) { return "Tomorrow at \(time)" }
+        return when.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+            + " at \(time)"
+    }
+
     /// Where to walk to for the live order, per kitchen — the copy taken at
     /// order time, so it survives the restaurant editing their own row.
     func deliveryCollectionAddress(_ kitchen: SubOrderDTO) -> String {
@@ -374,6 +407,13 @@ extension AppState {
     }
 
     func placeLiveDeliveryOrder(merchantID: UUID) {
+        // A booking never touches the tracking screen: there is nothing on its
+        // way, and a countdown to Thursday is the app describing a state
+        // nobody is in.
+        if let when = deliveryScheduledFor {
+            bookLiveDeliveryOrder(at: when)
+            return
+        }
         let lines = deliveryCart
         let baskets = deliveryCartBaskets
         let optimisticTotal = Double(deliveryQuote?.totalCents ?? 0) / 100
@@ -453,6 +493,135 @@ extension AppState {
         }
     }
 
+    /// Books the cart for later (Phase 4 M5).
+    ///
+    /// Paid for now, exactly like any other checkout — which is the decision
+    /// worth knowing at this end too: the money is reserved when the promise is
+    /// made rather than at seven o'clock, when a wallet that has since been
+    /// spent would be a dinner that silently does not happen.
+    ///
+    /// The cart is held until the server has said yes, because the two ways
+    /// this can be refused are a time these kitchens cannot make and a wallet
+    /// that is short, and both want the basket back exactly as it was.
+    private func bookLiveDeliveryOrder(at when: Date) {
+        let lines = deliveryCart
+        let baskets = deliveryCartBaskets
+        let pickup = deliveryWantsPickup
+        let code = deliveryPromotionCode
+        let tip = deliveryTipCents
+        deliveryBookingBusy = true
+
+        Task {
+            defer { deliveryBookingBusy = false }
+            do {
+                let order = try await DeliveryStore.shared.placeOrder(
+                    baskets: baskets,
+                    addressId: selectedDeliveryAddress?.id,
+                    note: "",
+                    promotionCode: code,
+                    tipCents: tip,
+                    pickup: pickup,
+                    scheduledFor: when)
+                showDeliveryCheckout = false
+                selectedDeliveryRestaurantID = nil
+                deliveryCart = []
+                deliveryCartRestaurantID = nil
+                deliveryPromotionCode = ""
+                deliveryTipCents = 0
+                deliveryWantsPickup = false
+                deliveryScheduledFor = nil
+                deliveryQuote = nil
+                deliveryBookings.insert(order, at: 0)
+                await refreshDeliveryBookings()
+                // The total just moved out of the spendable balance into escrow
+                // — hours before the food, which is the point.
+                await refreshWallet()
+                showDeliveryNotice("Booked for "
+                    + Self.deliveryScheduleLabel(order.scheduledAt ?? when)
+                    + ". You can change it until the kitchen is told.")
+            } catch {
+                #if DEBUG
+                print("Book delivery order failed: \(error.localizedDescription)")
+                #endif
+                deliveryCart = lines
+                if case APIClient.APIError.http(let status, _) = error, status == 402 {
+                    await refreshWallet()
+                    showDeliveryNotice(Self.message(from: error,
+                                                    fallback: "Your wallet is short. Top up to book."))
+                    showWallet = true
+                } else {
+                    showDeliveryNotice(Self.message(from: error,
+                                                    fallback: "Couldn't book that time."))
+                }
+            }
+        }
+    }
+
+    /// Rewrites a booking no kitchen has been told about. The whole order goes
+    /// back up, because that is what the server takes — a change is the order
+    /// placed again, re-priced from the menu.
+    func changeDeliveryBooking(_ order: OrderDTO, baskets: [UUID: [DeliveryCartLine]],
+                               scheduledFor: Date) {
+        deliveryBookingBusy = true
+        Task {
+            defer { deliveryBookingBusy = false }
+            do {
+                _ = try await DeliveryStore.shared.changeOrder(
+                    order.id, baskets: baskets,
+                    addressId: order.address?.id ?? selectedDeliveryAddress?.id,
+                    note: order.note,
+                    promotionCode: order.promotionCode,
+                    tipCents: order.tipCents ?? 0,
+                    pickup: order.isPickup,
+                    scheduledFor: scheduledFor)
+                deliveryBookingBeingEdited = nil
+                await refreshDeliveryBookings()
+                await refreshWallet()
+                showDeliveryNotice("Updated — now "
+                    + Self.deliveryScheduleLabel(scheduledFor).lowercased() + ".")
+            } catch {
+                // A 409 here means the kitchen was told while the sheet was
+                // open, which is worth saying plainly: the order is fine, it is
+                // just no longer theirs to rewrite.
+                await refreshDeliveryBookings()
+                showDeliveryNotice(Self.message(from: error,
+                                                fallback: "Couldn't change that booking."))
+            }
+        }
+    }
+
+    func cancelDeliveryBooking(_ order: OrderDTO) {
+        deliveryBookingBusy = true
+        Task {
+            defer { deliveryBookingBusy = false }
+            do {
+                _ = try await DeliveryStore.shared.cancel(order.id)
+                deliveryBookingBeingEdited = nil
+                await refreshDeliveryBookings()
+                await refreshWallet()
+                showDeliveryNotice("Booking cancelled — you haven't been charged.")
+            } catch {
+                await refreshDeliveryBookings()
+                showDeliveryNotice(Self.message(from: error,
+                                                fallback: "Couldn't cancel that booking."))
+            }
+        }
+    }
+
+    /// The bookings still waiting. Read off the same call the tracking screen
+    /// already makes, so an upcoming order costs no extra request.
+    func refreshDeliveryBookings() async {
+        guard backendConnected else { return }
+        do {
+            let active = try await DeliveryStore.shared.active()
+            deliveryBookings = active.upcoming
+        } catch {
+            #if DEBUG
+            print("Booking refresh failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
     /// A tip after the food arrived. Settled straight through — there is
     /// nothing left in escrow to hold it against, and the courier has already
     /// done the work.
@@ -474,7 +643,11 @@ extension AppState {
     /// an app relaunch, a cold start hours later).
     func restoreLiveDeliveryOrder() async {
         do {
-            guard let order = try await DeliveryStore.shared.activeOrder() else {
+            let active = try await DeliveryStore.shared.active()
+            // Bookings ride on the same call, and are deliberately not
+            // candidates for the tracking screen: nothing is on its way yet.
+            deliveryBookings = active.upcoming
+            guard let order = active.order else {
                 if deliveryLiveOrderID != nil { clearLiveDeliveryOrder() }
                 return
             }

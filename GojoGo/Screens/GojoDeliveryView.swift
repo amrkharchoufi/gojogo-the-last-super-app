@@ -59,6 +59,134 @@ struct GojoDeliveryView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(GGColor.sheetBG)
         }
+        .sheet(item: $app.deliveryBookingBeingEdited) { booking in
+            DeliveryBookingSheet(booking: booking)
+                .environmentObject(app)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
+    }
+}
+
+// MARK: - A booking, before any kitchen has seen it (Phase 4 M5)
+
+/// Move it, or cancel it.
+///
+/// Deliberately not a second checkout. The server will take a whole new basket
+/// here — a change *is* the order placed again — but the two things somebody
+/// opens this for are the time and getting their money back, and rebuilding a
+/// cart inside a sheet to swap a side dish is a worse path than cancelling and
+/// ordering again. The basket goes back up exactly as it came down.
+private struct DeliveryBookingSheet: View {
+    @EnvironmentObject var app: AppState
+    let booking: OrderDTO
+    @State private var when: Date = Date()
+    @State private var confirmingCancel = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(booking.isPickup ? "Collecting" : "Delivery")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(GGColor.textTertiary)
+                Text(booking.kitchens.isEmpty
+                     ? booking.merchant.name
+                     : booking.kitchens.map(\.merchantName).joined(separator: " + "))
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(GGColor.textPrimary)
+            }
+
+            if booking.canBeChanged {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("When")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(GGColor.textTertiary)
+                    DatePicker("", selection: $when, in: Date()...,
+                               displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.compact)
+                        .labelsHidden()
+                        .tint(GGColor.textPrimary)
+                }
+            } else {
+                // The kitchen was told while this was open. Said plainly: the
+                // order is fine, it is simply no longer theirs to rewrite.
+                Text("The restaurant has this one now — it's being prepared for "
+                     + (booking.scheduledAt.map(AppState.deliveryScheduleLabel) ?? "your time")
+                     + ".")
+                    .font(.system(size: 13))
+                    .foregroundStyle(GGColor.textSecondary)
+            }
+
+            Spacer(minLength: 0)
+
+            if booking.canBeChanged {
+                Button {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    app.changeDeliveryBooking(booking, baskets: baskets, scheduledFor: when)
+                } label: {
+                    Text("Save time")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(Capsule().fill(GGColor.white))
+                }
+                .buttonStyle(PressableStyle())
+                .disabled(app.deliveryBookingBusy)
+                .opacity(app.deliveryBookingBusy ? 0.5 : 1)
+
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    confirmingCancel = true
+                } label: {
+                    Text("Cancel this booking")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .disabled(app.deliveryBookingBusy)
+            }
+        }
+        .padding(20)
+        .onAppear { when = booking.scheduledAt ?? Date() }
+        .confirmationDialog("Cancel this booking?", isPresented: $confirmingCancel,
+                            titleVisibility: .visible) {
+            Button("Cancel it — refund me", role: .destructive) {
+                app.cancelDeliveryBooking(booking)
+            }
+            Button("Keep it", role: .cancel) { }
+        } message: {
+            Text("Nothing has been cooked yet, so the whole amount comes back to your wallet.")
+        }
+    }
+
+    /// The order's own lines, re-sent unchanged. The server re-prices them off
+    /// the menu either way, so what is being carried here is *which items*, not
+    /// what they cost.
+    private var baskets: [UUID: [DeliveryCartLine]] {
+        var byMerchant: [UUID: [DeliveryCartLine]] = [:]
+        let kitchens = booking.kitchens
+        if kitchens.isEmpty {
+            byMerchant[booking.merchant.id] = booking.lines.map {
+                line(in: booking.merchant.id, name: booking.merchant.name, from: $0)
+            }
+            return byMerchant
+        }
+        for kitchen in kitchens where kitchen.status != "CANCELLED" {
+            byMerchant[kitchen.merchantId] = kitchen.lines.map {
+                line(in: kitchen.merchantId, name: kitchen.merchantName, from: $0)
+            }
+        }
+        return byMerchant
+    }
+
+    private func line(in merchantID: UUID, name: String, from dto: OrderLineDTO) -> DeliveryCartLine {
+        DeliveryCartLine(
+            item: DeliveryMenuItem(id: dto.menuItemId, name: dto.name, detail: "",
+                                   price: Double(dto.unitPriceCents) / 100),
+            qty: dto.qty, merchantID: merchantID, merchantName: name)
     }
 }
 
@@ -122,6 +250,13 @@ private struct DeliveryBrowseView: View {
                         } else {
                             if SampleData.deliveryPromoImageURL != nil {
                                 promoBanner
+                            }
+
+                            // Booked for later (Phase 4 M5). Above the rails
+                            // because it is the only thing on this screen the
+                            // reader has already committed money to.
+                            if !app.deliveryBookings.isEmpty {
+                                bookingsSection
                             }
 
                             if !app.deliveryPastOrders.isEmpty {
@@ -281,6 +416,67 @@ private struct DeliveryBrowseView: View {
                 .padding(.horizontal, 16)
             }
         }
+    }
+
+    // MARK: Booked for later (Phase 4 M5)
+
+    /// Orders that are paid for and waiting. A list rather than a rail: this is
+    /// the one section on the screen somebody may need to *act* on, and a row
+    /// they have to scroll sideways to find is a row they will not cancel in
+    /// time.
+    private var bookingsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("Booked for later")
+            VStack(spacing: 8) {
+                ForEach(app.deliveryBookings, id: \.id) { booking in
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        app.deliveryBookingBeingEdited = booking
+                    } label: {
+                        bookingRow(booking)
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func bookingRow(_ booking: OrderDTO) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: booking.isPickup ? "bag.fill" : "clock.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(GGColor.ink(0.08)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(booking.scheduledAt.map(AppState.deliveryScheduleLabel) ?? "Booked")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Text(bookingSummary(booking))
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Text(WalletStore.money(booking.totalCents, currency: booking.currency))
+                .font(.ggMono(13, .semibold))
+                .foregroundStyle(GGColor.textSecondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
+    }
+
+    /// The kitchens and how much food, which is what identifies one booking
+    /// among several — the time is already the row's headline.
+    private func bookingSummary(_ booking: OrderDTO) -> String {
+        let names = booking.kitchens.isEmpty
+            ? [booking.merchant.name]
+            : booking.kitchens.map(\.merchantName)
+        let items = booking.lines.reduce(0) { $0 + $1.qty }
+        let what = items == 1 ? "1 item" : "\(items) items"
+        return names.joined(separator: " + ") + " · " + what
     }
 
     private var orderAgainRail: some View {
@@ -995,6 +1191,11 @@ private struct DeliveryCheckoutSheet: View {
                     if app.deliveryCartIsLive && app.deliveryCartCanBeCollected {
                         fulfilmentPicker
                     }
+                    // When (Phase 4 M5) — under the how, because it is the
+                    // rarer decision and the one people arrive at second.
+                    if app.deliveryCartIsLive, app.deliveryScheduleWindow != nil {
+                        schedulePicker
+                    }
                     // A live restaurant is a real payment: the totals, the tip
                     // and the discount all come from the server's quote. A
                     // SampleData one keeps the offline demo's arithmetic.
@@ -1286,6 +1487,54 @@ private struct DeliveryCheckoutSheet: View {
         }
     }
 
+    // MARK: When (Phase 4 M5)
+
+    /// Now, or a time. Two buttons and then a wheel, in that order, because
+    /// almost everybody wants it now and a date picker sitting open on every
+    /// checkout is a decision put in front of people who have not asked for
+    /// one.
+    ///
+    /// The bounds are the server's, off this basket's own quote: the earliest
+    /// is the slowest kitchen in the cart plus the window it gets to answer in,
+    /// so the picker cannot offer a time that will be refused after it has been
+    /// chosen.
+    private var schedulePicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                fulfilmentOption(title: "Now", detail: soonestDetail,
+                                 icon: "bolt.fill", selected: app.deliveryScheduledFor == nil) {
+                    app.setDeliveryScheduledFor(nil)
+                }
+                fulfilmentOption(title: "Later",
+                                 detail: app.deliveryScheduledFor.map {
+                                     AppState.deliveryScheduleLabel($0)
+                                 } ?? "Pick a time",
+                                 icon: "clock.fill", selected: app.deliveryScheduledFor != nil) {
+                    guard let window = app.deliveryScheduleWindow else { return }
+                    // Opens on the earliest slot that actually works rather
+                    // than on "now", so the first thing the wheel shows is a
+                    // time this cart can be made for.
+                    app.setDeliveryScheduledFor(app.deliveryScheduledFor ?? window.lowerBound)
+                }
+            }
+            if let when = app.deliveryScheduledFor, let window = app.deliveryScheduleWindow {
+                DatePicker("", selection: Binding(
+                    get: { min(max(when, window.lowerBound), window.upperBound) },
+                    set: { app.deliveryScheduledFor = $0 }),
+                           in: window, displayedComponents: [.date, .hourAndMinute])
+                    .datePickerStyle(.compact)
+                    .labelsHidden()
+                    .tint(GGColor.textPrimary)
+                Text(app.deliveryWantsPickup
+                     ? "On the counter at the time you pick. You can change it until the kitchen is told."
+                     : "At your door at the time you pick. You can change it until the kitchen is told.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textSecondary)
+            }
+        }
+        .padding(.top, 2)
+    }
+
     private func fulfilmentOption(title: String, detail: String, icon: String,
                                   selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -1327,6 +1576,19 @@ private struct DeliveryCheckoutSheet: View {
         }
         guard let slowest = waits.max() else { return "No fee" }
         return "Ready in ~\(slowest) min"
+    }
+
+    /// What "now" actually means for this cart — the slowest kitchen in it,
+    /// which is the number the server will settle on too once they accept.
+    private var soonestDetail: String {
+        let waits = app.deliveryCartMerchantIDs.compactMap { id -> Int? in
+            guard let restaurant = app.deliveryRestaurants.first(where: { $0.id == id }) else {
+                return nil
+            }
+            return app.deliveryWantsPickup ? restaurant.pickupEtaMinutes : restaurant.etaMinutes
+        }
+        guard let slowest = waits.max() else { return "As soon as possible" }
+        return app.deliveryWantsPickup ? "Ready in ~\(slowest) min" : "In ~\(slowest) min"
     }
 
     /// Where to go, one row per counter. Named restaurants rather than a single
@@ -1478,7 +1740,8 @@ private struct DeliveryCheckoutSheet: View {
             }
         } label: {
             HStack {
-                Text(needsAddress ? "Add a delivery address" : "Place order")
+                Text(needsAddress ? "Add a delivery address"
+                     : (app.deliveryScheduledFor == nil ? "Place order" : "Book it"))
                     .font(.system(size: 16, weight: .bold))
                 Spacer()
                 // The server's total once it has quoted one; a live cart never

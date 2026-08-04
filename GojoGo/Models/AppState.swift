@@ -452,6 +452,20 @@ final class AppState: ObservableObject {
     /// this is also what says whether checkout can proceed at all.
     @Published var deliveryQuote: QuoteDTO? = nil
     @Published var deliveryQuoting: Bool = false
+    /// When this checkout is booked for (Phase 4 M5), or nil for "now" — which
+    /// is what the great majority of orders are, so the control starts here and
+    /// the whole picker stays out of the way until somebody asks for it. Reset
+    /// with the cart: the next cart is a fresh decision, exactly like the
+    /// pickup switch above.
+    @Published var deliveryScheduledFor: Date? = nil
+    /// Orders booked for later that no kitchen has been told about yet. Kept
+    /// apart from the live order deliberately: a booking three days out is not
+    /// something to draw a countdown for, and the tracking card is about food
+    /// that is on its way.
+    @Published var deliveryBookings: [OrderDTO] = []
+    /// The booking whose sheet is open, if any.
+    @Published var deliveryBookingBeingEdited: OrderDTO? = nil
+    @Published var deliveryBookingBusy: Bool = false
     /// The promotion code typed at checkout, and the tip chosen with it. A code,
     /// never an amount: what it is worth is the server's answer.
     @Published var deliveryPromotionCode: String = ""
@@ -4133,6 +4147,11 @@ final class AppState: ObservableObject {
             deliveryCart = []
             deliveryCartRestaurantID = nil
             showDeliveryCheckout = false
+            // Both are properties of *this* checkout rather than standing
+            // preferences: the next cart is a fresh decision about how and when
+            // to get it.
+            deliveryWantsPickup = false
+            deliveryScheduledFor = nil
         }
     }
 

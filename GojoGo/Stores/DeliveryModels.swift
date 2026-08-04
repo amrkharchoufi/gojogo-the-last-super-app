@@ -189,7 +189,9 @@ struct SaveAddressBody: Encodable {
 /// A placed order. `status`, `etaMinutes` and `courierProgress` are the
 /// server's view of fulfilment — the app renders them rather than running its
 /// own timer, so two devices (or a reinstall) agree on the same delivery.
-struct OrderDTO: Decodable {
+/// `Identifiable` so a booking can be presented with `.sheet(item:)` — the id
+/// is the server's own order id, which is exactly the identity that sheet wants.
+struct OrderDTO: Decodable, Identifiable {
     let id: UUID
     let merchant: OrderMerchantDTO
     let status: String
@@ -257,8 +259,28 @@ struct OrderDTO: Decodable {
     /// never opened. Absent means DELIVERY — a backend without the field cannot
     /// have produced any other kind.
     let fulfilmentKind: String?
+    /// When the customer asked for it (Phase 4 M5), or nil for an ordinary
+    /// order. What the screen shows *instead of* the countdown: "in 4320 min"
+    /// is arithmetic, not information.
+    let scheduledFor: String?
+    /// Whether this can still be rewritten — the server's own answer, not a
+    /// rule re-derived here. True exactly while no kitchen has been told, which
+    /// is what "before preparation begins" actually means.
+    let changeable: Bool?
+    /// When the kitchens were told: placement for an ordinary order, promotion
+    /// for a booked one. Nil is a booking still waiting.
+    let queuedAt: String?
 
     var isPickup: Bool { fulfilmentKind == "PICKUP" }
+
+    /// Booked for later and not yet in front of any kitchen. Both halves
+    /// matter: once it has been promoted it is an ordinary live order and is
+    /// tracked like one.
+    var isWaitingBooking: Bool { scheduledFor != nil && queuedAt == nil }
+
+    var canBeChanged: Bool { changeable == true }
+
+    var scheduledAt: Date? { scheduledFor.flatMap(BackendDate.parse) }
 
     /// What the handoff control starts on. A backend that predates M2 sends
     /// nothing, and the honest reading of that is CONFIRM: it is what those
@@ -277,6 +299,20 @@ struct OrderDTO: Decodable {
 /// "Nothing in flight" is a 200 with a null order, not a 404.
 struct ActiveOrderDTO: Decodable {
     let order: OrderDTO?
+    /// Every order actually being fulfilled, soonest first (Phase 4 M5). More
+    /// than one is possible now, because a booked order promotes on its own
+    /// clock and can land while another is in flight. Optional-decoded, and
+    /// `order` above is still the first of these.
+    let orders: [OrderDTO]?
+    /// Booked orders no kitchen has been told about — upcoming, and still free
+    /// to change or cancel.
+    let scheduled: [OrderDTO]?
+
+    /// Never empty when `order` is set: a backend that predates the list still
+    /// answers with the single order, and one order is what this almost always
+    /// is.
+    var live: [OrderDTO] { orders ?? [order].compactMap { $0 } }
+    var upcoming: [OrderDTO] { scheduled ?? [] }
 }
 
 struct PlaceOrderLineBody: Encodable {
@@ -313,6 +349,23 @@ struct PlaceOrderBody: Encodable {
     /// the body a pre-M4 build sends and the body this one sends for the common
     /// case are byte-identical.
     let fulfilmentKind: String?
+    /// When the customer wants it (Phase 4 M5), ISO-8601, or nil for "now" —
+    /// which is what the great majority of orders are and what keeps this body
+    /// identical to the one the deployed build sends.
+    let scheduledFor: String?
+
+    /// The same body is what a change sends (`PUT /v1/delivery/orders/{id}`),
+    /// because a change *is* the order placed again: re-priced from the menu,
+    /// promotions resolved again, the hold moved by the difference.
+    static func now(merchantId: UUID? = nil, lines: [PlaceOrderLineBody]? = nil,
+                    baskets: [BasketBody]?, addressId: UUID?, note: String,
+                    promotionCode: String?, tipCents: Int,
+                    fulfilmentKind: String?) -> PlaceOrderBody {
+        PlaceOrderBody(merchantId: merchantId, lines: lines, baskets: baskets,
+                       addressId: addressId, note: note, promotionCode: promotionCode,
+                       tipCents: tipCents, fulfilmentKind: fulfilmentKind,
+                       scheduledFor: nil)
+    }
 }
 
 struct RateOrderBody: Encodable {
@@ -379,9 +432,26 @@ struct QuoteDTO: Decodable {
     /// backend that predates collection would otherwise draw a pickup checkout
     /// over a quote that still has a delivery fee in it.
     let fulfilmentKind: String?
+    /// The window a booking may land in, for *this* basket (Phase 4 M5). Not a
+    /// constant and not the app's to compute: the earliest is the slowest
+    /// kitchen in the cart plus the window it gets to answer in, so a picker
+    /// built on a fixed "45 minutes" would offer a time the server refuses
+    /// after the customer has already chosen it.
+    let earliestScheduleAt: String?
+    let latestScheduleAt: String?
 
     var kitchens: [MerchantQuoteDTO] { merchants ?? [] }
     var isPickup: Bool { fulfilmentKind == "PICKUP" }
+
+    /// The bounds for the picker, or nil when the backend predates scheduling
+    /// — in which case the app simply doesn't offer it, which is the right
+    /// behaviour for a build that couldn't place one.
+    var scheduleWindow: ClosedRange<Date>? {
+        guard let from = earliestScheduleAt.flatMap(BackendDate.parse),
+              let to = latestScheduleAt.flatMap(BackendDate.parse),
+              from < to else { return nil }
+        return from...to
+    }
 }
 
 struct DeliveryPromotionDTO: Decodable, Identifiable {
@@ -486,6 +556,14 @@ struct MerchantOrderDTO: Decodable, Identifiable {
     /// tap is what tells the customer to come, so the button must not look
     /// un-pressed afterwards.
     let readyMarked: Bool?
+    /// When the customer asked for it (Phase 4 M5), or nil for an ordinary
+    /// order. The one thing a kitchen has to be told about a booking: their
+    /// prep estimate answers "how long do I need", not "when do I start", so a
+    /// screen that didn't say so would have somebody cooking an eight o'clock
+    /// dinner at six.
+    let scheduledFor: String?
+
+    var scheduledAt: Date? { scheduledFor.flatMap(BackendDate.parse) }
 
     var itemCount: Int { lines.reduce(0) { $0 + $1.qty } }
     var needsAnswer: Bool { status == "CONFIRMED" }

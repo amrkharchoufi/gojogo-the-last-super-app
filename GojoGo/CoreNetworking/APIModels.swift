@@ -563,6 +563,14 @@ enum BackendDate {
         return iso.date(from: trimmed) ?? isoPlain.date(from: raw)
     }
 
+    /// A date on the wire, the way the backend's own `OffsetDateTime` decodes
+    /// it. Seconds precision on purpose: nothing this app sends a date for is
+    /// meaningful below it, and a fractional part is one more thing to disagree
+    /// about across a parser boundary.
+    static func wire(_ date: Date) -> String {
+        isoPlain.string(from: date)
+    }
+
     static func relative(_ raw: String) -> String {
         guard let date = parse(raw) else { return "now" }
         let seconds = max(0, Date().timeIntervalSince(date))

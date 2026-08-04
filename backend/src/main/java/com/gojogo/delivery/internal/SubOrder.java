@@ -126,12 +126,27 @@ class SubOrder {
         this.sortOrder = sortOrder;
     }
 
-    /** This restaurant took their slice, and said how long they need. */
-    void accepted(OffsetDateTime at, int prepMinutes) {
+    /**
+     * This restaurant took their slice, and said how long they need.
+     *
+     * <p>{@code notBefore} is the moment a <em>scheduled</em> order wants the
+     * food ready (Phase 4 M5) and is null for an ordinary one. It is what stops
+     * a kitchen that accepts at 18:15 from having a 20:00 dinner cooked by
+     * 18:35 and sitting there — the prep estimate says how long they need, not
+     * when they should start.
+     *
+     * <p>{@code max} and not the target outright, which is the honest half: a
+     * kitchen that needs longer than there is says so, {@code readyAt} slips
+     * past the schedule and the customer's countdown moves with it. A system
+     * that clamped to the promised time would be promising on the kitchen's
+     * behalf.
+     */
+    void accepted(OffsetDateTime at, int prepMinutes, OffsetDateTime notBefore) {
         this.status = SubOrderStatus.PREPARING;
         this.acceptedAt = at;
         this.prepMinutes = prepMinutes;
-        this.readyAt = at.plusMinutes(prepMinutes);
+        OffsetDateTime own = at.plusMinutes(prepMinutes);
+        this.readyAt = notBefore == null || own.isAfter(notBefore) ? own : notBefore;
     }
 
     /** Guarded like the parent's PIN: a retried accept must not change a number

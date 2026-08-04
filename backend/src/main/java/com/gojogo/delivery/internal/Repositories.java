@@ -110,13 +110,53 @@ interface PromotionRedemptionRepository extends JpaRepository<PromotionRedemptio
      *  promotion per merchant, and the second must not be skipped because the
      *  first was recorded. */
     boolean existsByPromotionIdAndOrderId(UUID promotionId, UUID orderId);
+
+    /** Everything this order has claimed. Read when it changes (Phase 4 M5), so
+     *  a promotion the new basket no longer uses stops counting against the
+     *  customer's allowance. */
+    List<PromotionRedemption> findByOrderId(UUID orderId);
 }
 
 interface OrderRepository extends JpaRepository<CustomerOrder, UUID> {
 
-    /** The one order still in flight for this user, if any. */
-    Optional<CustomerOrder> findFirstByUserIdAndStatusNotInOrderByPlacedAtDesc(
-        UUID userId, Collection<OrderStatus> terminal);
+    /**
+     * The orders actually being fulfilled right now — soonest first (Phase 4
+     * M5).
+     *
+     * <p>A list rather than the single order this used to be, because a
+     * scheduled order promotes on its own clock and can land while another one
+     * is in flight. Refusing to promote it would be holding somebody's dinner
+     * back over a rule about screens.
+     *
+     * <p>A scheduled order that no kitchen has been told about is deliberately
+     * <em>not</em> here: it is not in flight, and drawing a tracking card for
+     * an order that is three days away is the app describing a state nobody is
+     * in.
+     */
+    @Query("select o from CustomerOrder o where o.userId = :userId "
+        + "and o.status not in :terminal and o.queuedAt is not null "
+        + "order by o.etaAt asc")
+    List<CustomerOrder> liveFor(@Param("userId") UUID userId,
+                                @Param("terminal") Collection<OrderStatus> terminal);
+
+    /** Scheduled orders no kitchen has seen yet, soonest first — the ones the
+     *  customer can still change or cancel for nothing. */
+    @Query("select o from CustomerOrder o where o.userId = :userId "
+        + "and o.status not in :terminal and o.queuedAt is null "
+        + "order by o.scheduledFor asc")
+    List<CustomerOrder> waitingFor(@Param("userId") UUID userId,
+                                   @Param("terminal") Collection<OrderStatus> terminal);
+
+    /**
+     * Scheduled orders whose moment has come. Matches the partial index
+     * {@code V42} creates — the rows worth looking at are the few that are
+     * still waiting, not every order ever placed.
+     */
+    @Query("select o.id from CustomerOrder o where o.queuedAt is null "
+        + "and o.queueAt <= :now and o.status not in :terminal "
+        + "order by o.queueAt asc")
+    List<UUID> dueForQueue(@Param("now") OffsetDateTime now,
+                           @Param("terminal") Collection<OrderStatus> terminal, Pageable page);
 
     /** Order history — delivered and cancelled orders, newest first. */
     List<CustomerOrder> findByUserIdAndStatusInOrderByPlacedAtDesc(
@@ -133,11 +173,20 @@ interface OrderRepository extends JpaRepository<CustomerOrder, UUID> {
 
 interface SubOrderRepository extends JpaRepository<SubOrder, UUID> {
 
-    /** The restaurant's live queue, oldest first — a kitchen works in the order
-     *  things arrived in. Since Phase 4 M3 a kitchen sees its own slice of an
-     *  order and nothing about the other merchants on it. */
+    /**
+     * The restaurant's live queue, oldest first — a kitchen works in the order
+     * things arrived in. Since Phase 4 M3 a kitchen sees its own slice of an
+     * order and nothing about the other merchants on it.
+     *
+     * <p>"Arrived" is {@code queuedAt} since Phase 4 M5, not {@code placedAt}:
+     * a scheduled order arrives when it is promoted, and one placed yesterday
+     * for tonight is not something to sort to the top of tonight's queue. The
+     * null check is the same fact from the other side — a scheduled order
+     * nobody has been told about is not in anybody's queue at all.
+     */
     @Query("select s from SubOrder s where s.merchantId = :merchantId "
-        + "and s.status in :statuses order by s.order.placedAt asc")
+        + "and s.status in :statuses and s.order.queuedAt is not null "
+        + "order by s.order.queuedAt asc")
     List<SubOrder> queueFor(@Param("merchantId") UUID merchantId,
                             @Param("statuses") Collection<SubOrderStatus> statuses);
 
@@ -153,10 +202,17 @@ interface SubOrderRepository extends JpaRepository<SubOrder, UUID> {
      * cutoff on an order that is still going. The same query that used to run
      * on the order runs per kitchen now, because "the restaurant didn't answer"
      * is a fact about one restaurant and must not time out the two that did.
+     *
+     * <p>Counted from {@code queuedAt} since Phase 4 M5, and the null check is
+     * load-bearing rather than defensive: a scheduled order sits in CONFIRMED
+     * from the moment it is placed, so a cutoff measured from {@code placedAt}
+     * would cancel tomorrow's lunch ten minutes after somebody ordered it. A
+     * restaurant cannot fail to answer a question it has not been asked.
      */
     @Query("select s.id from SubOrder s where s.status = com.gojogo.delivery.internal.SubOrderStatus.CONFIRMED "
-        + "and s.order.status not in :terminal and s.order.placedAt < :cutoff "
-        + "order by s.order.placedAt asc")
+        + "and s.order.status not in :terminal "
+        + "and s.order.queuedAt is not null and s.order.queuedAt < :cutoff "
+        + "order by s.order.queuedAt asc")
     List<UUID> unansweredIds(@Param("terminal") Collection<OrderStatus> terminal,
                              @Param("cutoff") OffsetDateTime cutoff, Pageable page);
 }

@@ -89,6 +89,23 @@ class DeliveryController {
         return delivery.place(current.require(jwt).id(), request);
     }
 
+    /**
+     * Rewrites an order no kitchen has been told about yet (Phase 4 M5) — a
+     * scheduled one, before its promotion.
+     *
+     * <p>The same body {@code POST} takes, because a change is the order placed
+     * again: baskets are re-priced from the menu, promotions are resolved
+     * again, and the hold moves by the difference. <b>409</b> once a kitchen
+     * has it (cancelling is the lever from then on) and <b>402</b> when the
+     * wallet cannot cover a bigger basket, at which point nothing about the
+     * order has changed.
+     */
+    @PutMapping("/v1/delivery/orders/{orderId}")
+    OrderDto change(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
+                    @Valid @RequestBody PlaceOrderRequest request) {
+        return delivery.change(current.require(jwt).id(), orderId, request);
+    }
+
     /** The promotions a customer could use here. */
     @GetMapping("/v1/delivery/merchants/{merchantId}/promotions")
     List<PromotionDto> promotions(@PathVariable UUID merchantId) {

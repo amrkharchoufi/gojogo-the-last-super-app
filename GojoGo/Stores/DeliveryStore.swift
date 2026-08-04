@@ -72,8 +72,35 @@ final class DeliveryStore {
     func placeOrder(baskets: [UUID: [DeliveryCartLine]],
                     addressId: UUID?, note: String,
                     promotionCode: String? = nil, tipCents: Int = 0,
-                    pickup: Bool = false) async throws -> OrderDTO {
-        let body = PlaceOrderBody(
+                    pickup: Bool = false, scheduledFor: Date? = nil) async throws -> OrderDTO {
+        try await APIClient.shared.post("/v1/delivery/orders",
+                                        body: orderBody(baskets: baskets, addressId: addressId,
+                                                        note: note, promotionCode: promotionCode,
+                                                        tipCents: tipCents, pickup: pickup,
+                                                        scheduledFor: scheduledFor))
+    }
+
+    /// Rewrites a booking no kitchen has been told about yet (Phase 4 M5).
+    ///
+    /// The same body as placing it, because that is what a change is: the
+    /// server re-prices from the menu, resolves the promotions again and moves
+    /// the hold by the difference. **409** once a kitchen has it, at which
+    /// point cancelling is the only lever left.
+    func changeOrder(_ orderId: UUID, baskets: [UUID: [DeliveryCartLine]],
+                     addressId: UUID?, note: String,
+                     promotionCode: String? = nil, tipCents: Int = 0,
+                     pickup: Bool = false, scheduledFor: Date?) async throws -> OrderDTO {
+        try await APIClient.shared.put("/v1/delivery/orders/\(orderId)",
+                                       body: orderBody(baskets: baskets, addressId: addressId,
+                                                       note: note, promotionCode: promotionCode,
+                                                       tipCents: tipCents, pickup: pickup,
+                                                       scheduledFor: scheduledFor))
+    }
+
+    private func orderBody(baskets: [UUID: [DeliveryCartLine]], addressId: UUID?, note: String,
+                           promotionCode: String?, tipCents: Int, pickup: Bool,
+                           scheduledFor: Date?) -> PlaceOrderBody {
+        PlaceOrderBody(
             merchantId: nil,
             lines: nil,
             baskets: Self.baskets(baskets),
@@ -84,8 +111,10 @@ final class DeliveryStore {
             note: note,
             promotionCode: promotionCode?.isEmpty == false ? promotionCode : nil,
             tipCents: pickup ? 0 : tipCents,
-            fulfilmentKind: pickup ? "PICKUP" : nil)
-        return try await APIClient.shared.post("/v1/delivery/orders", body: body)
+            fulfilmentKind: pickup ? "PICKUP" : nil,
+            // Nil for "now", which keeps the body for the common case
+            // byte-identical to the one the deployed build sends.
+            scheduledFor: scheduledFor.map(BackendDate.wire))
     }
 
     /// Sorted by merchant id so two identical carts serialise identically —
@@ -256,9 +285,15 @@ final class DeliveryStore {
                         latitude: dto.latitude, longitude: dto.longitude, isDefault: dto.isDefault)
     }
 
+    /// What is in flight and what is booked (Phase 4 M5) — one call, because
+    /// the second list rides on the first and an upcoming order is not worth a
+    /// request of its own.
+    func active() async throws -> ActiveOrderDTO {
+        try await APIClient.shared.get("/v1/delivery/orders/active")
+    }
+
     func activeOrder() async throws -> OrderDTO? {
-        let response: ActiveOrderDTO = try await APIClient.shared.get("/v1/delivery/orders/active")
-        return response.order
+        try await active().order
     }
 
     /// One order by id — how the tracking screen polls, since `/active` stops

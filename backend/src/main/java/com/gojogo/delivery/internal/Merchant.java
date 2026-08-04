@@ -204,6 +204,19 @@ class Merchant {
         return suspended;
     }
 
+    /**
+     * Whether this restaurant would take an order right now — both flags, the
+     * same pair the catalog browse checks: {@code active} is the owner saying
+     * they are open and {@code suspended} is the platform saying they are not.
+     *
+     * <p>Read when a scheduled order is promoted (Phase 4 M5), which is the one
+     * place in this vertical where the answer can have changed since the
+     * customer ordered.
+     */
+    boolean isOpenForOrders() {
+        return active && !suspended;
+    }
+
     boolean isPickupEnabled() {
         return pickupEnabled;
     }

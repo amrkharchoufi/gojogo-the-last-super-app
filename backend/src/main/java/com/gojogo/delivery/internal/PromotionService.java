@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -98,6 +99,28 @@ class PromotionService {
         if (redemptions.existsByPromotionIdAndOrderId(applied.promotionId(), orderId)) return;
         redemptions.save(new PromotionRedemption(applied.promotionId(), userId, orderId,
             applied.discountCents()));
+    }
+
+    /**
+     * Gives back the redemptions a changed order no longer uses (Phase 4 M5).
+     *
+     * <p>An order that is rewritten before any kitchen has seen it may drop the
+     * kitchen whose promotion it was carrying, or swap the code for another
+     * one. Leaving the old row would spend a once-per-customer promotion on an
+     * order that no longer claims it — which the customer would discover the
+     * next time they typed the code and were told they had already used it.
+     *
+     * <p>Deleted rather than marked, because a redemption is a fact about a
+     * live order and this one turned out never to have happened. The rows kept
+     * are re-recorded by {@link #redeem} immediately afterwards, which is a
+     * no-op for the ones that survived.
+     */
+    @Transactional
+    void keepOnlyRedemptions(UUID orderId, Collection<UUID> promotionIds) {
+        List<PromotionRedemption> stale = redemptions.findByOrderId(orderId).stream()
+            .filter(row -> !promotionIds.contains(row.getPromotionId()))
+            .toList();
+        if (!stale.isEmpty()) redemptions.deleteAll(stale);
     }
 
     private boolean exhaustedBy(Promotion promotion, UUID userId) {

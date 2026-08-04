@@ -216,6 +216,42 @@ class CustomerOrder {
     @Column(name = "placed_at", nullable = false)
     private OffsetDateTime placedAt;
 
+    /**
+     * When the customer asked for the food (Phase 4 M5) — at the door for a
+     * delivery, on the counter for a collection. Null is an ordinary order.
+     *
+     * <p>Deliberately not a status. CONFIRMED already means "placed, waiting
+     * for the restaurant to answer", which is precisely what a scheduled order
+     * is; the only thing that differs is whether the restaurant has been asked
+     * yet, and that is {@link #queuedAt}.
+     */
+    @Column(name = "scheduled_for")
+    private OffsetDateTime scheduledFor;
+
+    /**
+     * When this order should be put in front of its kitchens. Computed at
+     * placement rather than on every poll: a merchant editing their advertised
+     * ETA must not move an order that has already been promised to somebody.
+     */
+    @Column(name = "queue_at")
+    private OffsetDateTime queueAt;
+
+    /**
+     * When they were actually told — placement for an ordinary order,
+     * promotion for a scheduled one.
+     *
+     * <p>Null carries two facts at once, and both matter: no kitchen has seen
+     * this order, so it is still the customer's to change; and nobody has been
+     * asked anything, so the accept timeout has nothing to count.
+     */
+    @Column(name = "queued_at")
+    private OffsetDateTime queuedAt;
+
+    /** Bumped by every change (Phase 4 M5). The wallet's idempotency keys carry
+     *  it, so two adjustments are two movements and a retried one is one. */
+    @Column(name = "revision", nullable = false)
+    private int revision;
+
     @Column(name = "status_changed_at", nullable = false)
     private OffsetDateTime statusChangedAt;
 
@@ -252,9 +288,33 @@ class CustomerOrder {
         this.etaAt = etaAt;
     }
 
-    /** Set once, at placement. */
+    /** Set once, at placement — or again by a change, which happens only while
+     *  no kitchen has been told anything (Phase 4 M5). */
     void fulfilBy(FulfilmentKind kind) {
         this.fulfilmentKind = kind;
+    }
+
+    /** Wanted later, and the kitchens hear about it at {@code queueAt}. */
+    void scheduleFor(OffsetDateTime when, OffsetDateTime queueAt) {
+        this.scheduledFor = when;
+        this.queueAt = queueAt;
+        this.etaAt = when;
+    }
+
+    /** In front of the kitchens as of now: placement for an ordinary order,
+     *  promotion for a scheduled one. */
+    void queued(OffsetDateTime at) {
+        this.queuedAt = at;
+    }
+
+    /** A change landed. Only ever called while {@link #queuedAt} is null. */
+    void revised() {
+        this.revision++;
+    }
+
+    /** The note, rewritten by a change (Phase 4 M5). */
+    void reNote(String note) {
+        this.note = note == null ? "" : note;
     }
 
     /** Copies the chosen address onto the order (see the field comment). */
@@ -266,6 +326,20 @@ class CustomerOrder {
         this.addressNote = note == null ? "" : note;
         this.addressLatitude = latitude;
         this.addressLongitude = longitude;
+    }
+
+    /**
+     * Empties the order of everything a change replaces (Phase 4 M5).
+     *
+     * <p>Both collections are cleared in place rather than reassigned, because
+     * {@code orphanRemoval} is what deletes the old rows and it only sees a
+     * removal from the collection instance it is mapped to. The caller flushes
+     * between this and the rebuild, so the deletes are issued before the
+     * inserts that would otherwise sit behind them.
+     */
+    void emptyForChange() {
+        lines.clear();
+        subOrders.clear();
     }
 
     void addLine(SubOrder subOrder, UUID menuItemId, String name, int unitPriceCents, int qty) {
@@ -563,6 +637,39 @@ class CustomerOrder {
 
     OffsetDateTime getPlacedAt() {
         return placedAt;
+    }
+
+    OffsetDateTime getScheduledFor() {
+        return scheduledFor;
+    }
+
+    OffsetDateTime getQueueAt() {
+        return queueAt;
+    }
+
+    OffsetDateTime getQueuedAt() {
+        return queuedAt;
+    }
+
+    int getRevision() {
+        return revision;
+    }
+
+    boolean isScheduled() {
+        return scheduledFor != null;
+    }
+
+    /**
+     * No kitchen has been told about this order yet, which is the one condition
+     * under which it is still the customer's to rewrite (Phase 4 M5).
+     *
+     * <p>"Before preparation begins" in the vision's words, taken literally:
+     * not "before the food is started" but <em>before anybody has been asked</em>.
+     * Once a slice is sitting on a kitchen's screen, changing what is in it
+     * under them is not an edit, it is a different order they never agreed to.
+     */
+    boolean isChangeable() {
+        return scheduledFor != null && queuedAt == null && !status.isTerminal();
     }
 
     OffsetDateTime getStatusChangedAt() {

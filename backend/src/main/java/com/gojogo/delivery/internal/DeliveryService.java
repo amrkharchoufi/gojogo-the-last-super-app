@@ -1,6 +1,5 @@
 package com.gojogo.delivery.internal;
 
-import com.gojogo.delivery.OrderPlaced;
 import com.gojogo.dispatch.DispatchApi;
 import com.gojogo.dispatch.WorkerPosition;
 import com.gojogo.media.MediaDocumentApi;
@@ -200,6 +199,7 @@ class DeliveryService {
 
         long available = payments.required() ? payments.availableFor(me) : Long.MAX_VALUE;
         boolean covers = !payments.required() || available >= basket.totalCents();
+        OffsetDateTime now = OffsetDateTime.now();
         // The flat promotion fields carry the first applied code, for the
         // pre-M3 client with one line to show it on.
         Basket.MerchantSlice first = priced.stream().map(PricedBasket::slice)
@@ -215,6 +215,8 @@ class DeliveryService {
                 p.merchant().getName(), p.slice().subtotalCents(),
                 p.slice().deliveryFeeCents(), p.slice().discountCents(),
                 p.slice().promotionCode(), p.slice().promotionLabel())).toList(),
+            earliestScheduleFor(priced, kind, now),
+            now.plusDays(policy.scheduleMaxDays()),
             payments.required() ? available : 0,
             covers, covers ? 0 : basket.totalCents() - available);
     }
@@ -237,10 +239,16 @@ class DeliveryService {
      */
     @Transactional
     OrderDto place(UUID me, PlaceOrderRequest request) {
-        orders.findFirstByUserIdAndStatusNotInOrderByPlacedAtDesc(me, TERMINAL).ifPresent(open -> {
+        OffsetDateTime scheduledFor = request.scheduledFor();
+        // The one-order-at-a-time rule is about orders being fulfilled, so an
+        // order for Thursday does not stop somebody eating tonight — and, the
+        // other way round, tonight's dinner does not stop them planning
+        // Thursday. Checked before pricing, as it always was, because it is the
+        // cheapest way to fail.
+        if (scheduledFor == null && !orders.liveFor(me, TERMINAL).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "You already have an order in progress");
-        });
+        }
         FulfilmentKind kind = FulfilmentKind.parse(request.fulfilmentKind());
         List<PricedBasket> priced = price(me, kind, basketsOf(request.baskets(),
             request.merchantId(), request.lines(), request.promotionCode()));
@@ -256,6 +264,19 @@ class DeliveryService {
         CustomerOrder order = new CustomerOrder(me, payments.currency(),
             request.note(), now.plusMinutes(worstEta));
         order.fulfilBy(kind);
+        if (scheduledFor == null) {
+            // In front of the kitchens from this moment, which is what every
+            // order has been until this milestone.
+            order.queued(now);
+        } else {
+            if (orders.waitingFor(me, TERMINAL).size() >= policy.maxScheduledOrders()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "You already have " + policy.maxScheduledOrders()
+                        + " orders booked in — cancel one to book another");
+            }
+            requireSchedulable(scheduledFor, priced, kind, now);
+            order.scheduleFor(scheduledFor, queueAtFor(priced, kind, scheduledFor));
+        }
         // How they want it handed over, if they said. A word this build doesn't
         // recognise is the configured default rather than a 400 — checkout is
         // the worst place in the product to fail on a string, and the choice is
@@ -280,19 +301,179 @@ class DeliveryService {
             serviceFeeCents, tipFor(kind, request.tipCents()), payments.currency()));
 
         CustomerOrder saved = orders.save(order);
-        payments.hold(saved, priced.getFirst().merchant().getName()
-            + (priced.size() > 1 ? " + " + (priced.size() - 1) + " more" : ""));
+        payments.hold(saved, memoFor(priced));
         for (PricedBasket basket : priced) {
             promotions.redeem(basket.applied(), me, saved.getId());
-            // One event per kitchen: each owner is told about their slice and
-            // only their slice. Under the simulation nothing had to be told; a
-            // real kitchen that is never told has an order it can only time out.
-            events.publishEvent(new OrderPlaced(saved.getId(), me,
-                basket.merchant().getId(), basket.merchant().getName(),
-                basket.merchant().getOwnerId(), basket.slice().merchantBaseCents(),
-                saved.getCurrency(), saved.getPlacedAt()));
+        }
+        // One event per kitchen: each owner is told about their slice and only
+        // their slice. Under the simulation nothing had to be told; a real
+        // kitchen that is never told has an order it can only time out. A
+        // scheduled order announces itself when it is promoted instead — the
+        // event exists to put an order in front of a person, and doing that six
+        // hours early is doing it to somebody who will have forgotten by the
+        // time it matters.
+        if (scheduledFor == null) {
+            fulfilment.announce(saved);
         }
         return toOrderDto(saved);
+    }
+
+    /**
+     * Rewrites an order no kitchen has been told about (Phase 4 M5, SPECS §5's
+     * "modify/cancel free until promotion").
+     *
+     * <p>The vision says "before preparation begins", and this takes that
+     * literally: not before the food is started but <em>before anybody has been
+     * asked</em>. A slice sitting on a kitchen's screen is a question somebody
+     * is answering, and changing what is in it under them is not an edit — it
+     * is a different order they never agreed to. So the window is exactly the
+     * one where nothing has been asked of anybody, which in practice means a
+     * scheduled order before its promotion; an ordinary one is in front of a
+     * kitchen from the moment it is placed, and its lever is cancelling.
+     *
+     * <p><b>It is the same request the order was placed with, re-run.</b>
+     * Baskets are re-priced from the menu (never from the request, exactly as
+     * at checkout), promotions are resolved again — a code that has since
+     * expired is refused here rather than silently kept — and the hold moves by
+     * the difference. Everything the order carries is replaced rather than
+     * patched, because a partial update would need a rule for every absent
+     * field and "absent means unchanged" and "absent means cleared" would
+     * eventually both be true somewhere.
+     */
+    @Transactional
+    OrderDto change(UUID me, UUID orderId, PlaceOrderRequest request) {
+        CustomerOrder order = require(me, orderId);
+        if (!order.isChangeable()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, order.getStatus().isTerminal()
+                ? (order.getStatus() == OrderStatus.DELIVERED
+                    ? "That order has already been delivered"
+                    : "That order was cancelled")
+                : "The restaurant already has this one — cancel it if you've changed your mind");
+        }
+        FulfilmentKind kind = FulfilmentKind.parse(request.fulfilmentKind());
+        // Given back *before* re-pricing, and that ordering is the whole of why
+        // this is not simply done at the end. Resolving a code counts what this
+        // customer has already redeemed, and this order's own row is among them
+        // — so a once-per-customer code would be refused on the very order that
+        // is carrying it, telling somebody they had already used a code they are
+        // holding. Whatever survives is recorded again below, and a pricing
+        // failure takes the whole transaction with it.
+        promotions.keepOnlyRedemptions(orderId, Set.of());
+        List<PricedBasket> priced = price(me, kind, basketsOf(request.baskets(),
+            request.merchantId(), request.lines(), request.promotionCode()));
+        OffsetDateTime now = OffsetDateTime.now();
+        // Absent means "leave it where it is", which is the one field a change
+        // is allowed to say nothing about: a customer swapping a dish should
+        // not have to re-state the time, and a picker that sends the old value
+        // back would re-validate a time that has since crept inside the window.
+        OffsetDateTime scheduledFor = request.scheduledFor() == null
+            ? order.getScheduledFor() : request.scheduledFor();
+        requireSchedulable(scheduledFor, priced, kind, now);
+
+        int before = order.getTotalCents();
+        // Cleared and flushed before the rebuild, so the deletes are issued
+        // ahead of the inserts that reference the new rows.
+        order.emptyForChange();
+        orders.flush();
+
+        order.fulfilBy(kind);
+        order.chooseHandoffMode(HandoffMode.parse(request.handoffMode(),
+            policy.defaultHandoffMode()));
+        order.reNote(request.note());
+        // Wiped first, because a change can turn a delivery into a collection
+        // and {@code applyAddress} returns early on one — leaving last
+        // version's street on an order nobody is driving to.
+        order.deliverTo(null, "", "", "", null, null);
+        applyAddress(me, request, order, kind);
+        for (PricedBasket basket : priced) {
+            SubOrder subOrder = order.addSubOrder(basket.merchant().getId(),
+                basket.slice().subtotalCents(), basket.slice().deliveryFeeCents(),
+                basket.slice().discountCents(), basket.applied().promotionId(),
+                basket.applied().code());
+            if (kind.isPickup()) {
+                subOrder.collectFrom(basket.merchant().collectionAddress());
+            }
+            basket.qtyByItem().forEach((itemId, qty) -> {
+                MenuItem item = basket.items().get(itemId);
+                order.addLine(subOrder, item.getId(), item.getName(), item.getPriceCents(), qty);
+            });
+        }
+        order.priceIt(Basket.of(priced.stream().map(PricedBasket::slice).toList(),
+            serviceFeeCents, tipFor(kind, request.tipCents()), payments.currency()));
+        order.scheduleFor(scheduledFor, queueAtFor(priced, kind, scheduledFor));
+        order.revised();
+
+        // The money moves before the promotions are recorded, so a wallet that
+        // cannot cover a bigger basket takes the whole change down with it —
+        // 402, and an order still exactly as it was.
+        payments.adjustHold(order, before, memoFor(priced));
+        for (PricedBasket basket : priced) {
+            promotions.redeem(basket.applied(), me, order.getId());
+        }
+        return toOrderDto(order);
+    }
+
+    /** What the customer's statement calls it: the first kitchen, and how many
+     *  others. */
+    private static String memoFor(List<PricedBasket> priced) {
+        return priced.getFirst().merchant().getName()
+            + (priced.size() > 1 ? " + " + (priced.size() - 1) + " more" : "");
+    }
+
+    /**
+     * The earliest this exact basket could actually be ready.
+     *
+     * <p>Not a constant, which is why the client is told it rather than left to
+     * guess: it is the slowest kitchen in the cart plus the window they get to
+     * answer in, floored by the configured minimum. A picker built on a fixed
+     * "45 minutes" would offer a time this basket's slowest restaurant cannot
+     * make, and the refusal would land after the customer had chosen.
+     */
+    private OffsetDateTime earliestScheduleFor(List<PricedBasket> priced, FulfilmentKind kind,
+                                               OffsetDateTime now) {
+        return now.plusMinutes(scheduleLeadMinutes(priced, kind));
+    }
+
+    private long scheduleLeadMinutes(List<PricedBasket> priced, FulfilmentKind kind) {
+        int slowest = priced.stream().mapToInt(p -> etaOf(p.merchant(), kind)).max().orElse(30);
+        return Math.max(policy.scheduleMinLeadMinutes(),
+            slowest + policy.acceptTimeoutMinutes());
+    }
+
+    /**
+     * When the kitchens should be told: back off the slowest one's own
+     * advertised time and the window they get to answer in.
+     *
+     * <p>Computed here and stored, rather than derived on every poll, so a
+     * merchant editing their ETA cannot move an order that has already been
+     * promised to somebody.
+     */
+    private OffsetDateTime queueAtFor(List<PricedBasket> priced, FulfilmentKind kind,
+                                      OffsetDateTime scheduledFor) {
+        return scheduledFor.minusMinutes(scheduleLeadMinutes(priced, kind));
+    }
+
+    /**
+     * Refuses a time this order cannot be made for.
+     *
+     * <p>Refused rather than rounded to the nearest possible slot, and the
+     * refusal is stated as an amount of notice rather than a time of day: the
+     * server has no idea what timezone the customer is standing in, and
+     * "earliest 19:05" is a wrong sentence in most of the world. The exact
+     * instant is on the quote, where a picker can use it.
+     */
+    private void requireSchedulable(OffsetDateTime when, List<PricedBasket> priced,
+                                    FulfilmentKind kind, OffsetDateTime now) {
+        long lead = scheduleLeadMinutes(priced, kind);
+        if (when.isBefore(now.plusMinutes(lead))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "That's too soon — these restaurants need about " + lead
+                    + " minutes' notice");
+        }
+        if (when.isAfter(now.plusDays(policy.scheduleMaxDays()))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "You can book up to " + policy.scheduleMaxDays() + " days ahead");
+        }
     }
 
     /**
@@ -482,12 +663,23 @@ class DeliveryService {
         order.deliverTo(null, label, "", "", null, null);
     }
 
+    /**
+     * What is happening to this customer's food right now, and what is booked.
+     *
+     * <p>Two lists since Phase 4 M5, because a scheduled order promotes on its
+     * own clock and can land while another is in flight — refusing to promote
+     * it would be holding somebody's dinner back over a rule about screens. The
+     * flat {@code order} keeps carrying the soonest-arriving live one, which in
+     * the overwhelmingly common case is the only one there is, so a client that
+     * predates the lists renders exactly what it always did.
+     */
     @Transactional(readOnly = true)
     ActiveOrderResponse active(UUID me) {
-        return new ActiveOrderResponse(orders
-            .findFirstByUserIdAndStatusNotInOrderByPlacedAtDesc(me, TERMINAL)
-            .map(this::toOrderDto)
-            .orElse(null));
+        List<CustomerOrder> live = orders.liveFor(me, TERMINAL);
+        List<CustomerOrder> waiting = orders.waitingFor(me, TERMINAL);
+        List<OrderDto> liveDtos = decorate(live);
+        return new ActiveOrderResponse(liveDtos.isEmpty() ? null : liveDtos.getFirst(),
+            liveDtos, decorate(waiting));
     }
 
     @Transactional(readOnly = true)
@@ -724,6 +916,9 @@ class DeliveryService {
             visiblePin(order),
             proofPhotoUrl(order),
             order.getConversationId(),
+            order.getScheduledFor(),
+            order.isChangeable(),
+            order.getQueuedAt(),
             order.getPlacedAt(),
             order.getStatusChangedAt(),
             order.getEtaAt());

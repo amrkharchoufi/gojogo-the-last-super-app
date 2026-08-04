@@ -98,6 +98,45 @@ class OrderPayments {
     }
 
     /**
+     * Moves the hold to what the order now costs, after a change (Phase 4 M5).
+     *
+     * <p>A difference rather than a release-and-re-hold: the two would show up
+     * on the customer's statement as a refund and a second charge for an order
+     * they never stopped having, and a failure between them would leave the
+     * escrow empty on a live order. One movement, in whichever direction, and
+     * a bigger basket that the wallet cannot cover throws
+     * {@link com.gojogo.payments.InsufficientFundsException} before anything on
+     * the order is saved — the same 402 checkout gives, at the same moment it
+     * still means something.
+     *
+     * <p>The key carries the revision, so a customer who changes their mind
+     * three times moves money three times while a retried request moves it
+     * once.
+     */
+    void adjustHold(CustomerOrder order, int previousTotalCents, String memo) {
+        if (!required()) return;
+        if (order.getPaymentStatus() != PaymentStatus.HELD) {
+            // Nothing was ever held, because there was nothing to hold. Rare
+            // enough to be theoretical — the service fee alone makes a total
+            // positive — but "adjust a hold that does not exist" has to mean
+            // taking one rather than silently leaving an order unpaid.
+            hold(order, memo);
+            return;
+        }
+        int delta = order.getTotalCents() - previousTotalCents;
+        if (delta == 0) return;
+        WalletApi.Reference reference =
+            WalletApi.Reference.of(REF_KIND, order.getId(), "Order changed");
+        if (delta > 0) {
+            wallet.hold(OwnerKind.USER, order.getUserId(), delta, reference,
+                key(order, "hold:r" + order.getRevision()));
+        } else {
+            wallet.release(OwnerKind.USER, order.getUserId(), -delta, reference,
+                key(order, "release:r" + order.getRevision()));
+        }
+    }
+
+    /**
      * Splits what is left of the hold at delivery: each surviving merchant
      * their base minus commission, the platform every commission plus the
      * service fee, the courier every delivery fee and the tip. Idempotent on

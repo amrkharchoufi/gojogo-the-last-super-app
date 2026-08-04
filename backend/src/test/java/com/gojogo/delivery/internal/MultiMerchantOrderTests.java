@@ -82,8 +82,6 @@ class MultiMerchantOrderTests {
         when(promotions.resolve(any(), any(), isNull(), anyInt(), anyInt(), anyBoolean()))
             .thenReturn(PromotionService.Applied.none());
         when(orders.save(any())).thenAnswer(returnsFirstArg());
-        when(orders.findFirstByUserIdAndStatusNotInOrderByPlacedAtDesc(any(), any()))
-            .thenReturn(Optional.empty());
         when(payments.currency()).thenReturn("USD");
     }
 
@@ -116,7 +114,7 @@ class MultiMerchantOrderTests {
     @Test
     void theLegacySingleMerchantShapeStillPlaces() {
         OrderDto placed = delivery.place(ME, new PlaceOrderRequest(FORNO,
-            List.of(new OrderLineRequest(PIZZA_ITEM, 1)), null, null, "Home", "", null, 0, null, null));
+            List.of(new OrderLineRequest(PIZZA_ITEM, 1)), null, null, "Home", "", null, 0, null, null, null));
 
         assertThat(placed.subOrders()).hasSize(1);
         assertThat(placed.totalCents()).isEqualTo(2_000 + 300 + 99);
@@ -151,7 +149,7 @@ class MultiMerchantOrderTests {
     @Test
     void aRequestWithNeitherShapeIsA400() {
         assertThatThrownBy(() -> delivery.place(ME, new PlaceOrderRequest(null, null, null,
-            null, "Home", "", null, 0, null, null)))
+            null, "Home", "", null, 0, null, null, null)))
             .isInstanceOf(ResponseStatusException.class)
             .extracting(e -> ((ResponseStatusException) e).getStatusCode())
             .isEqualTo(HttpStatus.BAD_REQUEST);
@@ -159,26 +157,27 @@ class MultiMerchantOrderTests {
 
     // MARK: Who is told
 
-    /** Each kitchen is told about their slice and only their slice — a push
-     *  naming somebody else's food is a push about an order you can't find. */
+    /**
+     * An ordinary order announces itself the moment it is placed, with every
+     * kitchen on it.
+     *
+     * <p>The announcement itself moved into {@code OrderFulfilmentService} in
+     * Phase 4 M5, so that an order placed now and a scheduled one promoted at
+     * seven o'clock tell their kitchens through the same code — what is checked
+     * here is that placement still triggers it, and what each kitchen is told
+     * is checked where it is now built ({@code ScheduledOrderTests}).
+     */
     @Test
-    void oneOrderPlacedEventPerKitchen() {
+    void placingAnnouncesToTheKitchensImmediately() {
         delivery.place(ME, request(basket(FORNO, PIZZA_ITEM, 2), basket(SUSHI, ROLL_ITEM, 1)));
 
-        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
-        org.mockito.Mockito.verify(events, org.mockito.Mockito.atLeast(2))
-            .publishEvent(published.capture());
-        List<OrderPlaced> placedEvents = published.getAllValues().stream()
-            .filter(OrderPlaced.class::isInstance)
-            .map(OrderPlaced.class::cast)
-            .toList();
-        assertThat(placedEvents).hasSize(2);
-        assertThat(placedEvents).extracting(OrderPlaced::merchantId)
+        ArgumentCaptor<CustomerOrder> announced = ArgumentCaptor.forClass(CustomerOrder.class);
+        org.mockito.Mockito.verify(fulfilment).announce(announced.capture());
+        assertThat(announced.getValue().getSubOrders()).extracting(SubOrder::getMerchantId)
             .containsExactlyInAnyOrder(FORNO, SUSHI);
-        assertThat(placedEvents).filteredOn(e -> e.merchantId().equals(SUSHI))
-            .singleElement()
-            .extracting(OrderPlaced::totalCents)
-            .isEqualTo(3_000L);
+        // In front of them from this moment, which is the fact the kitchen's
+        // queue and the accept timeout are both read off.
+        assertThat(announced.getValue().getQueuedAt()).isNotNull();
     }
 
     // MARK: A shared promotion code
@@ -244,7 +243,7 @@ class MultiMerchantOrderTests {
         SubOrder sushiSlice = order.getSubOrders().getLast();
         UUID sliceId = UUID.randomUUID();
         set(sushiSlice, "id", sliceId);
-        sushiSlice.accepted(java.time.OffsetDateTime.now(), 20);
+        sushiSlice.accepted(java.time.OffsetDateTime.now(), 20, null);
 
         assertThatThrownBy(() -> delivery.cancelSubOrder(ME, orderId, sliceId))
             .isInstanceOf(ResponseStatusException.class)
@@ -255,7 +254,7 @@ class MultiMerchantOrderTests {
 
     private PlaceOrderRequest request(BasketRequest... baskets) {
         return new PlaceOrderRequest(null, null, List.of(baskets), null, "Home", "",
-            null, 0, null, null);
+            null, 0, null, null, null);
     }
 
     private static BasketRequest basket(UUID merchantId, UUID itemId, int qty) {

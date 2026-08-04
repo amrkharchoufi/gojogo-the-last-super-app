@@ -78,8 +78,6 @@ class PickupOrderTests {
         when(promotions.resolve(any(), any(), isNull(), anyInt(), anyInt(), anyBoolean()))
             .thenReturn(PromotionService.Applied.none());
         when(orders.save(any())).thenAnswer(returnsFirstArg());
-        when(orders.findFirstByUserIdAndStatusNotInOrderByPlacedAtDesc(any(), any()))
-            .thenReturn(Optional.empty());
         when(payments.currency()).thenReturn("USD");
     }
 
@@ -120,7 +118,7 @@ class PickupOrderTests {
     void aDeliveryStillPricesExactlyAsItDid() {
         OrderDto placed = delivery.place(ME, new PlaceOrderRequest(FORNO,
             List.of(new OrderLineRequest(PIZZA_ITEM, 1)), null, null, "Home", "",
-            null, 250, null, null));
+            null, 250, null, null, null));
 
         assertThat(placed.fulfilmentKind()).isEqualTo("DELIVERY");
         assertThat(placed.deliveryFeeCents()).isEqualTo(300);
@@ -209,7 +207,7 @@ class PickupOrderTests {
     void aDeliveryTellsItTheOppositeAndPassesTheRealFee() {
         delivery.place(ME, new PlaceOrderRequest(FORNO,
             List.of(new OrderLineRequest(PIZZA_ITEM, 1)), null, null, "Home", "",
-            null, 0, null, null));
+            null, 0, null, null, null));
 
         verify(promotions).resolve(eq(FORNO), eq(ME), isNull(), eq(2_000), eq(300), eq(false));
     }
@@ -218,7 +216,7 @@ class PickupOrderTests {
 
     private PlaceOrderRequest pickup(int tipCents, BasketRequest... baskets) {
         return new PlaceOrderRequest(null, null, List.of(baskets), null, null, "",
-            null, tipCents, null, "PICKUP");
+            null, tipCents, null, "PICKUP", null);
     }
 
     private static BasketRequest basket(UUID merchantId, UUID itemId, int qty) {

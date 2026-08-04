@@ -92,6 +92,32 @@ class DeliveryPolicy {
         return Math.max(1, config.number("delivery.dropoff.minutes", 15));
     }
 
+    // MARK: Scheduling (Phase 4 M5)
+
+    /**
+     * The floor on how far ahead an order may be scheduled — a floor and not
+     * the whole rule. The real minimum is this or the slowest kitchen's own
+     * advertised time plus {@link #acceptTimeoutMinutes()}, whichever is later,
+     * because an order that has to reach a queue in the past is not schedulable
+     * however keen anybody is.
+     */
+    long scheduleMinLeadMinutes() {
+        return Math.max(1, config.number("delivery.schedule.min.lead.minutes", 45));
+    }
+
+    /** How far ahead an order may be scheduled — a cap on how long the
+     *  customer's money sits in escrow as much as on the calendar. */
+    long scheduleMaxDays() {
+        return Math.clamp(config.number("delivery.schedule.max.days", 7), 1, 90);
+    }
+
+    /** How many scheduled orders one customer may have waiting. Each holds its
+     *  own money, so the wallet is the real limit; this stops a mistake being
+     *  unbounded. */
+    int maxScheduledOrders() {
+        return (int) Math.clamp(config.number("delivery.order.max.scheduled", 5), 1, 50);
+    }
+
     // MARK: Handoff integrity (Phase 4 M2)
 
     /**

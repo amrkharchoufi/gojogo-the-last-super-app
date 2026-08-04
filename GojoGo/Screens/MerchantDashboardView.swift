@@ -670,6 +670,21 @@ private struct MerchantOrderCard: View {
                     .foregroundStyle(GGColor.textPrimary)
             }
 
+            // Booked for a time (Phase 4 M5), and this is the one thing the
+            // kitchen has to be told about one: the prep picker below answers
+            // "how long do I need", not "when do I start", so without this line
+            // an eight o'clock dinner accepted at six looks like food wanted in
+            // twenty minutes. The server anchors readiness to the booking
+            // either way — this is so the person reading the screen knows that.
+            if let when = order.scheduledAt {
+                Text("Booked for \(AppState.deliveryScheduleLabel(when))")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(GGColor.ink(0.10)))
+            }
+
             // A kitchen with food ready and nobody coming for it needs to know
             // before the food does. Silence here would be the cruellest possible
             // way to find out.

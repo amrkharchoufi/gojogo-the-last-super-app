@@ -19,6 +19,14 @@ import java.util.UUID;
  * slice, and {@code totalCents} is that slice's food value after its own
  * discount rather than the whole checkout.
  *
+ * <p><b>Since Phase 4 M5 it is published when the kitchen is told, which for a
+ * scheduled order is not when the customer placed it.</b> That follows from
+ * what the event is for: it exists to put an order in front of a person, and a
+ * push at noon about an eight o'clock dinner is a push somebody will have
+ * forgotten by the time it matters. {@code placedAt} still means what it says —
+ * when the customer ordered — so a consumer that needs "how long has this been
+ * in front of me" must not read it as that.
+ *
  * @param merchantOwnerId the profile that manages the restaurant, i.e. the phone
  *                        that should light up
  */

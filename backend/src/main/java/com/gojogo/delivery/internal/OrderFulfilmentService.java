@@ -1,5 +1,6 @@
 package com.gojogo.delivery.internal;
 
+import com.gojogo.delivery.OrderPlaced;
 import com.gojogo.delivery.OrderStatusChanged;
 import com.gojogo.dispatch.Assignment;
 import com.gojogo.dispatch.DispatchApi;
@@ -166,7 +167,7 @@ class OrderFulfilmentService {
             : Math.min(requestedPrepMinutes, policy.maxPrepMinutes());
 
         OffsetDateTime now = OffsetDateTime.now();
-        sub.accepted(now, prep);
+        sub.accepted(now, prep, targetReadyAt(order));
         int digits = policy.handoffCodeLength();
         // The same code either way — it is minted here, at this counter, for
         // this slice, and what changes with the fulfilment kind is only who
@@ -360,6 +361,26 @@ class OrderFulfilmentService {
                 ? latest
                 : latest.plusMinutes(policy.dropoffMinutes()));
         }
+    }
+
+    /**
+     * When a <em>scheduled</em> order wants its food ready, or null for an
+     * ordinary one (Phase 4 M5).
+     *
+     * <p>Backed off the promised moment by the journey for a delivery, and
+     * exactly the promised moment for a collection — the customer is walking
+     * there themselves and the food should be on the counter when they arrive,
+     * not fifteen minutes earlier going cold.
+     *
+     * <p>This is what stops a kitchen accepting at 18:15 with a twenty-minute
+     * estimate from having an eight o'clock dinner cooked by 18:35. Their
+     * estimate keeps its meaning — how long they need, not when they start.
+     */
+    private OffsetDateTime targetReadyAt(CustomerOrder order) {
+        if (!order.isScheduled()) return null;
+        return order.isPickup()
+            ? order.getScheduledFor()
+            : order.getScheduledFor().minusMinutes(policy.dropoffMinutes());
     }
 
     /**
@@ -804,6 +825,79 @@ class OrderFulfilmentService {
             toCourierJobDto(order));
     }
 
+    // MARK: Scheduling (Phase 4 M5, called by ScheduledOrderJob)
+
+    /** Scheduled orders whose moment has come. */
+    @Transactional(readOnly = true)
+    List<UUID> dueForQueueIds(int limit) {
+        return orders.dueForQueue(OffsetDateTime.now(), TERMINAL, PageRequest.of(0, limit));
+    }
+
+    /**
+     * Puts a scheduled order in front of its kitchens.
+     *
+     * <p>Everything an ordinary order gets at checkout, happening now instead:
+     * the queue row appears, the accept timeout starts counting, and each owner
+     * is told about their own slice. Nothing about the order itself moves —
+     * it was CONFIRMED before this ran and it is CONFIRMED after, because
+     * "waiting for the restaurant to answer" is what it was already and what it
+     * still is. The stamp is the whole transition.
+     *
+     * <p><b>A kitchen that has closed since is cancelled here rather than left
+     * to time out.</b> Ten minutes of a customer waiting to find out that a
+     * restaurant which shut on Tuesday is not going to answer is ten minutes
+     * nobody needed to spend, and the money goes back in the same movement. If
+     * every kitchen has closed, the order ends with it.
+     *
+     * <p>Idempotent on the stamp: a redelivered promotion, or two instances
+     * polling at once, finds the order already queued and returns.
+     */
+    @Transactional
+    void promote(UUID orderId) {
+        CustomerOrder order = orders.findById(orderId).orElse(null);
+        if (order == null || order.getQueuedAt() != null || order.getStatus().isTerminal()) {
+            return;
+        }
+        order.queued(OffsetDateTime.now());
+        Map<UUID, Merchant> byId = merchantsOf(List.of(order));
+        // Copied before cancelling anything: cancelSubOrder walks the same
+        // collection, and the last cancellation ends the order underneath us.
+        List<SubOrder> slices = List.copyOf(order.getSubOrders());
+        for (SubOrder sub : slices) {
+            if (sub.getStatus() != SubOrderStatus.CONFIRMED) continue;
+            Merchant merchant = byId.get(sub.getMerchantId());
+            if (merchant == null || !merchant.isOpenForOrders()) {
+                cancelSubOrder(order, sub, (merchant == null ? "That restaurant" : merchant.getName())
+                    + " isn't taking orders — you haven't been charged for it");
+            }
+        }
+        if (!order.getStatus().isTerminal()) {
+            announce(order);
+        }
+    }
+
+    /**
+     * Tells every kitchen on a live order that it is waiting for them.
+     *
+     * <p>One event per slice, each carrying only that merchant's own food
+     * value: a push naming somebody else's dinner is a push about an order they
+     * cannot find. Published from here rather than from checkout since Phase 4
+     * M5, so that an ordinary order and a promoted one announce themselves the
+     * same way and there is one place that decides what a kitchen is told.
+     */
+    void announce(CustomerOrder order) {
+        Map<UUID, Merchant> byId = merchantsOf(List.of(order));
+        for (SubOrder sub : order.getSubOrders()) {
+            if (sub.getStatus() != SubOrderStatus.CONFIRMED) continue;
+            Merchant merchant = byId.get(sub.getMerchantId());
+            if (merchant == null) continue;
+            events.publishEvent(new OrderPlaced(order.getId(), order.getUserId(),
+                merchant.getId(), merchant.getName(), merchant.getOwnerId(),
+                sub.getSubtotalCents() - sub.getDiscountCents(),
+                order.getCurrency(), order.getPlacedAt()));
+        }
+    }
+
     // MARK: Timeouts (called by OrderTimeoutJob)
 
     /**
@@ -1001,6 +1095,11 @@ class OrderFulfilmentService {
             order.isPickup() ? "" : sub.getPickupCode(),
             order.getFulfilmentKind().name(),
             sub.getReadyMarkedAt() != null,
+            // Null on an ordinary order. The kitchen has to be told, because
+            // their estimate answers "how long do you need" and not "when will
+            // you start" — a scheduled slice accepted an hour early with a
+            // twenty-minute estimate is not food wanted in twenty minutes.
+            order.getScheduledFor(),
             order.getPlacedAt(), sub.getAcceptedAt(), sub.getReadyAt(),
             order.getStatusChangedAt());
     }

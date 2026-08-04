@@ -225,6 +225,16 @@ record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinute
                 Integer rating,
                 String handoffMode, String deliveryPin, String proofPhotoUrl,
                 UUID conversationId,
+                /* Scheduling (Phase 4 M5). {@code scheduledFor} is null on an
+                 * ordinary order and is what a client shows instead of a
+                 * countdown — a "4320 min" ETA is arithmetic, not information.
+                 * {@code changeable} is the server's own answer to "can this
+                 * still be edited", computed rather than re-derived on the
+                 * client for the same reason {@code SubOrderDto.cancellable}
+                 * is: a rule with two definitions drifts. {@code queuedAt} is
+                 * when the kitchens were told, which is the moment it stopped
+                 * being editable. */
+                OffsetDateTime scheduledFor, boolean changeable, OffsetDateTime queuedAt,
                 OffsetDateTime placedAt, OffsetDateTime statusChangedAt, OffsetDateTime etaAt) {
 }
 
@@ -272,6 +282,15 @@ record MerchantOrderDto(UUID id, String status, List<OrderLineDto> lines,
                          * code, so a kitchen that could read it could hand the
                          * food to nobody and settle the order. */
                         String fulfilmentKind, boolean readyMarked,
+                        /* When the customer asked for it (Phase 4 M5), or null
+                         * for an ordinary order. The one thing a kitchen must
+                         * be told about a scheduled order: accepting at 18:15
+                         * with a prep of twenty minutes does not mean the food
+                         * is wanted at 18:35, and a screen that did not say so
+                         * would have somebody cooking an eight o'clock dinner
+                         * two hours early. The prep estimate keeps its meaning
+                         * — how long they need, not when they start. */
+                        OffsetDateTime scheduledFor,
                         OffsetDateTime placedAt, OffsetDateTime acceptedAt,
                         OffsetDateTime readyAt, OffsetDateTime statusChangedAt) {
 }
@@ -440,6 +459,13 @@ record QuoteDto(int subtotalCents, int deliveryFeeCents, int serviceFeeCents,
                 /* The per-merchant breakdown (Phase 4 M3), so a checkout sheet
                  * can group by kitchen. Sums to the flat fields above. */
                 List<MerchantQuoteDto> merchants,
+                /* The window a scheduled order may land in (Phase 4 M5), for
+                 * this exact basket. The earliest is not a constant — it is
+                 * the slowest kitchen in the cart plus the window they get to
+                 * answer in, floored by config — so the server computes it
+                 * here rather than leaving a picker to guess and be refused
+                 * afterwards. */
+                OffsetDateTime earliestScheduleAt, OffsetDateTime latestScheduleAt,
                 long walletAvailableMinor, boolean walletCovers, long shortfallMinor) {
 }
 
@@ -522,8 +548,24 @@ record PayoutDto(UUID id, long amountMinor, String currency, String status,
                  String failureReason) {
 }
 
-/** Wrapper so "no order in flight" is a 200 with {@code order: null}, not a 404. */
-record ActiveOrderResponse(OrderDto order) {
+/**
+ * Wrapper so "no order in flight" is a 200 with {@code order: null}, not a 404.
+ *
+ * <p>Two lists since Phase 4 M5, and both are additive — {@code order} keeps
+ * carrying the one a client draws its tracking card from, which in the
+ * overwhelmingly common case is the only live order there is.
+ *
+ * @param orders every order actually being fulfilled, soonest first. More than
+ *               one is possible now: a scheduled order promotes on its own
+ *               clock and can land while another is in flight, and holding
+ *               somebody's dinner back over a rule about screens would be the
+ *               worse answer
+ * @param scheduled orders no kitchen has been told about yet — upcoming, still
+ *               free to change or cancel, and deliberately <em>not</em> in
+ *               {@code orders}: an order three days away is not in flight, and
+ *               a countdown for one is arithmetic rather than information
+ */
+record ActiveOrderResponse(OrderDto order, List<OrderDto> orders, List<OrderDto> scheduled) {
 }
 
 record OrderLineRequest(@NotNull UUID menuItemId, @Min(1) @Max(50) int qty) {
@@ -556,7 +598,16 @@ record PlaceOrderRequest(UUID merchantId,
                           * offer collection is refused out loud — that is a
                           * refusal somebody can act on, unlike being silently
                           * given the other kind. */
-                         @Size(max = 16) String fulfilmentKind) {
+                         @Size(max = 16) String fulfilmentKind,
+                         /* When the customer wants it (Phase 4 M5), or null
+                          * for "now" — which is what every client that
+                          * predates this field sends, and what the great
+                          * majority of orders are. Refused rather than
+                          * rounded when it is too soon or too far out, with
+                          * the message naming the earliest time that would
+                          * have worked: silently moving somebody's dinner is
+                          * worse than telling them it cannot be then. */
+                         OffsetDateTime scheduledFor) {
 }
 
 record RateOrderRequest(@Min(1) @Max(5) int rating) {
