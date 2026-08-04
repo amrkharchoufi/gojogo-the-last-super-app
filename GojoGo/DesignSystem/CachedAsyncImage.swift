@@ -36,10 +36,26 @@ final class ImageCache {
         if let hit = memoryImage(for: url) { return hit }
         if let disk = await diskImage(for: url) { return disk }
 
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (raw, _) = try await URLSession.shared.data(from: url)
+        // E2EE Phase D: chat attachments arrive as ciphertext. The key is looked
+        // up by URL, so this is the one place that has to know — every caller
+        // (`MediaImage`, feed cells, avatars, the viewer) is untouched, and a
+        // URL with no key is used exactly as before, which is what keeps
+        // non-chat images and pre-Phase-D attachments rendering.
+        let data = try Self.decrypted(raw, for: url)
         guard let image = UIImage(data: data) else { throw CacheError.decodeFailed }
+        // Plaintext on both tiers, deliberately: caching ciphertext would mean
+        // decrypting on every scroll tick, and the disk cache already holds
+        // decoded photos from every other surface in the app.
         store(image, data: data, for: url)
         return image
+    }
+
+    /// Decrypts a chat attachment; returns the bytes untouched when there is no
+    /// key for this URL.
+    static func decrypted(_ data: Data, for url: URL) throws -> Data {
+        guard let key = WorldMediaKeyStore.shared.key(for: url) else { return data }
+        return try WorldMediaCrypto.open(data, key: key)
     }
 
     private func store(_ image: UIImage, data: Data, for url: URL) {

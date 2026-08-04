@@ -118,6 +118,47 @@ final class WorldSignalStore {
         "\(address.name).\(address.deviceId)"
     }
 
+    // MARK: Teardown
+
+    /// Drops the session and stored identity for one peer.
+    ///
+    /// Called when a peer's identity key changes — a reinstall, or a
+    /// substitution, and this device cannot tell the two apart. Keeping the old
+    /// material would refuse every future message from them forever; dropping
+    /// it lets a fresh session form, which is why the caller also surfaces the
+    /// change rather than swallowing it.
+    func forgetPeer(_ address: ProtocolAddress) {
+        lock.lock(); defer { lock.unlock() }
+        let name = Self.file(for: address)
+        try? FileManager.default.removeItem(at: url("sessions", name))
+        try? FileManager.default.removeItem(at: url("identities", name))
+    }
+
+    /// Sign-out. Everything here is bound to the account that just left:
+    /// sessions are ratchets with *their* contacts, the prekeys are halves of
+    /// bundles published under *their* profile, and `meta.json` records that
+    /// those keys were published.
+    ///
+    /// Skipping this would be worse than untidy. `hasPublishedKeys` would still
+    /// read true for the next account on this device, so `WorldKeyPublisher`
+    /// would never publish for them — they would be undiscoverable in the
+    /// directory while the store insisted otherwise.
+    func wipe() {
+        lock.lock(); defer { lock.unlock() }
+        let fm = FileManager.default
+        try? fm.removeItem(at: root)
+        for sub in ["sessions", "prekeys", "signed-prekeys", "kyber-prekeys", "identities"] {
+            try? fm.createDirectory(
+                at: root.appendingPathComponent(sub, isDirectory: true),
+                withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        }
+        var noBackup = root
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? noBackup.setResourceValues(values)
+    }
+
     enum StoreError: Error {
         case missingRecord(String)
     }

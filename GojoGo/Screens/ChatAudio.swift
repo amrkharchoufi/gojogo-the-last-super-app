@@ -91,7 +91,13 @@ final class ChatAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                     throw URLError(.badServerResponse)
                 }
-                try data.write(to: cached, options: .atomic)
+                // E2EE Phase D: a voice note arrives as ciphertext. Decrypting
+                // before the cache write means the player, the ticker and the
+                // waveform all keep dealing in an ordinary local m4a — and a
+                // note with no key (any sent before Phase D) passes straight
+                // through untouched.
+                let plain = try ImageCache.decrypted(data, for: url)
+                try plain.write(to: cached, options: .atomic)
                 guard !Task.isCancelled else { return }
                 self?.loadingID = nil
                 self?.start(messageID: messageID, file: cached)

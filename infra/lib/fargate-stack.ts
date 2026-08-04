@@ -177,6 +177,10 @@ export class GojoGoFargateStack extends cdk.Stack {
       taskRole,
     });
 
+    // Empty unless a deploy explicitly asks for it — see the two WORLD_ vars below.
+    const worldDevOtpCode =
+      (this.node.tryGetContext('worldDevOtpCode') as string | undefined) ?? '';
+
     taskDef.addContainer('backend', {
       image: ecs.ContainerImage.fromEcrRepository(props.repository, props.imageTag),
       portMappings: [{ containerPort: 8080 }],
@@ -195,10 +199,23 @@ export class GojoGoFargateStack extends cdk.Stack {
         MEDIA_CLEANUP_DELETE: 'false',
         MESSAGING_TABLE: props.messagingTable.tableName,
         MESSAGING_WS_ENDPOINT: props.webSocketStage.callbackUrl,
-        // No WORLD_OTP_DEV_CODE: it is accepted alongside the real SMS code
-        // (WorldService.verifyPhone), so shipping any value here is a universal
-        // phone-verification bypass. Unset, the backend defaults it to empty and
-        // the bypass is off. Set it only in a throwaway non-prod deploy.
+        // Phone verification. `worldDevOtpCode` is a **universal
+        // phone-verification bypass**: anyone who knows the code verifies any
+        // number, as anyone. It exists because SNS SMS is not usable in this
+        // account (sandbox — only pre-verified destinations), which leaves the
+        // fallback as the only way through.
+        //
+        // The two variables are set together and never separately. The backend
+        // honours the code only while SMS is off (WorldProperties.hasDevCode),
+        // so a deploy that set just the code would ship a dead switch, and one
+        // that set just the flag would turn verification off with nothing in its
+        // place. One context flag drives both, which makes the misconfiguration
+        // WorldSmsSender.announce() warns about unrepresentable from here.
+        //
+        // Unset the flag the day SNS SMS leaves the sandbox — see PROGRESS #3.
+        //   cdk deploy GojoGoFargateStack -c worldDevOtpCode=424242
+        WORLD_OTP_DEV_CODE: worldDevOtpCode,
+        WORLD_SMS_ENABLED: worldDevOtpCode ? 'false' : 'true',
         WORLD_SMS_SENDER_ID: 'GojoGo',
         APNS_KEY_ID: '9W7A69BV93',
         APNS_TEAM_ID: 'T8348X4CNY',

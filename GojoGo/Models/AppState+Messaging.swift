@@ -26,6 +26,9 @@ extension AppState {
         WorldSocket.shared.onStatusChange = { [weak self] connected in
             withAnimation(.ggSnappy) { self?.worldRealtimeConnected = connected }
         }
+        MessagingStore.shared.peerIdentityChanged = { [weak self] conversationId, peerId in
+            self?.noteWorldIdentityChange(in: conversationId, peer: peerId)
+        }
         await loadWorldProfile()
 
         // The feed and the messages list are two fetches for one screen, so they
@@ -535,6 +538,38 @@ extension AppState {
         }
     }
 
+    /// Drops the neutral in-thread line when a contact's identity key changes.
+    ///
+    /// Per the plan's "new device" decision this is a line, never a modal: the
+    /// overwhelmingly common cause is a reinstall, and a scary interstitial for
+    /// a routine event teaches people to dismiss the warning that matters. The
+    /// strong version is reserved for a mismatch on a contact the user has
+    /// explicitly verified — which needs safety numbers (Phase E) to exist.
+    ///
+    /// Deferred a turn on purpose: the change is discovered inside the
+    /// wire→model mapping, and a conversation mutated mid-reconcile would be
+    /// overwritten by the page the caller is still assembling.
+    private func noteWorldIdentityChange(in conversationId: UUID, peer: UUID) {
+        Task { @MainActor [weak self] in
+            guard let self,
+                  let i = self.worldConversations.firstIndex(where: { $0.id == conversationId })
+            else { return }
+            let name = self.worldDisplayName(
+                for: peer,
+                fallback: MessagingStore.shared.otherParticipant(in: conversationId)?.displayName)
+                ?? "This contact"
+            let line = "\(name) is using a new device."
+            // One notice per run of messages — a refetch that re-opens several
+            // of their messages must not stack the same sentence.
+            if self.worldConversations[i].messages.last(where: { $0.kind == .system })?.text == line {
+                return
+            }
+            self.worldConversations[i].messages.append(
+                WorldMessage(kind: .system, text: line))
+            self.archiveWorldMessages(conversationId)
+        }
+    }
+
     /// Snapshots a thread into the on-device archive. Called from every site
     /// that mutates a conversation's messages; the archive debounces, so the
     /// cost of calling it liberally is one write per burst.
@@ -580,6 +615,23 @@ extension AppState {
     /// can't carry (staged image bytes, the local recording) is carried over.
     private func merging(server: WorldMessage, local: WorldMessage) -> WorldMessage {
         var merged = server
+        // E2EE: the one place the server does *not* win. A sealed body is spent
+        // after one read, so a refetch of a message this device already opened
+        // comes back unreadable — and the copy on screen (from the archive, or
+        // from the socket a moment ago) is the real content. Letting the server
+        // win here would turn history into error bubbles on every reload, which
+        // is the failure mode the local-first store exists to prevent.
+        if merged.isUndecryptable, !local.isUndecryptable {
+            merged.kind = local.kind
+            merged.text = local.text
+            merged.replyTo = local.replyTo
+            merged.durationLabel = local.durationLabel
+            merged.fileName = local.fileName
+            merged.fileMeta = local.fileMeta
+            merged.latitude = local.latitude
+            merged.longitude = local.longitude
+            merged.isUndecryptable = false
+        }
         if merged.imageData == nil { merged.imageData = local.imageData }
         if merged.localAudioURL == nil { merged.localAudioURL = local.localAudioURL }
         if merged.carouselItems.isEmpty { merged.carouselItems = local.carouselItems }
@@ -623,6 +675,17 @@ extension AppState {
                   replyToId: UUID? = nil, scheduledAt: Date? = nil) {
         Task {
             do {
+                // E2EE Phase D: whether this message's attachments go up
+                // encrypted has to be settled *before* the first upload, and
+                // the answer is the same one `envelopeBody` will reach later —
+                // is there a session with this peer. Asking now also opens the
+                // session once instead of twice.
+                //
+                // Anything that isn't a sealed 1:1 message uploads exactly as
+                // it always did: a readable envelope would carry the key beside
+                // the URL, which protects nothing and would only make the
+                // server's copy *look* encrypted.
+                let sealer = WorldMediaSealer(active: await canSealMedia(in: conversationId))
                 var mediaItems: [WorldMediaItemDTO]? = nil
                 switch msg.kind {
                 case .photo:
@@ -631,7 +694,8 @@ extension AppState {
                     if let existing = msg.imageURL {
                         mediaItems = [WorldMediaItemDTO(imageUrl: existing, videoUrl: nil,
                                                         isVideo: false, durationLabel: nil)]
-                    } else if let data = msg.imageData, let url = try await uploadWorldImage(data) {
+                    } else if let data = msg.imageData,
+                              let url = try await uploadWorldImage(data, via: sealer) {
                         mediaItems = [WorldMediaItemDTO(imageUrl: url, videoUrl: nil,
                                                         isVideo: false, durationLabel: nil)]
                     }
@@ -639,11 +703,11 @@ extension AppState {
                     // Poster *and* the movie itself, so the other side can open it.
                     var poster = msg.imageURL
                     if poster == nil, let data = msg.imageData {
-                        poster = try await uploadWorldImage(data)
+                        poster = try await uploadWorldImage(data, via: sealer)
                     }
                     var movie = msg.videoURL
                     if movie == nil, let local = msg.localVideoURL {
-                        movie = try await uploadWorldVideo(local)
+                        movie = try await uploadWorldVideo(local, via: sealer)
                         if let movie { adoptUploadedVideo(movie, for: msg.id, in: conversationId) }
                     }
                     if poster != nil || movie != nil {
@@ -653,14 +717,15 @@ extension AppState {
                 case .sticker:
                     // PNG keeps the alpha edge that makes a sticker a sticker.
                     if let data = msg.imageData {
-                        let url = try await APIClient.shared.uploadMedia(data, contentType: "image/png")
+                        let url = try await sealer.upload(data, contentType: "image/png")
                         mediaItems = [WorldMediaItemDTO(imageUrl: url, videoUrl: nil,
                                                         isVideo: false, durationLabel: nil)]
                     }
                 case .audio:
                     // The recorded m4a rides in `videoUrl` — the media item is the
                     // wire's only file slot, and `isVideo: false` marks it audio.
-                    if let local = msg.localAudioURL, let url = try await uploadWorldAudio(local) {
+                    if let local = msg.localAudioURL,
+                       let url = try await uploadWorldAudio(local, via: sealer) {
                         mediaItems = [WorldMediaItemDTO(imageUrl: nil, videoUrl: url,
                                                         isVideo: false,
                                                         durationLabel: msg.durationLabel)]
@@ -676,11 +741,11 @@ extension AppState {
                     for slide in msg.carouselItems {
                         var poster = slide.imageURL
                         if poster == nil, !slide.imageData.isEmpty {
-                            poster = try await uploadWorldImage(slide.imageData)
+                            poster = try await uploadWorldImage(slide.imageData, via: sealer)
                         }
                         var movie = slide.videoURL
                         if movie == nil, let local = slide.localVideoURL {
-                            movie = try await uploadWorldVideo(local)
+                            movie = try await uploadWorldVideo(local, via: sealer)
                         }
                         guard poster != nil || movie != nil else { continue }
                         items.append(WorldMediaItemDTO(imageUrl: poster, videoUrl: movie,
@@ -696,9 +761,9 @@ extension AppState {
                             options: local.options.map { PollOptionDTO(id: $0.id, text: $0.text, voters: []) },
                             allowsMultiple: local.allowsMultiple)
                 }
-                let body = try envelopeBody(for: msg, mediaItems: mediaItems, poll: poll,
-                                            replyToId: replyToId, scheduledAt: scheduledAt,
-                                            in: conversationId)
+                let body = try await envelopeBody(for: msg, mediaItems: mediaItems, poll: poll,
+                                                  replyToId: replyToId, scheduledAt: scheduledAt,
+                                                  in: conversationId, sealer: sealer)
                 _ = try await MessagingStore.shared.send(conversationId, body: body)
             } catch {
                 #if DEBUG
@@ -718,12 +783,19 @@ extension AppState {
     /// content, so for envelope sends they ride inside the payload and the
     /// legacy geo media item is not sent at all.
     ///
-    /// No plaintext fallback on failure, deliberately: once Phase C lands, a
-    /// quiet "couldn't seal, sent readable instead" would be a downgrade
-    /// attack surface. A message that can't be sealed isn't sent.
+    /// No plaintext fallback on failure, deliberately: a quiet "couldn't seal,
+    /// sent readable instead" is a downgrade attack surface. A message that
+    /// can't be sealed isn't sent.
+    ///
+    /// The one exception, and the exact shape of Phase C's "mixed threads keep
+    /// working": a peer who has published **no key bundle at all** has nothing
+    /// to seal to, and gets the Phase A envelope. That is a property of the
+    /// peer, not of this attempt — so once a session with them exists, this
+    /// path is closed and a failure throws instead of downgrading.
     private func envelopeBody(for msg: WorldMessage, mediaItems: [WorldMediaItemDTO]?,
                               poll: PollDTO?, replyToId: UUID?, scheduledAt: Date?,
-                              in conversationId: UUID) throws -> SendMessageBody {
+                              in conversationId: UUID,
+                              sealer: WorldMediaSealer? = nil) async throws -> SendMessageBody {
         let convo = worldConversations.first { $0.id == conversationId }
         let scheduled = scheduledAt.map { Self.iso8601($0) }
         guard WorldEnvelope.sendingEnabled, msg.kind != .poll, !(convo?.isGroup ?? false) else {
@@ -735,6 +807,14 @@ extension AppState {
 
         var payload = WorldEnvelopePayload(kind: wireKind(msg.kind))
         payload.text = msg.text.nilIfBlank
+        // Phase D: the keys to this message's attachments ride inside the same
+        // sealed body as its text, so the ratchet protects both or neither.
+        if let sealer, !sealer.keys.isEmpty {
+            payload.mediaKeys = sealer.keys
+            // This device has to be able to read back what it just uploaded —
+            // a sender never receives its own envelope.
+            sealer.registerLocally()
+        }
         payload.durationLabel = msg.durationLabel
         payload.latitude = msg.latitude
         payload.longitude = msg.longitude
@@ -755,13 +835,59 @@ extension AppState {
             payload.replyPreview = src.snippetText
         }
 
+        let sealed = try await sealedBody(payload, in: conversationId)
+        // Banked before the send goes out, under the client id: this ciphertext
+        // is sealed to the peer's ratchet and this device can never open it.
+        // Without this the message would come back from the server — including
+        // as the POST's own response — as an undecryptable bubble.
+        WorldEnvelopeVault.shared.store(payload, for: msg.id, in: conversationId)
+
         return SendMessageBody(
             kind: "encrypted", text: nil,
             mediaItems: msg.kind == .location ? nil : mediaItems,
             poll: nil, replyToMessageId: replyToId,
             clientId: msg.id, scheduledAt: scheduled,
-            envelopeVersion: WorldEnvelope.version,
-            cipherBody: try WorldEnvelope.seal(payload, conversationId: conversationId))
+            envelopeVersion: sealed.version,
+            cipherBody: sealed.body)
+    }
+
+    /// Whether this thread's attachments should be encrypted before upload.
+    ///
+    /// Same question `envelopeBody` asks later, asked early because the bytes
+    /// are on their way to the CDN long before the envelope is built. A false
+    /// here and a readable envelope there are the same condition — the peer has
+    /// published no keys — so the two cannot disagree.
+    ///
+    /// A thrown error answers *no*, deliberately: a message whose seal is going
+    /// to fail is not going to be sent, and encrypting its attachments first
+    /// would only leave an unreadable object on the CDN.
+    private func canSealMedia(in conversationId: UUID) async -> Bool {
+        guard WorldEnvelope.sendingEnabled,
+              !(worldConversations.first { $0.id == conversationId }?.isGroup ?? false),
+              let peer = MessagingStore.shared.otherParticipant(in: conversationId)?.id
+        else { return false }
+        return (try? await WorldSignalSession.canSeal(to: peer)) ?? false
+    }
+
+    /// Picks the envelope version for one send. See `envelopeBody` for why the
+    /// readable fallback is allowed in exactly one case and forbidden in the rest.
+    private func sealedBody(_ payload: WorldEnvelopePayload,
+                            in conversationId: UUID) async throws -> (version: Int, body: String) {
+        guard let peer = MessagingStore.shared.otherParticipant(in: conversationId)?.id else {
+            // A 1:1 thread whose participants aren't loaded yet. No peer means
+            // no session and no way to tell whether one exists, so this is the
+            // conservative half of the rule, not the permissive one.
+            return try WorldEnvelope.sealPlaintext(payload)
+        }
+        do {
+            return try await WorldEnvelope.seal(payload, to: peer)
+        } catch WorldSignalSession.SessionError.peerHasNoKeys
+                    where !WorldSignalSession.hasSession(with: peer) {
+            #if DEBUG
+            print("E2EE: \(peer) has published no keys — sending a readable envelope")
+            #endif
+            return try WorldEnvelope.sealPlaintext(payload)
+        }
     }
 
     private static func iso8601(_ date: Date) -> String {
@@ -773,9 +899,10 @@ extension AppState {
     /// Uploads a recorded voice note. Returns nil (rather than throwing) when the
     /// backend rejects the type, so the rest of the message still sends and the
     /// sender keeps local playback.
-    private func uploadWorldAudio(_ url: URL) async throws -> String? {
+    private func uploadWorldAudio(_ url: URL, via sealer: WorldMediaSealer? = nil) async throws -> String? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         do {
+            if let sealer { return try await sealer.upload(data, contentType: "audio/m4a") }
             return try await APIClient.shared.uploadMedia(data, contentType: "audio/m4a")
         } catch {
             #if DEBUG
@@ -805,11 +932,12 @@ extension AppState {
     /// Uploads a picked/captured movie. Videos are big and the upload can fail
     /// on a bad connection — returning nil keeps the message (and its poster)
     /// rather than dropping the send entirely.
-    private func uploadWorldVideo(_ url: URL) async throws -> String? {
+    private func uploadWorldVideo(_ url: URL, via sealer: WorldMediaSealer? = nil) async throws -> String? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+        let type = ChatMediaOutbox.contentType(for: url)
         do {
-            return try await APIClient.shared.uploadMedia(
-                data, contentType: ChatMediaOutbox.contentType(for: url))
+            if let sealer { return try await sealer.upload(data, contentType: type) }
+            return try await APIClient.shared.uploadMedia(data, contentType: type)
         } catch {
             #if DEBUG
             print("Video upload failed: \(error.localizedDescription)")
@@ -844,7 +972,7 @@ extension AppState {
 
     /// Not private: the GojoMessages composer (AppState+WorldNetwork) uploads
     /// post and story images through the same path as a World avatar.
-    func uploadWorldImage(_ data: Data) async throws -> String? {
+    func uploadWorldImage(_ data: Data, via sealer: WorldMediaSealer? = nil) async throws -> String? {
         let type = APIClient.imageContentType(for: data)
         let payload: Data
         if type == "image/jpeg" || type == "image/png" || type == "image/gif" {
@@ -853,6 +981,7 @@ extension AppState {
             payload = UIImage(data: data)?.jpegData(compressionQuality: 0.9) ?? data
         }
         let finalType = payload == data ? type : "image/jpeg"
+        if let sealer { return try await sealer.upload(payload, contentType: finalType) }
         return try await APIClient.shared.uploadMedia(payload, contentType: finalType)
     }
 

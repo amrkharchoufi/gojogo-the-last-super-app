@@ -1108,8 +1108,10 @@ final class AppState: ObservableObject {
         worldMutedConversations.remove(id)
         WorldPreference.mutedConversations = worldMutedConversations
         clearWorldContextCardPreference(id)
-        // A deleted thread's local history goes with it.
+        // A deleted thread's local history goes with it — including the opened
+        // payloads, which are that history in its wire form.
         WorldMessageArchive.shared.remove(id)
+        WorldEnvelopeVault.shared.remove(id)
         // A live thread deleted only on-device reappears on the next refresh.
         guard wasLive else { return }
         Task { [weak self] in
@@ -2185,8 +2187,16 @@ final class AppState: ObservableObject {
         SessionStore.clear()
         AuthSession.shared.clear()
         // The message archive is the account's plaintext history — it must not
-        // outlive the account on a shared device.
+        // outlive the account on a shared device. The envelope vault holds the
+        // same plaintext at the wire boundary, and the signal store holds the
+        // ratchets and the published-keys flag: left behind, the next account
+        // on this device would be told its keys were already published and
+        // would never appear in the directory at all.
         WorldMessageArchive.shared.wipe()
+        WorldEnvelopeVault.shared.wipe()
+        WorldSignalStore.shared.wipe()
+        // Phase D: these open the account's photos and voice notes.
+        WorldMediaKeyStore.shared.wipe()
         SocialStore.shared.reset()
         StoriesStore.shared.reset()
         WatchStore.shared.reset()

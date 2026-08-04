@@ -13,10 +13,12 @@ import Foundation
 //  - Polls: the server tallies votes by mutating the stored poll, which an
 //    opaque body cannot support. Polls (and groups) are outside v1 scope.
 //
-// The cipher below is an identity transform on purpose. Phase A proves the
-// envelope, the migration story, previews and push with every payload still
-// readable — so a blank bubble has exactly one suspect. Phase C swaps this
-// protocol's implementation for libsignal sessions and changes nothing else.
+// Phase C (2026-08-04) put a Double Ratchet behind it. `envelopeVersion` is
+// what says which: **1** is the Phase A envelope, opaque to the server's
+// *rendering* but readable by anyone holding the row; **2** is sealed to a
+// libsignal session and readable only by the two devices. Both versions stay
+// live on the wire on purpose — a thread goes to 2 only once the peer has
+// published a key bundle, and a thread that never does keeps working at 1.
 
 /// What travels inside `cipherBody`, version 1. Grows by adding optionals —
 /// never by renaming: an old build must be able to decode a new payload and
@@ -38,28 +40,28 @@ struct WorldEnvelopePayload: Codable {
     var longitude: Double?
     var fileName: String?
     var fileMeta: String?
-}
-
-/// Seals and opens envelope bodies. One conversation-scoped transform, so the
-/// Phase C swap to libsignal (whose sessions are per-peer) is a drop-in.
-protocol WorldMessageCipher {
-    /// "none" for the Phase A identity transform; a real cipher type later.
-    var cipherType: String { get }
-    func seal(_ plaintext: Data, conversationId: UUID) throws -> Data
-    func open(_ ciphertext: Data, conversationId: UUID) throws -> Data
-}
-
-/// Phase A: the identity transform. Not encryption — scaffolding that lets the
-/// entire envelope path ship and be verified while payloads stay readable.
-struct WorldPlaintextCipher: WorldMessageCipher {
-    let cipherType = "none"
-    func seal(_ plaintext: Data, conversationId: UUID) throws -> Data { plaintext }
-    func open(_ ciphertext: Data, conversationId: UUID) throws -> Data { ciphertext }
+    /// Phase D: `mediaURL -> base64 AES-256-GCM key`, one per attachment.
+    ///
+    /// Keyed by URL rather than positional, because a carousel's poster and its
+    /// movie are two files on one item and the wire order is not something the
+    /// receiver should have to trust. Absent on every message before Phase D
+    /// and on any message whose attachments went up in the clear — the receiver
+    /// reads the bytes verbatim then, which is what keeps old media rendering.
+    var mediaKeys: [String: String]?
 }
 
 enum WorldEnvelope {
-    /// The one version this build writes and the highest it can read.
-    static let version = 1
+    /// Phase A: the payload travels as-is. The server can't *render* it, but it
+    /// isn't encrypted — anyone with the stored row can read it. Still written
+    /// for a peer who has never published a key bundle, so a thread with an old
+    /// build (or a fresh install that hasn't synced keys yet) keeps working.
+    static let plaintextVersion = 1
+    /// Phase C: the payload is sealed to a libsignal session. Readable by the
+    /// two devices and nothing else.
+    static let sealedVersion = 2
+    /// The highest version this build can open. A payload above it renders as
+    /// "needs a newer version" — real, undamaged, just not representable here.
+    static let version = sealedVersion
 
     /// Whether outgoing 1:1 content is wrapped.
     ///
@@ -69,8 +71,6 @@ enum WorldEnvelope {
     /// envelope message round-tripped through the live API.
     static let sendingEnabled = true
 
-    static var cipher: WorldMessageCipher = WorldPlaintextCipher()
-
     enum EnvelopeError: Error {
         /// A payload from a build newer than this one. The message is real and
         /// undamaged — this build just can't represent it.
@@ -78,16 +78,39 @@ enum WorldEnvelope {
         case malformed
     }
 
-    static func seal(_ payload: WorldEnvelopePayload, conversationId: UUID) throws -> String {
-        let plain = try JSONEncoder().encode(payload)
-        let sealed = try cipher.seal(plain, conversationId: conversationId)
-        return sealed.base64EncodedString()
+    /// The Phase A body: encoded, not encrypted.
+    ///
+    /// Only legitimate when the peer has published no key bundle. A thread that
+    /// already has a session must never come back here — quietly answering a
+    /// transient failure with a readable body is precisely the downgrade an
+    /// attacker would ask for, so `envelopeBody` refuses to send instead.
+    static func sealPlaintext(_ payload: WorldEnvelopePayload) throws -> (version: Int, body: String) {
+        (plaintextVersion, try JSONEncoder().encode(payload).base64EncodedString())
     }
 
-    static func open(version: Int, body: String, conversationId: UUID) throws -> WorldEnvelopePayload {
+    /// The Phase C body: sealed to the peer's ratchet, establishing the session
+    /// from the key directory if this is the first message.
+    @MainActor
+    static func seal(_ payload: WorldEnvelopePayload, to peer: UUID) async throws
+        -> (version: Int, body: String) {
+        let plain = try JSONEncoder().encode(payload)
+        let sealed = try await WorldSignalSession.seal(plain, to: peer)
+        return (sealedVersion, sealed.base64EncodedString())
+    }
+
+    /// Opens a body of either version. `sender` is the *peer's* profile id —
+    /// sessions are per-peer, not per-conversation.
+    ///
+    /// For v2 this consumes the message key: never call it twice on the same
+    /// body. `WorldEnvelopeVault` is what guarantees the caller doesn't.
+    @MainActor
+    static func open(version: Int, body: String, from sender: UUID,
+                     identityChanged: (() -> Void)? = nil) throws -> WorldEnvelopePayload {
         guard version <= Self.version else { throw EnvelopeError.unsupportedVersion(version) }
         guard let sealed = Data(base64Encoded: body) else { throw EnvelopeError.malformed }
-        let plain = try cipher.open(sealed, conversationId: conversationId)
+        let plain = version >= sealedVersion
+            ? try WorldSignalSession.open(sealed, from: sender, identityChanged: identityChanged)
+            : sealed
         return try JSONDecoder().decode(WorldEnvelopePayload.self, from: plain)
     }
 }

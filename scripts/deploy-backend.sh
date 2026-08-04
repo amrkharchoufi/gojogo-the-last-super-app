@@ -70,6 +70,18 @@ CDK_CERTIFICATE_ARN="${CDK_CERTIFICATE_ARN:-arn:aws:acm:us-east-1:578109959809:c
 # helpfully substitute the default back in and make that impossible to express.
 SUMSUB_SECRET_ARN="${SUMSUB_SECRET_ARN-arn:aws:secretsmanager:us-east-1:578109959809:secret:gojogo/sumsub-gHmmld}"
 STRIPE_SECRET_ARN="${STRIPE_SECRET_ARN-arn:aws:secretsmanager:us-east-1:578109959809:secret:gojogo/stripe-4I84ec}"
+# The My World phone-verification bypass, and the only entry here that is not
+# merely an identifier: while it is set, ANY caller who knows the code verifies
+# ANY phone number, as anyone. It is set because SNS SMS is unusable in this
+# account (sandbox: pre-verified destinations only), so the fallback is the only
+# way through verification at all.
+#
+# It lives in this list rather than in a shell you have to remember, for the
+# same reason as everything above it — but inverted: the risk here is not
+# forgetting to pass it, it is forgetting it is still on. `--infra` says so
+# loudly on every deploy. **Empty this the day SNS SMS leaves the sandbox**
+# (PROGRESS #3); nothing else needs to change.
+WORLD_DEV_OTP_CODE="${WORLD_DEV_OTP_CODE-424242}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="$REPO_ROOT/backend"
@@ -468,6 +480,16 @@ if [[ "$MODE" == "infra" ]]; then
       warn "${pair%%=*} is empty — that module will deploy UNCONFIGURED."
     fi
   done
+
+  # The opposite polarity to the loop above: here, set is the dangerous state.
+  if [[ -n "$WORLD_DEV_OTP_CODE" ]]; then
+    cdk_args+=( -c "worldDevOtpCode=$WORLD_DEV_OTP_CODE" )
+    warn "worldDevOtpCode is SET — real SMS goes off and code \`$WORLD_DEV_OTP_CODE\`"
+    warn "verifies ANY phone number in this environment, as anyone."
+    warn "Empty WORLD_DEV_OTP_CODE in this script once SNS SMS leaves the sandbox."
+  else
+    info "context  worldDevOtpCode empty — real SMS on, bypass off"
+  fi
 
   if (( DRY_RUN )); then
     note "[dry-run] (cd infra && npx cdk ${cdk_args[*]})"

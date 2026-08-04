@@ -1007,6 +1007,13 @@ struct WorldMessage: Identifiable {
     /// Coordinates for `.location` messages — real fix, openable in Maps.
     var latitude: Double?
     var longitude: Double?
+    /// Set when this copy came off the wire as a sealed body this device could
+    /// not open (E2EE Phase C). Transient and never archived: it describes one
+    /// mapping of one server row, not the message. What it exists for is the
+    /// merge — a ciphertext is spent after one read, so a refetched copy of
+    /// something already in the archive arrives unreadable, and the archive's
+    /// text must win rather than be replaced by an error.
+    var isUndecryptable: Bool = false
 
     init(id: UUID = UUID(), kind: WorldMessageKind = .text, text: String,
          fromUser: Bool = false, fileName: String? = nil, fileMeta: String? = nil,
@@ -1018,7 +1025,8 @@ struct WorldMessage: Identifiable {
          poll: WorldPoll? = nil, scheduledLabel: String? = nil,
          audioURL: String? = nil, localAudioURL: URL? = nil,
          videoURL: String? = nil, localVideoURL: URL? = nil,
-         latitude: Double? = nil, longitude: Double? = nil) {
+         latitude: Double? = nil, longitude: Double? = nil,
+         isUndecryptable: Bool = false) {
         self.id = id; self.kind = kind; self.text = text; self.fromUser = fromUser
         self.fileName = fileName; self.fileMeta = fileMeta
         self.readLabel = readLabel; self.readAt = readAt
@@ -1029,6 +1037,7 @@ struct WorldMessage: Identifiable {
         self.audioURL = audioURL; self.localAudioURL = localAudioURL
         self.videoURL = videoURL; self.localVideoURL = localVideoURL
         self.latitude = latitude; self.longitude = longitude
+        self.isUndecryptable = isUndecryptable
     }
 
     /// Playable source for an `.audio` bubble — the local recording wins so the

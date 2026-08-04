@@ -231,16 +231,134 @@ session through the deployed directory. Everything up to that point is proven.
 **Also pending:** first CI run with the `vendor_libsignal` step (watch the cache
 warm on run 2).
 
-### Phase C — swap the cipher
-- Replace the identity transform with libsignal session encrypt/decrypt.
-- A thread goes encrypted only when **both** sides have published bundles;
-  mixed threads keep working. Failures here have one suspect by construction.
+### Phase C — swap the cipher *(landed 2026-08-04, unverified against a second account)*
 
-### Phase D — media
-- Random per-file key, AES-GCM over the bytes **before** `uploadMedia`; key +
-  nonce travel inside the encrypted body. CDN stores ciphertext.
-- `ImageCache` / `MediaImage` / viewer decrypt on fetch; cache **decrypted**
-  bytes only.
+The identity transform is gone. `envelopeVersion` now says which envelope a
+message is: **1** is Phase A (opaque to the server's rendering, but readable by
+anyone holding the row), **2** is sealed to a libsignal session. Both stay live
+on the wire — a thread reaches 2 only once the peer has published a bundle, and
+one that never does keeps working at 1.
+
+**Landed:**
+- `WorldSignalSession`: address derivation (profile id + `deviceId` 1,
+  lowercased without exception — the address name *is* the session filename, so
+  a case difference would silently open a second empty session with the same
+  person), X3DH from a directory bundle, and the one piece that is ours rather
+  than Signal's: a leading byte carrying `CiphertextMessage.MessageType`.
+  libsignal's ciphertext doesn't say which of the two types it is and they open
+  through different functions.
+- `WorldEnvelopeVault`: the decrypt-once ledger. Two facts force it. A message
+  key is deleted on use, so a ciphertext opens **exactly once** — and the app
+  refetches the newest page on every thread open. And a sender **cannot read
+  its own ciphertext**, which is sealed to the peer's ratchet; outgoing
+  payloads are banked at seal time under the *client* id, then re-keyed onto
+  the server id on the first echo (fetched pages carry `clientId`, so a send
+  interrupted before the response still resolves after a relaunch). Failures
+  are deliberately never banked — some are transient (files locked before first
+  unlock, profile id not loaded yet) and would otherwise become permanent.
+- Downgrade rule, enforced at the send path: the readable envelope is legal
+  only for a peer who has published **no bundle at all**. That is a property of
+  the peer, not of one attempt — so once a session exists, a failure throws and
+  the message isn't sent rather than falling back.
+- Identity-change recovery on both send and receive: `untrustedIdentity` drops
+  the stale session/identity and retries once. Refusing forever would brick a
+  thread on a legitimate reinstall. It is not silent — `AppState` drops the
+  neutral in-thread line ("… is using a new device"), which per the plan's
+  decision is a line and never a modal.
+- The merge gained its one exception to "server wins": a refetched copy of a
+  message this device already opened arrives unreadable, so `isUndecryptable`
+  yields to the local/archived copy. Without it, every reload would rewrite
+  history into error bubbles — the exact failure the local-first store exists
+  to prevent.
+- Sign-out now wipes the vault **and the signal store**. The store held
+  `published: true`, so the next account on the device would have been told its
+  keys were already in the directory and would never have published at all.
+
+**Phase C gate extended and passing (`WorldSignalSelfCheck`, 2026-08-04):** the
+loopback now also drives the code the app calls, not just libsignal — a
+directory DTO rebuilt into a working `PreKeyBundle`, the frame byte tagging
+PreKey and Whisper correctly (wrong, and every message is unreadable in one
+direction), a replayed ciphertext proven *fatal* rather than merely
+discouraged, and a reinstalled peer recovered from. Verdict on the simulator:
+handshake, ratchet, persistence, opacity, framing, replay fatality and
+reinstall recovery.
+
+**Two-party exchange verified end to end (2026-08-04, live server, two
+simulators, two accounts).** Bob → Alice, then Alice → Bob:
+
+1. Both devices published bundles: **50 one-time prekeys each** in the deployed
+   directory.
+2. Bob's first message spent one of Alice's — her pool went **50 → 49**. X3DH
+   ran against the live directory, not a loopback.
+3. That message is stored as `kind: "encrypted"`, `envelopeVersion: 2`,
+   `text: null`, **1831 bytes** whose frame byte is `3` (**PreKey** — it carries
+   the identity key, base key and Kyber ciphertext, which is why it is large).
+4. Alice's reply is **105 bytes**, frame byte `2` (**Whisper**). That is the
+   load-bearing detail: libsignal only emits a Whisper from a session
+   established *by decrypting* the peer's PreKey message. A Whisper existing at
+   all proves Alice's device opened Bob's message.
+5. Both vaults hold the plaintext for **both** messages — each device's own
+   under the server id *and* under the client id it was sealed with, the
+   re-key working exactly as designed.
+6. Neither plaintext appears anywhere in either ciphertext; the stored row
+   carries only ids, sender, timestamp and the blob, and the conversation
+   preview is the `"Message"` constant.
+7. **Cold start of both apps: zero decrypt failures.** Without the vault the
+   re-fetched page would have asked libsignal to reopen spent ciphertext and
+   rendered two "couldn't be decrypted" bubbles. Alice's archive re-read
+   `them: "Hy Alice"` / `me: "Hey bob"`, in order.
+
+Nothing about Phase C is unverified now. The one thing still owed from Phase A
+is the push generic-text check, which needs a real device (APNs does not reach
+the simulator).
+
+### Phase D — media *(built 2026-08-04, not yet exercised between two devices)*
+
+Phase C sealed the text; a photo still went to the CDN in the clear, which made
+the honest claim "end-to-end encrypted unless the message contains a picture".
+
+**Landed:**
+- `WorldMediaCrypto`: one random AES-256-GCM key per file, used once. The nonce
+  rides inside CryptoKit's `combined`, so the payload carries only the key. GCM
+  and not CBC because the tag makes a rewritten CDN object fail loudly rather
+  than decode to something subtly different.
+- The key travels in `WorldEnvelopePayload.mediaKeys` — `url -> base64 key`,
+  keyed by URL rather than positionally, because a video's poster and its movie
+  are two files on one item and wire order is not something a receiver should
+  have to trust. So media inherits exactly the ratchet's protection.
+- **The URL stays visible**, per Phase A: the server reference-counts uploads by
+  URL. What leaks is that a message has an attachment and roughly its size.
+- `WorldMediaSealer` bridges the ordering problem — a key exists before its URL
+  does, because the file has to be encrypted to be uploaded. Inactive by
+  default, so avatars, story frames and marketplace photos use the same upload
+  helpers untouched.
+- **Decryption is by URL lookup, not by threading keys through views.** Every
+  media surface in the app addresses a file by URL alone, so a persisted
+  `WorldMediaKeyStore` lets `ImageCache` decrypt transparently. `MediaImage`,
+  `CachedAsyncImage`, the feed, stories and the marketplace are all unchanged,
+  and a URL with no key is used verbatim — which is what keeps every non-chat
+  image and every pre-Phase-D attachment rendering.
+- Video and audio have no such chokepoint (`AVPlayer` streams a URL itself), so
+  `WorldMediaFile` downloads, decrypts once and hands the player a temp file.
+  Honest trade: a *long* encrypted video waits for the whole download instead of
+  starting on the first chunk. If chat ever carries long-form video, replace
+  that, not the crypto.
+- The key store is persisted (the URL survives in the archive, so a memory-only
+  key would lose every attachment on relaunch — the same trap the vault avoids)
+  and wiped on sign-out.
+- Media is encrypted only when the envelope will actually be **sealed**, decided
+  up front by `WorldSignalSession.canSeal` because uploads start long before the
+  envelope is built. A readable envelope would carry the key beside the URL,
+  which protects nothing and would only make the server's copy *look* encrypted.
+
+**Self-check extended:** plaintext absent from the sealed bytes, round-trip,
+two files never share a key, the wrong key fails, and a single flipped bit fails
+— i.e. the GCM tag is genuinely being checked.
+
+**Remaining:** the live two-device check — send a photo and a voice note between
+two accounts, confirm the CDN object is ciphertext, and confirm both sides
+render it. Not yet done: driving the attachment picker needs UI input the
+simulator tooling can't supply (see the Phase C notes).
 
 ### Phase E — safety numbers *(v1 requirement, not polish)*
 - Identity fingerprint on the contact page + explicit verify action. Until users
@@ -270,4 +388,13 @@ warm on run 2).
 - **Search** covers only locally-decrypted history (in practice: everything this
   device has ever seen, thanks to the local store).
 - **Multi-device** deferred; schema-ready via `deviceId`.
+- **A v1 envelope is still accepted on a thread that already has a session.**
+  Refusing it would be real downgrade protection, but it also fires
+  legitimately during rollout: a peer keeps sending v1 until they have fetched
+  our bundle, and we may have established a session toward them first. The
+  honest guard is a per-thread "has been encrypted" high-water mark, and it is
+  only worth anything alongside safety numbers — so it belongs with Phase E.
+- **History predates the ratchet.** A vault entry lost (app deleted, sign-out)
+  makes that message unreadable forever, by anyone. That is forward secrecy
+  working, not a bug — and it is what Phase F's encrypted backup answers.
 - **Server-side previews are gone** — that is the point, not a regression.

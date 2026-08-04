@@ -365,7 +365,17 @@ private struct VideoPage: View {
         if player == nil {
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
             try? AVAudioSession.sharedInstance().setActive(true)
-            player = AVPlayer(url: url)
+            // E2EE Phase D: an encrypted movie is fetched and decrypted to a
+            // temp file first, because AVPlayer streams the URL itself and has
+            // no idea the bytes are ciphertext. Unencrypted URLs come straight
+            // back and still stream as before.
+            Task { @MainActor in
+                let source = await WorldMediaFile.playable(url)
+                guard isCurrent, player == nil else { return }
+                player = AVPlayer(url: source)
+                player?.play()
+            }
+            return
         }
         player?.play()
     }

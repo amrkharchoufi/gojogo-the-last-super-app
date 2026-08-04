@@ -19,6 +19,13 @@ final class MessagingStore {
     /// endpoint, so this is the only way the contact page can offer a call.
     private var phoneByProfile: [UUID: String] = [:]
 
+    /// Fired when a peer's identity key turns out to have changed — a reinstall,
+    /// or a substituted key, and this device cannot tell the two apart.
+    /// `AppState` answers with the neutral in-thread line. A callback rather
+    /// than a direct call because the discovery happens deep in the wire→model
+    /// mapping, which has no business knowing about conversations on screen.
+    var peerIdentityChanged: ((UUID, UUID) -> Void)?
+
     func isLive(_ conversationId: UUID) -> Bool {
         liveConversationIds.contains(conversationId)
     }
@@ -299,28 +306,82 @@ final class MessagingStore {
             audioURL: audioURL,
             videoURL: movieURL,
             latitude: payload?.latitude ?? place?.latitude,
-            longitude: payload?.longitude ?? place?.longitude)
+            longitude: payload?.longitude ?? place?.longitude,
+            isUndecryptable: payload?.kind == Self.undecryptableKind)
     }
 
     /// Opens an envelope message's payload; nil for legacy plaintext.
     ///
+    /// The vault comes first and that ordering is load-bearing, not an
+    /// optimisation. A sealed (v2) body decrypts exactly once — the message key
+    /// is deleted on use — and this method runs again for the same message on
+    /// every refetch, every socket echo and every poll update. Asking libsignal
+    /// a second time would throw and lose the message permanently.
+    ///
+    /// Our own outgoing messages are here for the same reason from the other
+    /// side: they were sealed to the *peer's* ratchet and this device cannot
+    /// open them at all. `envelopeBody` banks the payload under the client id
+    /// at seal time; the first echo re-keys it onto the server's id, and
+    /// fetched pages carry `clientId` so a relaunch mid-send still resolves.
+    ///
     /// A payload this build cannot open still returns — as a text bubble that
     /// says so. Silence would read as a lost message, and the message is not
-    /// lost; this build just can't represent it yet.
+    /// lost; this build just can't represent it. Failures are never banked:
+    /// some are transient (files locked before first unlock, profile id not
+    /// loaded yet) and would otherwise become permanent.
     private func openedEnvelope(_ dto: MessageDTO) -> WorldEnvelopePayload? {
         guard dto.kind == "encrypted" else { return nil }
+        let vault = WorldEnvelopeVault.shared
+        if let banked = vault.payload(for: dto.id, in: dto.conversationId) {
+            // Cheap and idempotent — the key store is persisted, but the vault
+            // is the record of what was actually opened, so re-registering from
+            // it is what keeps the two from drifting.
+            if let keys = banked.mediaKeys { WorldMediaKeyStore.shared.register(keys) }
+            return banked
+        }
+        if let clientId = dto.clientId,
+           let banked = vault.payload(for: clientId, in: dto.conversationId) {
+            vault.store(banked, for: dto.id, in: dto.conversationId)
+            if let keys = banked.mediaKeys { WorldMediaKeyStore.shared.register(keys) }
+            return banked
+        }
         guard let version = dto.envelopeVersion, let body = dto.cipherBody else {
             return WorldEnvelopePayload(kind: "text", text: "Message can't be displayed.")
         }
+        // Sealed to a session with the *sender*. Our own messages never reach
+        // here — they resolve from the vault above or not at all.
         do {
-            return try WorldEnvelope.open(version: version, body: body,
-                                          conversationId: dto.conversationId)
-        } catch {
+            let payload = try WorldEnvelope.open(
+                version: version, body: body, from: dto.senderId,
+                identityChanged: { [weak self] in
+                    self?.peerIdentityChanged?(dto.conversationId, dto.senderId)
+                })
+            vault.store(payload, for: dto.id, in: dto.conversationId)
+            // Phase D: the attachment keys came out of the same sealed body as
+            // the text. Registering them here — at the wire boundary, before
+            // any view has asked for a URL — is what lets `ImageCache` decrypt
+            // without every media surface in the app knowing keys exist.
+            if let keys = payload.mediaKeys { WorldMediaKeyStore.shared.register(keys) }
+            return payload
+        } catch WorldEnvelope.EnvelopeError.unsupportedVersion {
             return WorldEnvelopePayload(
                 kind: "text",
                 text: "This message needs a newer version of GojoGo.")
+        } catch {
+            #if DEBUG
+            print("Envelope open failed (\(dto.id)): \(error)")
+            #endif
+            return WorldEnvelopePayload(
+                kind: Self.undecryptableKind,
+                text: "This message couldn't be decrypted.")
         }
     }
+
+    /// Marks a payload this device couldn't open. Not a wire kind — nothing
+    /// sends it; `kind(from:)` falls through to `.text` so it renders as the
+    /// sentence above, and `map` turns it into `WorldMessage.isUndecryptable`
+    /// so the merge can prefer the archive's already-opened copy.
+    private static let undecryptableKind = "undecryptable"
 
     private func kind(from raw: String) -> WorldMessageKind {
         switch raw {

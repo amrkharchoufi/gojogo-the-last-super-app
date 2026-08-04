@@ -25,6 +25,15 @@ import LibSignalClient
 //   5. Ciphertext is genuinely opaque (the plaintext is not sitting inside it)
 //   6. State survives a store *reopen* — new instances over the same directory
 //      decrypt correctly, which is what the app does on every cold start
+//
+// Phase C added a second half (`framing`), which drives the code the app
+// actually calls rather than libsignal directly:
+//   7. A directory bundle DTO rebuilds into a working `PreKeyBundle`
+//   8. `WorldSignalSession`'s frame byte tags PreKey and Whisper correctly —
+//      get this wrong and every message is unreadable in one direction
+//   9. Opening the same ciphertext twice really does fail, which is the fact
+//      `WorldEnvelopeVault` exists to work around
+//  10. A peer who reinstalled is recovered from, not refused forever
 
 enum WorldSignalSelfCheck {
 
@@ -37,8 +46,9 @@ enum WorldSignalSelfCheck {
     static func run() {
         do {
             try loopback()
-            print("✅ libsignal self-check passed — X3DH handshake, ratchet, "
-                  + "persistence and opacity all verified")
+            print("✅ E2EE self-check passed — X3DH handshake, ratchet, persistence, "
+                  + "opacity, message framing, replay fatality, reinstall recovery "
+                  + "and per-file media crypto all verified")
         } catch {
             print("❌ \(error)")
         }
@@ -179,6 +189,166 @@ enum WorldSignalSelfCheck {
             sessionStore: bob, identityStore: bob, context: ctx)
         guard String(data: recovered, encoding: .utf8) == repeated else {
             throw Failure(step: "out-of-order message did not decrypt")
+        }
+
+        // --- 5. The Phase C code path itself ------------------------------
+        // Everything above calls libsignal directly. The app calls
+        // `WorldSignalSession`, which adds the framing that tells a receiver
+        // which of the two message types it is holding — the one piece of
+        // Phase C that is ours rather than Signal's, and the one that turns
+        // every message unreadable if it is wrong.
+        try framing()
+        try mediaCrypto()
+    }
+
+    /// Phase D: the per-file media transform. Cheap to check and expensive to
+    /// get wrong — an attachment encrypted with a key nobody kept is a photo
+    /// that is gone, and unlike the ratchet there is no protocol to blame.
+    private static func mediaCrypto() throws {
+        // Not a JPEG, but neither is a JPEG to AES — what matters is that the
+        // bytes are recognisable if they ever leak through unencrypted.
+        let original = Data("PNG\u{0}this is the picture itself".utf8)
+        let (ciphertext, key) = try WorldMediaCrypto.seal(original)
+
+        if ciphertext.range(of: original) != nil {
+            throw Failure(step: "media plaintext found inside the uploaded bytes")
+        }
+        guard try WorldMediaCrypto.open(ciphertext, key: key) == original else {
+            throw Failure(step: "media did not round-trip")
+        }
+        // Two files must never share a key: the whole point of per-file keys is
+        // that leaking one attachment leaks exactly one attachment.
+        let (_, otherKey) = try WorldMediaCrypto.seal(original)
+        guard otherKey != key else {
+            throw Failure(step: "two files were sealed with the same key")
+        }
+        if (try? WorldMediaCrypto.open(ciphertext, key: otherKey)) != nil {
+            throw Failure(step: "media opened with the wrong key")
+        }
+        // GCM's tag is the reason a rewritten CDN object fails loudly instead
+        // of decoding to something subtly different.
+        var tampered = ciphertext
+        tampered[tampered.count - 1] ^= 0x01
+        if (try? WorldMediaCrypto.open(tampered, key: key)) != nil {
+            throw Failure(step: "tampered media still opened — the GCM tag is not being checked")
+        }
+    }
+
+    /// Drives the real `seal`/`open` the send and receive paths use, over two
+    /// fresh stores whose first message must therefore be a PreKey message.
+    private static func framing() throws {
+        // A fresh pair, so the first framed message exercises the PreKey branch
+        // rather than riding the session the checks above already opened.
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory
+            .appendingPathComponent("signal-framing-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+
+        let carol = WorldSignalStore(root: scratch.appendingPathComponent("carol"), usesKeychain: false)
+        let dave = WorldSignalStore(root: scratch.appendingPathComponent("dave"), usesKeychain: false)
+        let ctx = WorldStoreContext()
+        let carolAddress = try ProtocolAddress(name: UUID().uuidString.lowercased(), deviceId: 1)
+        let daveAddress = try ProtocolAddress(name: UUID().uuidString.lowercased(), deviceId: 1)
+
+        let (daveIdentity, daveRegistrationId) = try dave.ensureIdentity()
+        let daveSigned = try dave.currentOrMintSignedPreKey(identity: daveIdentity)
+        let daveKyber = try dave.currentOrMintKyberPreKey(identity: daveIdentity)
+        guard let daveOneTime = try dave.mintOneTimePreKeys(count: 1).first else {
+            throw Failure(step: "minting Dave's one-time prekey")
+        }
+
+        // Through the same DTO shape the key directory returns, so a wrong
+        // base64 field or a swapped signature fails here rather than in
+        // production against a real bundle.
+        let dto = try WorldKeyBundleDTO(
+            registrationId: Int(daveRegistrationId),
+            deviceId: 1,
+            identityKey: daveIdentity.identityKey.serialize().base64EncodedString(),
+            signedPreKey: WorldSignedPreKeyDTO(
+                id: Int(daveSigned.id),
+                publicKey: daveSigned.publicKey().serialize().base64EncodedString(),
+                signature: daveSigned.signature.base64EncodedString()),
+            kyberPreKey: WorldSignedPreKeyDTO(
+                id: Int(daveKyber.id),
+                publicKey: daveKyber.publicKey().serialize().base64EncodedString(),
+                signature: daveKyber.signature.base64EncodedString()),
+            oneTimePreKey: WorldPreKeyDTO(
+                id: Int(daveOneTime.id),
+                publicKey: daveOneTime.publicKey().serialize().base64EncodedString()))
+
+        try processPreKeyBundle(
+            try WorldSignalSession.bundle(from: dto),
+            for: daveAddress, ourAddress: carolAddress,
+            sessionStore: carol, identityStore: carol, context: ctx)
+
+        let opener = "framed, sealed and delivered"
+        let framed = try WorldSignalSession.seal(Data(opener.utf8), to: daveAddress,
+                                                 as: carolAddress, store: carol)
+        guard framed.first == CiphertextMessage.MessageType.preKey.rawValue else {
+            throw Failure(step: "framed opener is not tagged as a PreKey message")
+        }
+        let opened = try WorldSignalSession.open(framed, from: carolAddress, as: daveAddress,
+                                                 store: dave)
+        guard String(data: opened, encoding: .utf8) == opener else {
+            throw Failure(step: "framed message did not round-trip")
+        }
+
+        // The reply is a Whisper message, and must be tagged as one — a frame
+        // that always claimed PreKey would still pass the check above.
+        let reply = "and the whisper back"
+        let framedReply = try WorldSignalSession.seal(Data(reply.utf8), to: carolAddress,
+                                                      as: daveAddress, store: dave)
+        guard framedReply.first == CiphertextMessage.MessageType.whisper.rawValue else {
+            throw Failure(step: "framed reply is not tagged as a Whisper message")
+        }
+        guard try String(data: WorldSignalSession.open(framedReply, from: daveAddress,
+                                                       as: carolAddress, store: carol),
+                         encoding: .utf8) == reply else {
+            throw Failure(step: "framed reply did not round-trip")
+        }
+
+        // Opening the same bytes twice is the mistake the whole vault exists to
+        // prevent, so prove it really is fatal rather than merely discouraged.
+        let replayed = try WorldSignalSession.seal(Data("once only".utf8), to: daveAddress,
+                                                   as: carolAddress, store: carol)
+        _ = try WorldSignalSession.open(replayed, from: carolAddress, as: daveAddress, store: dave)
+        // Expected to throw: the message key was deleted on first use.
+        let replayOpened = (try? WorldSignalSession.open(replayed, from: carolAddress,
+                                                         as: daveAddress, store: dave)) != nil
+        guard !replayOpened else {
+            throw Failure(step: "a replayed ciphertext decrypted twice")
+        }
+
+        // A peer who reinstalled: new identity, new bundle, same address. The
+        // send path must recover instead of refusing them forever.
+        let dave2 = WorldSignalStore(root: scratch.appendingPathComponent("dave2"), usesKeychain: false)
+        let (dave2Identity, dave2RegistrationId) = try dave2.ensureIdentity()
+        let dave2Signed = try dave2.currentOrMintSignedPreKey(identity: dave2Identity)
+        let dave2Kyber = try dave2.currentOrMintKyberPreKey(identity: dave2Identity)
+        let dave2Bundle = try PreKeyBundle(
+            registrationId: dave2RegistrationId, deviceId: 1,
+            signedPrekeyId: dave2Signed.id, signedPrekey: dave2Signed.publicKey(),
+            signedPrekeySignature: dave2Signed.signature,
+            identity: dave2Identity.identityKey,
+            kyberPrekeyId: dave2Kyber.id, kyberPrekey: dave2Kyber.publicKey(),
+            kyberPrekeySignature: dave2Kyber.signature)
+        let acceptedSilently = (try? processPreKeyBundle(
+            dave2Bundle, for: daveAddress, ourAddress: carolAddress,
+            sessionStore: carol, identityStore: carol, context: ctx)) != nil
+        guard !acceptedSilently else {
+            throw Failure(step: "a changed identity key was accepted silently")
+        }
+        // What the live path answers with: `forgetPeer`, then one retry.
+        carol.forgetPeer(daveAddress)
+        try processPreKeyBundle(dave2Bundle, for: daveAddress, ourAddress: carolAddress,
+                                sessionStore: carol, identityStore: carol, context: ctx)
+        let afterReinstall = "and we carry on"
+        let framedAfter = try WorldSignalSession.seal(Data(afterReinstall.utf8), to: daveAddress,
+                                                      as: carolAddress, store: carol)
+        guard try String(data: WorldSignalSession.open(framedAfter, from: carolAddress,
+                                                       as: daveAddress, store: dave2),
+                         encoding: .utf8) == afterReinstall else {
+            throw Failure(step: "session did not re-form after an identity change")
         }
     }
 }
