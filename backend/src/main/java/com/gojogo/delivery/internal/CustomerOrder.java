@@ -34,9 +34,6 @@ class CustomerOrder {
     @Column(name = "user_id", nullable = false)
     private UUID userId;
 
-    @Column(name = "merchant_id", nullable = false)
-    private UUID merchantId;
-
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private OrderStatus status = OrderStatus.CONFIRMED;
@@ -64,16 +61,17 @@ class CustomerOrder {
     @Column(name = "discount_cents", nullable = false)
     private int discountCents;
 
-    @Column(name = "promotion_id")
-    private UUID promotionId;
-
-    /** Copied, like the address: a receipt keeps saying WELCOME10 after the
-     *  promotion is deleted. */
-    @Column(name = "promotion_code", nullable = false)
-    private String promotionCode = "";
-
     @Column(name = "total_cents", nullable = false)
     private int totalCents;
+
+    /**
+     * What per-sub-order cancellations have already given back out of the hold
+     * (Phase 4 M3). Settlement insists that what it splits plus this equals
+     * what was held — the same "nothing strands in escrow" check as before,
+     * taught about partial refunds.
+     */
+    @Column(name = "released_cents", nullable = false)
+    private int releasedCents;
 
     /**
      * Where the money is. UNPAID is not a null — it is what an order placed
@@ -142,41 +140,29 @@ class CustomerOrder {
     @Column(name = "courier_user_id")
     private UUID courierUserId;
 
-    /** When the restaurant said yes — the first thing in this order's life that
-     *  a person rather than a clock decides. */
-    @Column(name = "accepted_at")
-    private OffsetDateTime acceptedAt;
-
-    /** What the kitchen said it needed. Null until they accept. */
-    @Column(name = "prep_minutes")
-    private Integer prepMinutes;
-
-    /** {@code acceptedAt + prepMinutes}: when the food is expected to be ready,
-     *  and therefore when — minus the pickup lead — a courier is looked for. */
+    /**
+     * When the food is expected to be ready across every kitchen still cooking
+     * — the latest accepted sub-order's own {@code readyAt}. This is what the
+     * courier search is timed from, because a courier who arrives before the
+     * slowest kitchen is done waits unpaid at a counter.
+     */
     @Column(name = "ready_at")
     private OffsetDateTime readyAt;
 
+    /** When the courier had every bag — the moment the parent enters DELIVERING.
+     *  Each sub-order keeps its own {@code collectedAt} beside this. */
     @Column(name = "picked_up_at")
     private OffsetDateTime pickedUpAt;
 
     /**
-     * The two codes that make a handoff evidence rather than an assertion, both
-     * minted when the restaurant accepts (Phase 4 M2).
+     * The delivery PIN (Phase 4 M2): the one code that stayed on the order when
+     * the pickup codes moved down to the sub-orders (Phase 4 M3), because there
+     * is one door however many kitchens there were.
      *
-     * <p>They are stored on the order and not derived from it, because they must
-     * survive being read out: a code recomputed from the row would change the
-     * moment anything else on the row did. Blank means "no check to run", which
-     * is what every order accepted before M2 has and is deliberately not
-     * treated as a locked door — see {@code V38}.
-     *
-     * <p>Which of the two a given screen may see is the whole security model:
-     * {@code pickupCode} goes to the kitchen only and {@code deliveryPin} to the
-     * customer only, and neither ever reaches the courier's own job, because a
-     * code the courier can read is a code that proves nothing.
+     * <p>Stored, not derived — it must survive being read out — and shown to the
+     * customer only, never on the courier's job: a code the courier can read is
+     * a code that proves nothing. Blank means "no check to run" (pre-V38).
      */
-    @Column(name = "pickup_code", nullable = false)
-    private String pickupCode = "";
-
     @Column(name = "delivery_pin", nullable = false)
     private String deliveryPin = "";
 
@@ -240,13 +226,16 @@ class CustomerOrder {
     @OrderBy("sortOrder")
     private List<OrderLine> lines = new ArrayList<>();
 
+    /** One per merchant (Phase 4 M3). Every order has at least one. */
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @OrderBy("sortOrder")
+    private List<SubOrder> subOrders = new ArrayList<>();
+
     protected CustomerOrder() {
     }
 
-    CustomerOrder(UUID userId, UUID merchantId, String currency, String note,
-                  OffsetDateTime etaAt) {
+    CustomerOrder(UUID userId, String currency, String note, OffsetDateTime etaAt) {
         this.userId = userId;
-        this.merchantId = merchantId;
         this.currency = currency == null || currency.isBlank() ? "USD" : currency;
         this.note = note == null ? "" : note;
         this.placedAt = OffsetDateTime.now();
@@ -265,25 +254,32 @@ class CustomerOrder {
         this.addressLongitude = longitude;
     }
 
-    void addLine(UUID menuItemId, String name, int unitPriceCents, int qty) {
-        lines.add(new OrderLine(this, menuItemId, name, unitPriceCents, qty, lines.size()));
+    void addLine(SubOrder subOrder, UUID menuItemId, String name, int unitPriceCents, int qty) {
+        lines.add(new OrderLine(this, subOrder, menuItemId, name, unitPriceCents, qty,
+            lines.size()));
+    }
+
+    SubOrder addSubOrder(UUID merchantId, int subtotalCents, int deliveryFeeCents,
+                         int discountCents, UUID promotionId, String promotionCode) {
+        SubOrder subOrder = new SubOrder(this, merchantId, subtotalCents, deliveryFeeCents,
+            discountCents, promotionId, promotionCode, subOrders.size());
+        subOrders.add(subOrder);
+        return subOrder;
     }
 
     /**
-     * Stamps the priced basket onto the order. The arithmetic lives in
+     * Stamps the priced order onto the row. The arithmetic lives in
      * {@link Basket} so that quoting and placing cannot drift apart — a quote
      * the customer approved and a total they were charged being computed by two
      * different code paths is how people get billed for surprises.
      */
-    void priceIt(Basket basket, UUID promotionId, String promotionCode) {
+    void priceIt(Basket basket) {
         this.subtotalCents = basket.subtotalCents();
         this.deliveryFeeCents = basket.deliveryFeeCents();
         this.serviceFeeCents = basket.serviceFeeCents();
         this.discountCents = basket.discountCents();
         this.tipCents = basket.tipCents();
         this.totalCents = basket.totalCents();
-        this.promotionId = promotionId;
-        this.promotionCode = promotionCode == null ? "" : promotionCode;
     }
 
     void held(OffsetDateTime at) {
@@ -299,6 +295,11 @@ class CustomerOrder {
     void releasedFunds(OffsetDateTime at) {
         this.paymentStatus = PaymentStatus.RELEASED;
         this.settledAt = at;
+    }
+
+    /** A sub-order's share went back to the customer; the hold shrinks. */
+    void partiallyReleased(int cents) {
+        this.releasedCents += cents;
     }
 
     /** A tip added after delivery is settled straight through, so it lands on
@@ -320,22 +321,16 @@ class CustomerOrder {
         this.cancelReason = reason == null ? "" : reason;
     }
 
-    /** The restaurant took it, and said how long it needs. */
-    void accepted(OffsetDateTime at, int prepMinutes, OffsetDateTime etaAt) {
-        this.acceptedAt = at;
-        this.prepMinutes = prepMinutes;
-        this.readyAt = at.plusMinutes(prepMinutes);
-        this.etaAt = etaAt;
-    }
-
     /**
-     * The food is ready — earlier or later than the kitchen guessed. Moving
-     * {@code readyAt} matters even though the courier has usually been found by
-     * now: it is what the pickup ETA on their screen is drawn from, and a
-     * courier told the wrong time waits at a counter or arrives at cold food.
+     * Re-derives the order-level clock from the kitchens still cooking: ready
+     * when the <em>last</em> of them is. Called whenever any sub-order's own
+     * clock moves — an accept, a ready, a cancellation. Moving {@code readyAt}
+     * matters even once the courier is found: it is what the pickup ETA on
+     * their screen is drawn from, and a courier told the wrong time waits at a
+     * counter or arrives at cold food.
      */
-    void readyNow(OffsetDateTime at, OffsetDateTime etaAt) {
-        this.readyAt = at;
+    void retime(OffsetDateTime readyAt, OffsetDateTime etaAt) {
+        this.readyAt = readyAt;
         this.etaAt = etaAt;
     }
 
@@ -364,14 +359,13 @@ class CustomerOrder {
     }
 
     /**
-     * Mints both codes, once. Guarded rather than assigned, so that a second
-     * accept — a retried request, a duplicated event, anything — cannot change a
-     * number a restaurant has already read aloud to somebody standing at their
-     * counter. Re-minting would not be a smaller bug than not minting at all: it
-     * would make a courier with the right code wrong.
+     * Mints the delivery PIN, once. Guarded rather than assigned, so that a
+     * second accept — a retried request, a duplicated event, anything — cannot
+     * change a number the customer has already read off their screen.
+     * Re-minting would not be a smaller bug than not minting at all: it would
+     * make a courier with the right PIN wrong.
      */
-    void mintHandoffCodes(String pickup, String pin) {
-        if (pickupCode.isBlank()) this.pickupCode = pickup;
+    void mintDeliveryPin(String pin) {
         if (deliveryPin.isBlank()) this.deliveryPin = pin;
     }
 
@@ -403,10 +397,6 @@ class CustomerOrder {
         return userId;
     }
 
-    UUID getMerchantId() {
-        return merchantId;
-    }
-
     OrderStatus getStatus() {
         return status;
     }
@@ -435,12 +425,14 @@ class CustomerOrder {
         return discountCents;
     }
 
-    String getPromotionCode() {
-        return promotionCode;
+    int getReleasedCents() {
+        return releasedCents;
     }
 
-    UUID getPromotionId() {
-        return promotionId;
+    /** What is still held in escrow for this order — the amount a settlement
+     *  or a full release has to account for, to the cent. */
+    int heldRemainingCents() {
+        return totalCents - releasedCents;
     }
 
     PaymentStatus getPaymentStatus() {
@@ -507,24 +499,12 @@ class CustomerOrder {
         return courierUserId;
     }
 
-    OffsetDateTime getAcceptedAt() {
-        return acceptedAt;
-    }
-
-    Integer getPrepMinutes() {
-        return prepMinutes;
-    }
-
     OffsetDateTime getReadyAt() {
         return readyAt;
     }
 
     OffsetDateTime getPickedUpAt() {
         return pickedUpAt;
-    }
-
-    String getPickupCode() {
-        return pickupCode;
     }
 
     String getDeliveryPin() {
@@ -573,5 +553,20 @@ class CustomerOrder {
 
     List<OrderLine> getLines() {
         return lines;
+    }
+
+    List<SubOrder> getSubOrders() {
+        return subOrders;
+    }
+
+    /** The slices still somebody's problem — not delivered, not cancelled. */
+    List<SubOrder> liveSubOrders() {
+        return subOrders.stream().filter(s -> s.getStatus().isLive()).toList();
+    }
+
+    /** Every kitchen has answered — accepted or ended — so the courier search
+     *  can be timed. A sub-order still CONFIRMED is a kitchen still deciding. */
+    boolean allSubOrdersAnswered() {
+        return subOrders.stream().noneMatch(s -> s.getStatus() == SubOrderStatus.CONFIRMED);
     }
 }

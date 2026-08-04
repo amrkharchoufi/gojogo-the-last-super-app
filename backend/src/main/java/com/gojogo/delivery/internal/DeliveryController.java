@@ -118,6 +118,18 @@ class DeliveryController {
     }
 
     /**
+     * Cancels one kitchen's slice of a multi-merchant order (Phase 4 M3).
+     * Allowed only while that restaurant hasn't accepted; exactly that slice's
+     * money is released, and cancelling the last live slice ends the order.
+     * <b>409</b> once the kitchen is cooking.
+     */
+    @PostMapping("/v1/delivery/orders/{orderId}/sub-orders/{subOrderId}/cancel")
+    OrderDto cancelSubOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
+                            @PathVariable UUID subOrderId) {
+        return delivery.cancelSubOrder(current.require(jwt).id(), orderId, subOrderId);
+    }
+
+    /**
      * How the food should be handed over — {@code PIN}, {@code PHOTO} or
      * {@code CONFIRM} — changeable right up until it is.
      *

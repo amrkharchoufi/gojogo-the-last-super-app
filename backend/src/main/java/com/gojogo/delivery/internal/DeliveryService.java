@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -183,7 +184,7 @@ class DeliveryService {
     // MARK: Orders
 
     /**
-     * What this basket would cost, without placing anything.
+     * What this checkout would cost, without placing anything.
      *
      * <p>The point is the last three fields: the app can tell someone their
      * wallet is short <em>before</em> they commit to an order, and offer a
@@ -191,36 +192,43 @@ class DeliveryService {
      */
     @Transactional(readOnly = true)
     QuoteDto quote(UUID me, QuoteRequest request) {
-        Merchant merchant = merchants.findById(request.merchantId())
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such restaurant"));
-        Map<UUID, MenuItem> found = priceableItems(merchant, mergeLines(request.lines()));
-        int subtotal = subtotalOf(mergeLines(request.lines()), found);
-
-        PromotionService.Applied applied = promotions.resolve(merchant.getId(), me,
-            request.promotionCode(), subtotal, merchant.getDeliveryFeeCents());
-        Basket basket = Basket.of(subtotal, merchant.getDeliveryFeeCents(), serviceFeeCents,
-            applied.discountCents(), request.tipCents(), payments.currency());
+        List<PricedBasket> priced = price(me, basketsOf(request.baskets(),
+            request.merchantId(), request.lines(), request.promotionCode()));
+        Basket basket = Basket.of(priced.stream().map(PricedBasket::slice).toList(),
+            serviceFeeCents, request.tipCents(), payments.currency());
 
         long available = payments.required() ? payments.availableFor(me) : Long.MAX_VALUE;
         boolean covers = !payments.required() || available >= basket.totalCents();
+        // The flat promotion fields carry the first applied code, for the
+        // pre-M3 client with one line to show it on.
+        Basket.MerchantSlice first = priced.stream().map(PricedBasket::slice)
+            .filter(s -> !s.promotionCode().isEmpty() || s.discountCents() > 0)
+            .findFirst().orElse(null);
         return new QuoteDto(basket.subtotalCents(), basket.deliveryFeeCents(),
             basket.serviceFeeCents(), basket.discountCents(), basket.tipCents(),
-            basket.totalCents(), basket.currency(), applied.code(), applied.label(),
+            basket.totalCents(), basket.currency(),
+            first == null ? "" : first.promotionCode(),
+            first == null ? "" : first.promotionLabel(),
+            priced.stream().map(p -> new MerchantQuoteDto(p.merchant().getId(),
+                p.merchant().getName(), p.slice().subtotalCents(),
+                p.slice().deliveryFeeCents(), p.slice().discountCents(),
+                p.slice().promotionCode(), p.slice().promotionLabel())).toList(),
             payments.required() ? available : 0,
             covers, covers ? 0 : basket.totalCents() - available);
     }
 
     /**
-     * Places an order and holds the money for it.
+     * Places an order — one checkout, however many kitchens — and holds the
+     * money for it.
      *
      * <p>Prices come from the database, never from the request: the client sends
-     * item ids and quantities only, and an item that isn't on this restaurant's
+     * item ids and quantities only, and an item that isn't on its restaurant's
      * menu is rejected outright. The same is true of the discount — the request
      * may name a code, never an amount.
      *
      * <p>The funds move into the customer's own ESCROW bucket, not out of their
-     * hands: cancelling in time releases them, and the merchant is paid when the
-     * food arrives. A wallet that can't cover it raises
+     * hands: cancelling in time releases them, and each merchant is paid when
+     * the food arrives. A wallet that can't cover it raises
      * {@link com.gojogo.payments.InsufficientFundsException}, which the global
      * handler turns into a 402 — and nothing is saved, because the hold and the
      * order are one transaction.
@@ -231,19 +239,16 @@ class DeliveryService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "You already have an order in progress");
         });
-        Merchant merchant = merchants.findById(request.merchantId())
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such restaurant"));
+        List<PricedBasket> priced = price(me, basketsOf(request.baskets(),
+            request.merchantId(), request.lines(), request.promotionCode()));
 
-        Map<UUID, Integer> qtyByItem = mergeLines(request.lines());
-        Map<UUID, MenuItem> found = priceableItems(merchant, qtyByItem);
-
-        // The restaurant's own advertised ETA is the best guess anybody has
-        // until they accept and say how long they actually need — which is the
-        // number that replaces this one, and the first honest one in this
-        // vertical's history.
+        // The slowest restaurant's advertised ETA is the best guess anybody has
+        // until the kitchens accept and say how long they actually need — which
+        // is the number that replaces this one.
         OffsetDateTime now = OffsetDateTime.now();
-        CustomerOrder order = new CustomerOrder(me, merchant.getId(), payments.currency(),
-            request.note(), now.plusMinutes(merchant.getEtaMinutes()));
+        int worstEta = priced.stream().mapToInt(p -> p.merchant().getEtaMinutes()).max().orElse(30);
+        CustomerOrder order = new CustomerOrder(me, payments.currency(),
+            request.note(), now.plusMinutes(worstEta));
         // How they want it handed over, if they said. A word this build doesn't
         // recognise is the configured default rather than a 400 — checkout is
         // the worst place in the product to fail on a string, and the choice is
@@ -251,30 +256,124 @@ class DeliveryService {
         order.chooseHandoffMode(HandoffMode.parse(request.handoffMode(),
             policy.defaultHandoffMode()));
         applyAddress(me, request, order);
-        qtyByItem.forEach((itemId, qty) -> {
-            MenuItem item = found.get(itemId);
-            order.addLine(item.getId(), item.getName(), item.getPriceCents(), qty);
-        });
-
-        int subtotal = subtotalOf(qtyByItem, found);
-        PromotionService.Applied applied = promotions.resolve(merchant.getId(), me,
-            request.promotionCode(), subtotal, merchant.getDeliveryFeeCents());
-        order.priceIt(Basket.of(subtotal, merchant.getDeliveryFeeCents(), serviceFeeCents,
-            applied.discountCents(), request.tipCents(), payments.currency()),
-            applied.promotionId(), applied.code());
+        for (PricedBasket basket : priced) {
+            SubOrder subOrder = order.addSubOrder(basket.merchant().getId(),
+                basket.slice().subtotalCents(), basket.slice().deliveryFeeCents(),
+                basket.slice().discountCents(), basket.applied().promotionId(),
+                basket.applied().code());
+            basket.qtyByItem().forEach((itemId, qty) -> {
+                MenuItem item = basket.items().get(itemId);
+                order.addLine(subOrder, item.getId(), item.getName(), item.getPriceCents(), qty);
+            });
+        }
+        order.priceIt(Basket.of(priced.stream().map(PricedBasket::slice).toList(),
+            serviceFeeCents, request.tipCents(), payments.currency()));
 
         CustomerOrder saved = orders.save(order);
-        payments.hold(saved, merchant.getName());
-        promotions.redeem(applied, me, saved.getId());
+        payments.hold(saved, priced.getFirst().merchant().getName()
+            + (priced.size() > 1 ? " + " + (priced.size() - 1) + " more" : ""));
+        for (PricedBasket basket : priced) {
+            promotions.redeem(basket.applied(), me, saved.getId());
+            // One event per kitchen: each owner is told about their slice and
+            // only their slice. Under the simulation nothing had to be told; a
+            // real kitchen that is never told has an order it can only time out.
+            events.publishEvent(new OrderPlaced(saved.getId(), me,
+                basket.merchant().getId(), basket.merchant().getName(),
+                basket.merchant().getOwnerId(), basket.slice().merchantBaseCents(),
+                saved.getCurrency(), saved.getPlacedAt()));
+        }
+        return toOrderDto(saved);
+    }
 
-        // The owner rides along so somebody can be told an order is waiting.
-        // Under the simulation nothing had to be: a timeline started cooking on
-        // its own. A real kitchen that is never told has an order it can only
-        // time out.
-        events.publishEvent(new OrderPlaced(saved.getId(), me, merchant.getId(), merchant.getName(),
-            merchant.getOwnerId(), saved.getTotalCents(), saved.getCurrency(),
-            saved.getPlacedAt()));
-        return toOrderDto(saved, merchant);
+    /**
+     * The request's baskets, whichever shape they arrived in: the pre-M3
+     * single-merchant fields become one basket, and a top-level promotion code
+     * is stamped onto every basket that doesn't name its own — it is tried
+     * per merchant and must land somewhere (see {@link #price}).
+     */
+    private List<BasketRequest> basketsOf(List<BasketRequest> baskets, UUID merchantId,
+                                          List<OrderLineRequest> lines, String sharedCode) {
+        List<BasketRequest> asked;
+        if (baskets != null && !baskets.isEmpty()) {
+            asked = baskets.stream()
+                .map(b -> b.promotionCode() == null || b.promotionCode().isBlank()
+                    ? new BasketRequest(b.merchantId(), b.lines(), sharedCode)
+                    : b)
+                .toList();
+        } else if (merchantId != null && lines != null && !lines.isEmpty()) {
+            asked = List.of(new BasketRequest(merchantId, lines, sharedCode));
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Add something to your basket first");
+        }
+        long distinct = asked.stream().map(BasketRequest::merchantId).distinct().count();
+        if (distinct != asked.size()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "One basket per restaurant");
+        }
+        if (asked.size() > policy.maxMerchantsPerOrder()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "An order can span at most " + policy.maxMerchantsPerOrder() + " restaurants");
+        }
+        return asked;
+    }
+
+    /**
+     * Prices every basket against its own merchant's menu.
+     *
+     * <p>A promotion code is resolved per merchant, because a promotion is one
+     * merchant's own campaign. A shared code (typed once at checkout) is tried
+     * against each basket and applied wherever it lands — but if it lands
+     * nowhere, the first refusal is rethrown: somebody who typed WELCOME10 and
+     * got nothing deserves to be told why, exactly as before.
+     */
+    private List<PricedBasket> price(UUID me, List<BasketRequest> baskets) {
+        List<PricedBasket> priced = new ArrayList<>(baskets.size());
+        ResponseStatusException firstRefusal = null;
+        boolean codeAskedAnywhere = false;
+        boolean codeLandedAnywhere = false;
+        for (BasketRequest basket : baskets) {
+            Merchant merchant = merchants.findById(basket.merchantId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "No such restaurant"));
+            Map<UUID, Integer> qtyByItem = mergeLines(basket.lines());
+            Map<UUID, MenuItem> found = priceableItems(merchant, qtyByItem);
+            int subtotal = subtotalOf(qtyByItem, found);
+
+            String code = basket.promotionCode();
+            PromotionService.Applied applied;
+            if (code != null && !code.isBlank()) {
+                codeAskedAnywhere = true;
+                try {
+                    applied = promotions.resolve(merchant.getId(), me, code, subtotal,
+                        merchant.getDeliveryFeeCents());
+                    codeLandedAnywhere = true;
+                } catch (ResponseStatusException notHere) {
+                    if (firstRefusal == null) firstRefusal = notHere;
+                    // The code isn't this merchant's — fall back to whatever
+                    // automatic promotion this kitchen runs.
+                    applied = promotions.resolve(merchant.getId(), me, null, subtotal,
+                        merchant.getDeliveryFeeCents());
+                }
+            } else {
+                applied = promotions.resolve(merchant.getId(), me, null, subtotal,
+                    merchant.getDeliveryFeeCents());
+            }
+            priced.add(new PricedBasket(merchant, qtyByItem, found, applied,
+                Basket.MerchantSlice.of(merchant.getId(), subtotal,
+                    merchant.getDeliveryFeeCents(), applied.discountCents(),
+                    applied.promotionId(), applied.code(), applied.label())));
+        }
+        if (codeAskedAnywhere && !codeLandedAnywhere && firstRefusal != null) {
+            throw firstRefusal;
+        }
+        return priced;
+    }
+
+    /** One basket, priced: the merchant, what's in it, and its money slice. */
+    private record PricedBasket(Merchant merchant, Map<UUID, Integer> qtyByItem,
+                                Map<UUID, MenuItem> items, PromotionService.Applied applied,
+                                Basket.MerchantSlice slice) {
     }
 
     /** Merges duplicate lines, so two "+1" taps on the same dish are one line. */
@@ -351,10 +450,11 @@ class DeliveryService {
     }
 
     /**
-     * The customer changes their mind. Allowed right up until a courier has the
-     * food in their hands — which is now a real event rather than a point on a
-     * timeline, and stands the courier down through dispatch so they are free
-     * for the next offer instead of busy for an order nobody is waiting on.
+     * The customer changes their mind about the whole order. Allowed right up
+     * until a courier has any bag in their hands — a collected bag is food
+     * someone has already cooked and carried, and taking the order out from
+     * under it is a dispute rather than a button. Stands the courier down
+     * through dispatch so they are free for the next offer.
      */
     @Transactional
     OrderDto cancel(UUID me, UUID orderId) {
@@ -365,9 +465,39 @@ class DeliveryService {
                     ? "That order is already cancelled"
                     : "Too late to cancel — your courier has your order");
         }
+        if (order.getSubOrders().stream().anyMatch(s -> s.getStatus() == SubOrderStatus.COLLECTED)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Too late to cancel — your courier has part of your order");
+        }
         // Nothing was captured, so this is a release and not a refund: the money
         // never left the customer's own escrow.
-        fulfilment.cancel(order, merchantName(order.getMerchantId()), "You cancelled this order");
+        fulfilment.cancel(order, "You cancelled this order");
+        return toOrderDto(order);
+    }
+
+    /**
+     * The customer changes their mind about one kitchen (Phase 4 M3). Allowed
+     * only while that restaurant hasn't answered — the SPECS §5 rule: once a
+     * kitchen has accepted, food is being made, and backing out of it is theirs
+     * to refuse. Exactly that slice's money goes back; the rest of the order is
+     * untouched, unless this was the last live slice, in which case the whole
+     * order ends and everything left comes back.
+     */
+    @Transactional
+    OrderDto cancelSubOrder(UUID me, UUID orderId, UUID subOrderId) {
+        CustomerOrder order = require(me, orderId);
+        SubOrder sub = order.getSubOrders().stream()
+            .filter(s -> subOrderId.equals(s.getId()))
+            .findFirst()
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "No such part of this order"));
+        if (sub.getStatus() != SubOrderStatus.CONFIRMED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                sub.getStatus() == SubOrderStatus.CANCELLED
+                    ? "That part is already cancelled"
+                    : "Too late — that restaurant is already cooking");
+        }
+        fulfilment.cancelSubOrder(order, sub, "You cancelled this part of your order");
         return toOrderDto(order);
     }
 
@@ -440,17 +570,28 @@ class DeliveryService {
         if (page.isEmpty()) {
             return List.of();
         }
-        Map<UUID, Merchant> byId = merchants
-            .findAllById(page.stream().map(CustomerOrder::getMerchantId).collect(Collectors.toSet()))
+        Map<UUID, Merchant> byId = merchantsOf(page);
+        return page.stream().map(o -> toOrderDto(o, byId)).toList();
+    }
+
+    /** One query for every merchant these orders span, however many orders. */
+    private Map<UUID, Merchant> merchantsOf(List<CustomerOrder> page) {
+        return merchants
+            .findAllById(page.stream()
+                .flatMap(o -> o.getSubOrders().stream())
+                .map(SubOrder::getMerchantId)
+                .collect(Collectors.toSet()))
             .stream().collect(Collectors.toMap(Merchant::getId, Function.identity()));
-        return page.stream().map(o -> toOrderDto(o, byId.get(o.getMerchantId()))).toList();
     }
 
     private OrderDto toOrderDto(CustomerOrder order) {
-        return toOrderDto(order, merchants.findById(order.getMerchantId()).orElse(null));
+        return toOrderDto(order, merchantsOf(List.of(order)));
     }
 
-    private OrderDto toOrderDto(CustomerOrder order, Merchant merchant) {
+    private OrderDto toOrderDto(CustomerOrder order, Map<UUID, Merchant> merchantsById) {
+        // The order's face for the pre-M3 fields: the first slice's restaurant.
+        Merchant primary = order.getSubOrders().isEmpty() ? null
+            : merchantsById.get(order.getSubOrders().getFirst().getMerchantId());
         // Where the courier actually is, straight from dispatch, rather than
         // where a timeline says somebody would be by now. Only while they are
         // carrying it: their position between jobs is nobody's business.
@@ -466,10 +607,15 @@ class DeliveryService {
             position == null ? null : position.latitude(),
             position == null ? null : position.longitude(),
             position == null ? null : position.at());
-        OrderMerchantDto merchantDto = merchant == null
-            ? new OrderMerchantDto(order.getMerchantId(), "Restaurant", null, 0, 0)
-            : new OrderMerchantDto(merchant.getId(), merchant.getName(), merchant.getImageUrl(),
-                merchant.getLatitude(), merchant.getLongitude());
+        OrderMerchantDto merchantDto = primary == null
+            ? new OrderMerchantDto(order.getSubOrders().isEmpty() ? order.getId()
+                : order.getSubOrders().getFirst().getMerchantId(), "Restaurant", null, 0, 0)
+            : new OrderMerchantDto(primary.getId(), primary.getName(), primary.getImageUrl(),
+                primary.getLatitude(), primary.getLongitude());
+        String promotionCode = order.getSubOrders().stream()
+            .map(SubOrder::getPromotionCode)
+            .filter(code -> !code.isEmpty())
+            .findFirst().orElse("");
         return new OrderDto(
             order.getId(),
             merchantDto,
@@ -478,8 +624,8 @@ class DeliveryService {
             Eta.courierProgress(order,
                 position == null ? null : position.latitude(),
                 position == null ? null : position.longitude(),
-                merchant == null ? null : merchant.getLatitude(),
-                merchant == null ? null : merchant.getLongitude()),
+                primary == null ? null : primary.getLatitude(),
+                primary == null ? null : primary.getLongitude()),
             courier,
             order.getCourierSearch().name(),
             order.getCancelReason(),
@@ -487,13 +633,16 @@ class DeliveryService {
             order.getLines().stream()
                 .map(l -> new OrderLineDto(l.getMenuItemId(), l.getName(), l.getUnitPriceCents(), l.getQty()))
                 .toList(),
+            order.getSubOrders().stream()
+                .map(sub -> toSubOrderDto(order, sub, merchantsById.get(sub.getMerchantId())))
+                .toList(),
             order.getSubtotalCents(),
             order.getDeliveryFeeCents(),
             order.getServiceFeeCents(),
             order.getTotalCents(),
             order.getDiscountCents(),
             order.getTipCents(),
-            order.getPromotionCode(),
+            promotionCode,
             order.getPaymentStatus().name(),
             order.getCurrency(),
             order.getAddressLabel(),
@@ -509,6 +658,30 @@ class DeliveryService {
             order.getPlacedAt(),
             order.getStatusChangedAt(),
             order.getEtaAt());
+    }
+
+    private static SubOrderDto toSubOrderDto(CustomerOrder order, SubOrder sub,
+                                             Merchant merchant) {
+        return new SubOrderDto(
+            sub.getId(),
+            sub.getMerchantId(),
+            merchant == null ? "Restaurant" : merchant.getName(),
+            merchant == null ? null : merchant.getImageUrl(),
+            sub.getStatus().name(),
+            sub.getStatus() == SubOrderStatus.CONFIRMED && !order.getStatus().isTerminal(),
+            order.getLines().stream()
+                .filter(l -> l.belongsTo(sub))
+                .map(l -> new OrderLineDto(l.getMenuItemId(), l.getName(),
+                    l.getUnitPriceCents(), l.getQty()))
+                .toList(),
+            sub.getSubtotalCents(),
+            sub.getDeliveryFeeCents(),
+            sub.getDiscountCents(),
+            sub.getPromotionCode(),
+            sub.getPrepMinutes() == null ? 0 : sub.getPrepMinutes(),
+            sub.getReadyAt(),
+            sub.getCollectedAt(),
+            sub.getCancelReason());
     }
 
     /**

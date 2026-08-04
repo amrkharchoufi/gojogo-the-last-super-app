@@ -59,9 +59,11 @@ class CourierPayTests {
             Math.round(((Number) call.getArgument(1)).longValue() * 0.20));
         payments = new OrderPayments(wallet, fees, config);
 
-        order = new CustomerOrder(CUSTOMER, MERCHANT, "USD", "", OffsetDateTime.now());
+        order = new CustomerOrder(CUSTOMER, "USD", "", OffsetDateTime.now());
         set(order, "id", UUID.randomUUID());
-        order.priceIt(Basket.of(2_000, 300, 99, 0, 250, "USD"), null, null);
+        SubOrder slice = order.addSubOrder(MERCHANT, 2_000, 300, 0, null, "");
+        set(slice, "id", UUID.randomUUID());
+        order.priceIt(Basket.of(MERCHANT, 2_000, 300, 99, 0, 250, "USD"));
         order.held(OffsetDateTime.now());
     }
 
@@ -70,7 +72,7 @@ class CourierPayTests {
     void settlementPaysTheCourier() {
         order.assignCourier(UUID.randomUUID(), COURIER, "Yassine B.", "E-bike", null, 0);
 
-        payments.settle(order, "Forno Nero");
+        payments.settle(order, java.util.Map.of(MERCHANT, "Forno Nero"));
 
         AccountRef courierAccount = AccountRef.user(COURIER, Bucket.AVAILABLE);
         assertThat(splits())
@@ -96,7 +98,7 @@ class CourierPayTests {
     void nobodyElsesShareMoved() {
         order.assignCourier(UUID.randomUUID(), COURIER, "Yassine B.", "E-bike", null, 0);
 
-        payments.settle(order, "Forno Nero");
+        payments.settle(order, java.util.Map.of(MERCHANT, "Forno Nero"));
 
         assertThat(splits())
             .filteredOn(s -> s.payee().ownerKind() == OwnerKind.MERCHANT)
@@ -117,7 +119,7 @@ class CourierPayTests {
      */
     @Test
     void anOrderWithNoCourierStillSettlesToThePlatform() {
-        payments.settle(order, "Forno Nero");
+        payments.settle(order, java.util.Map.of(MERCHANT, "Forno Nero"));
 
         assertThat(splits())
             .filteredOn(s -> s.kind() == LedgerKind.COURIER_FEE || s.kind() == LedgerKind.TIP)
@@ -132,7 +134,7 @@ class CourierPayTests {
     void theSplitsStillSumToWhatWasHeld() {
         order.assignCourier(UUID.randomUUID(), COURIER, "Yassine B.", "E-bike", null, 0);
 
-        payments.settle(order, "Forno Nero");
+        payments.settle(order, java.util.Map.of(MERCHANT, "Forno Nero"));
 
         assertThat(splits().stream().mapToLong(WalletApi.Split::amountMinor).sum())
             .isEqualTo(order.getTotalCents());

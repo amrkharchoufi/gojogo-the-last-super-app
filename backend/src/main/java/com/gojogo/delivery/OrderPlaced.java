@@ -14,6 +14,11 @@ import java.util.UUID;
  * (it is the stamp {@code partner} left at provisioning), and passing it here is
  * cheaper than a consumer that would have to read across for it.
  *
+ * <p>Since Phase 4 M3 an order can span merchants, so one event is published
+ * <b>per kitchen</b>: each owner is told about their slice and only their
+ * slice, and {@code totalCents} is that slice's food value after its own
+ * discount rather than the whole checkout.
+ *
  * @param merchantOwnerId the profile that manages the restaurant, i.e. the phone
  *                        that should light up
  */

@@ -238,10 +238,30 @@ extension AppState {
 
     /// "Collect from Forno Nero" / "Deliver to Home" — the one instruction that
     /// should be readable at a glance on a scooter.
+    ///
+    /// On a multi-stop run (Phase 4 M3) it names the counter that is next, not
+    /// the order: a courier at the second restaurant needs to read one line and
+    /// know where they are standing.
     var courierInstruction: String? {
         guard let job = courierJob else { return nil }
         return job.isCollected ? "Deliver to \(job.addressLabel)"
                                : "Collect from \(job.merchantName)"
+    }
+
+    /// "Pickup 2 of 3" — drawn only when there is more than one counter, since
+    /// a run of one has nothing to count.
+    var courierStopProgress: String? {
+        guard let job = courierJob, job.hasMultipleStops, !job.isCollected else { return nil }
+        let done = job.counters.filter(\.collected).count
+        return "Pickup \(done + 1) of \(job.counters.count)"
+    }
+
+    /// The stops still to collect, so the screen can list the counters after
+    /// this one — a courier planning a route wants to know the second stop
+    /// before they leave the first.
+    var courierRemainingStops: [CourierStopDTO] {
+        guard let job = courierJob, !job.isCollected else { return [] }
+        return job.remainingStops
     }
 
     /// Whether the camera is the thing to lead with, for either of the two

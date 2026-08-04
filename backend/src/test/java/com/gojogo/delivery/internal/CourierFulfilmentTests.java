@@ -53,8 +53,10 @@ class CourierFulfilmentTests {
     private static final UUID COURIER_USER = UUID.randomUUID();
     private static final UUID COURIER_WORKER = UUID.randomUUID();
     private static final UUID ORDER = UUID.randomUUID();
+    private static final UUID SLICE = UUID.randomUUID();
 
     private OrderRepository orders;
+    private SubOrderRepository subOrders;
     private MerchantRepository merchants;
     private OrderPayments payments;
     private DispatchApi dispatch;
@@ -64,11 +66,13 @@ class CourierFulfilmentTests {
     private ApplicationEventPublisher events;
     private OrderFulfilmentService service;
     private CustomerOrder order;
+    private SubOrder slice;
     private Merchant merchant;
 
     @BeforeEach
     void setUp() {
         orders = mock(OrderRepository.class);
+        subOrders = mock(SubOrderRepository.class);
         merchants = mock(MerchantRepository.class);
         payments = mock(OrderPayments.class);
         dispatch = mock(DispatchApi.class);
@@ -78,20 +82,24 @@ class CourierFulfilmentTests {
         events = mock(ApplicationEventPublisher.class);
 
         DeliveryPolicy policy = new DeliveryPolicy(new StubConfig());
-        service = new OrderFulfilmentService(orders, merchants, payments, policy,
+        service = new OrderFulfilmentService(orders, subOrders, merchants, payments, policy,
             dispatch, profiles, messaging, privateMedia, events);
 
         merchant = new Merchant(OWNER, "Forno Nero", "Pizza", null, 33.57, -7.58);
         set(merchant, "id", MERCHANT);
         when(merchants.findFirstByOwnerId(OWNER)).thenReturn(Optional.of(merchant));
         when(merchants.findById(MERCHANT)).thenReturn(Optional.of(merchant));
+        when(merchants.findAllById(any())).thenReturn(List.of(merchant));
 
-        order = new CustomerOrder(CUSTOMER, MERCHANT, "USD", "Second floor",
+        order = new CustomerOrder(CUSTOMER, "USD", "Second floor",
             OffsetDateTime.now().plusMinutes(30));
         set(order, "id", ORDER);
         order.deliverTo(null, "Home", "12 Rue Ali", "", 33.58, -7.60);
-        order.priceIt(Basket.of(2_000, 300, 99, 0, 0, "USD"), null, null);
+        slice = order.addSubOrder(MERCHANT, 2_000, 300, 0, null, "");
+        set(slice, "id", SLICE);
+        order.priceIt(Basket.of(MERCHANT, 2_000, 300, 99, 0, 0, "USD"));
         when(orders.findById(ORDER)).thenReturn(Optional.of(order));
+        when(subOrders.findById(SLICE)).thenReturn(Optional.of(slice));
     }
 
     // MARK: The kitchen decides, and the search is timed to it
@@ -99,7 +107,7 @@ class CourierFulfilmentTests {
     @Test
     @DisplayName("accepting schedules the courier search for just before the food is ready")
     void acceptSchedulesTheSearchAtReadyMinusLead() {
-        service.accept(OWNER, ORDER, 30);
+        service.accept(OWNER, SLICE, 30);
 
         ArgumentCaptor<DispatchRequest> request = ArgumentCaptor.forClass(DispatchRequest.class);
         verify(dispatch).request(request.capture());
@@ -120,7 +128,7 @@ class CourierFulfilmentTests {
      *  on a night with none out is a dinner nobody delivers. */
     @Test
     void theSearchAcceptsEveryCategoryThatCouldCarryIt() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
 
         ArgumentCaptor<DispatchRequest> request = ArgumentCaptor.forClass(DispatchRequest.class);
         verify(dispatch).request(request.capture());
@@ -133,8 +141,8 @@ class CourierFulfilmentTests {
      *  does not make. */
     @Test
     void aMissingPrepEstimateFallsBackRatherThanRefusing() {
-        service.accept(OWNER, ORDER, null);
-        assertThat(order.getPrepMinutes()).isEqualTo(20);
+        service.accept(OWNER, SLICE, null);
+        assertThat(slice.getPrepMinutes()).isEqualTo(20);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PREPARING);
     }
 
@@ -142,8 +150,8 @@ class CourierFulfilmentTests {
      *  schedule a courier for tomorrow morning. */
     @Test
     void anAbsurdPrepEstimateIsCapped() {
-        service.accept(OWNER, ORDER, 6_000);
-        assertThat(order.getPrepMinutes()).isEqualTo(180);
+        service.accept(OWNER, SLICE, 6_000);
+        assertThat(slice.getPrepMinutes()).isEqualTo(180);
     }
 
     @Test
@@ -151,7 +159,7 @@ class CourierFulfilmentTests {
     void aFailedSearchDoesNotFailTheAccept() {
         when(dispatch.request(any())).thenThrow(new IllegalStateException("dispatch is down"));
 
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
 
         // The kitchen is cooking. Rolling that back over dispatch would be worse
         // than an order that visibly has nobody coming for it.
@@ -161,8 +169,8 @@ class CourierFulfilmentTests {
 
     @Test
     void acceptingTwiceIsRefusedRatherThanReSearching() {
-        service.accept(OWNER, ORDER, 20);
-        assertThatThrownBy(() -> service.accept(OWNER, ORDER, 20))
+        service.accept(OWNER, SLICE, 20);
+        assertThatThrownBy(() -> service.accept(OWNER, SLICE, 20))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("already accepted");
         verify(dispatch).request(any());
@@ -171,7 +179,7 @@ class CourierFulfilmentTests {
     @Test
     @DisplayName("a rejection gives the money back in the same transaction")
     void rejectingReleasesTheHold() {
-        service.reject(OWNER, ORDER, "We're out of dough");
+        service.reject(OWNER, SLICE, "We're out of dough");
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
         assertThat(order.getCancelReason()).isEqualTo("We're out of dough");
@@ -183,8 +191,8 @@ class CourierFulfilmentTests {
      *  made — a dispute (SPECS §5), not a button. */
     @Test
     void rejectingAfterAcceptingIsRefused() {
-        service.accept(OWNER, ORDER, 20);
-        assertThatThrownBy(() -> service.reject(OWNER, ORDER, "changed our mind"))
+        service.accept(OWNER, SLICE, 20);
+        assertThatThrownBy(() -> service.reject(OWNER, SLICE, "changed our mind"))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("Too late");
     }
@@ -197,7 +205,7 @@ class CourierFulfilmentTests {
         set(somebodyElse, "id", UUID.randomUUID());
         when(merchants.findFirstByOwnerId(OWNER)).thenReturn(Optional.of(somebodyElse));
 
-        assertThatThrownBy(() -> service.accept(OWNER, ORDER, 20))
+        assertThatThrownBy(() -> service.accept(OWNER, SLICE, 20))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("No such order");
     }
@@ -207,7 +215,7 @@ class CourierFulfilmentTests {
     @Test
     @DisplayName("the assignment puts a real courier on the order")
     void assignmentReplacesTheHardcodedRoster() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
         when(profiles.findById(COURIER_USER)).thenReturn(Optional.of(profile("Yassine B.")));
 
         service.courierAssigned(ORDER, assignment());
@@ -227,7 +235,7 @@ class CourierFulfilmentTests {
      */
     @Test
     void aCourierAssignedToACancelledOrderIsHandedStraightBack() {
-        service.reject(OWNER, ORDER, "Closed");
+        service.reject(OWNER, SLICE, "Closed");
 
         service.courierAssigned(ORDER, assignment());
 
@@ -244,7 +252,7 @@ class CourierFulfilmentTests {
      */
     @Test
     void aRepeatedAssignmentDoesNotStandTheCourierDown() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
         service.courierAssigned(ORDER, assignment());
         collect();
 
@@ -258,7 +266,7 @@ class CourierFulfilmentTests {
     @Test
     @DisplayName("nobody took it: flagged, not cancelled")
     void anExhaustedSearchDoesNotThrowAwayCookedFood()  {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
 
         service.courierSearchFailed(ORDER);
 
@@ -271,29 +279,29 @@ class CourierFulfilmentTests {
 
     @Test
     void onlyTheAssignedCourierCanMoveTheOrder() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
         service.courierAssigned(ORDER, assignment());
 
-        assertThatThrownBy(() -> service.pickedUp(UUID.randomUUID(), ORDER, order.getPickupCode()))
+        assertThatThrownBy(() -> service.pickedUp(UUID.randomUUID(), ORDER, slice.getPickupCode()))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("No such order");
     }
 
     @Test
     void deliveringBeforePickingUpIsRefused() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
         service.courierAssigned(ORDER, assignment());
 
         assertThatThrownBy(() -> handOver())
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("Pick the order up first");
-        verify(payments, never()).settle(any(), anyString());
+        verify(payments, never()).settle(any(), any());
     }
 
     @Test
     @DisplayName("handing it over is the one transition that moves money")
     void deliveringSettlesAndFreesTheCourier() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
         service.courierAssigned(ORDER, assignment());
         collect();
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERING);
@@ -301,7 +309,7 @@ class CourierFulfilmentTests {
         handOver();
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERED);
-        verify(payments).settle(order, "Forno Nero");
+        verify(payments).settle(order, java.util.Map.of(MERCHANT, "Forno Nero"));
         // Null, not the order rating: a two star for a cold burger is about the
         // food, and must not land on the record of whoever cycled it over.
         verify(dispatch).complete(JobKind.DELIVERY, ORDER, null);
@@ -309,7 +317,7 @@ class CourierFulfilmentTests {
 
     @Test
     void deliveringTwiceCannotPayTwice() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
         service.courierAssigned(ORDER, assignment());
         collect();
         handOver();
@@ -317,7 +325,7 @@ class CourierFulfilmentTests {
         assertThatThrownBy(() -> handOver())
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("already delivered");
-        verify(payments).settle(any(), anyString());
+        verify(payments).settle(any(), any());
     }
 
     // MARK: Nobody answered
@@ -331,7 +339,7 @@ class CourierFulfilmentTests {
     @Test
     @DisplayName("an unanswered order is cancelled and released, not left")
     void theTimeoutReleasesTheHold() {
-        service.timeOut(ORDER);
+        service.timeOut(SLICE);
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
         assertThat(order.getCancelReason()).contains("didn't answer");
@@ -342,9 +350,9 @@ class CourierFulfilmentTests {
      *  here the kitchen may have accepted. */
     @Test
     void theTimeoutSkipsAnOrderAcceptedInTheMeantime() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
 
-        service.timeOut(ORDER);
+        service.timeOut(SLICE);
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PREPARING);
         verify(payments, never()).release(any());
@@ -355,7 +363,7 @@ class CourierFulfilmentTests {
     @Test
     @DisplayName("every transition still publishes the same event the app reads")
     void statusChangesArePublished() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
         service.courierAssigned(ORDER, assignment());
         collect();
         handOver();
@@ -377,7 +385,7 @@ class CourierFulfilmentTests {
      * {@link HandoffTests}.
      */
     private HandoffResultDto collect() {
-        return service.pickedUp(COURIER_USER, ORDER, order.getPickupCode());
+        return service.pickedUp(COURIER_USER, ORDER, slice.getPickupCode());
     }
 
     private HandoffResultDto handOver() {

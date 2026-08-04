@@ -272,12 +272,15 @@ extension AppState {
     /// can be retried rather than silently lost.
     // MARK: Checkout (Phase 2e M3)
 
-    /// True while the cart belongs to a live restaurant — the only case where
+    /// True while the cart belongs to live restaurants — the only case where
     /// money is involved at all. A SampleData restaurant still runs the
     /// on-device demo, free of charge.
+    ///
+    /// Every kitchen in the cart has to be live, not just the first: a mixed
+    /// cart cannot be half a real order, and the demo cannot price a real one.
     var deliveryCartIsLive: Bool {
-        guard backendConnected, let id = deliveryCartRestaurantID else { return false }
-        return DeliveryStore.shared.isRemote(id)
+        guard backendConnected, !deliveryCart.isEmpty else { return false }
+        return deliveryCartMerchantIDs.allSatisfy { DeliveryStore.shared.isRemote($0) }
     }
 
     /// What checkout will actually cost. The app deliberately does not compute
@@ -285,29 +288,35 @@ extension AppState {
     /// it are all the server's answer, and a total the client invented is a
     /// total the client can be wrong about.
     func refreshDeliveryQuote() async {
-        guard deliveryCartIsLive, let merchantID = deliveryCartRestaurantID,
-              !deliveryCart.isEmpty else {
+        guard deliveryCartIsLive, !deliveryCart.isEmpty else {
             deliveryQuote = nil
             return
         }
+        let baskets = deliveryCartBaskets
         deliveryQuoting = true
         defer { deliveryQuoting = false }
         do {
             deliveryQuote = try await DeliveryStore.shared.quote(
-                merchantId: merchantID, lines: deliveryCart,
+                baskets: baskets,
                 promotionCode: deliveryPromotionCode, tipCents: deliveryTipCents)
         } catch {
             // A refused code is the common case and worth saying out loud; the
-            // quote falls back to no code rather than blocking checkout.
+            // quote falls back to no code rather than blocking checkout. Since
+            // Phase 4 M3 the server only refuses a code that landed on *no*
+            // kitchen, so this really does mean "not valid anywhere here".
             deliveryQuote = nil
             if !deliveryPromotionCode.isEmpty {
                 showDeliveryNotice(Self.message(from: error, fallback: "That code isn't valid here."))
                 deliveryPromotionCode = ""
                 deliveryQuote = try? await DeliveryStore.shared.quote(
-                    merchantId: merchantID, lines: deliveryCart,
-                    promotionCode: nil, tipCents: deliveryTipCents)
+                    baskets: baskets, promotionCode: nil, tipCents: deliveryTipCents)
             }
         }
+    }
+
+    /// The cart in the shape the wire takes it: one basket per kitchen.
+    var deliveryCartBaskets: [UUID: [DeliveryCartLine]] {
+        Dictionary(grouping: deliveryCart, by: \.merchantID)
     }
 
     /// Tip choices at checkout, in minor units — none, and three round numbers.
@@ -325,13 +334,19 @@ extension AppState {
 
     func placeLiveDeliveryOrder(merchantID: UUID) {
         let lines = deliveryCart
+        let baskets = deliveryCartBaskets
         let optimisticTotal = Double(deliveryQuote?.totalCents ?? 0) / 100
         showDeliveryCheckout = false
         selectedDeliveryRestaurantID = nil
         deliveryOrderRestaurantID = merchantID
         deliveryOrderTotalLabel = String(format: "$%.2f", optimisticTotal)
         deliveryOrderSummary = lines.map { "\($0.qty)× \($0.item.name)" }.joined(separator: ", ")
-        deliveryEtaMinutes = deliveryRestaurants.first(where: { $0.id == merchantID })?.etaMinutes ?? 25
+        // The slowest kitchen sets the wait, which is what the server will say
+        // too — a countdown from the fastest one is a countdown that is wrong
+        // the moment the second restaurant accepts.
+        deliveryEtaMinutes = baskets.keys
+            .compactMap { id in deliveryRestaurants.first(where: { $0.id == id })?.etaMinutes }
+            .max() ?? 25
         deliveryCourier = nil
         deliveryCourierProgress = 0
         deliveryRating = 0
@@ -345,8 +360,7 @@ extension AppState {
         Task {
             do {
                 let order = try await DeliveryStore.shared.placeOrder(
-                    merchantId: merchantID,
-                    lines: lines,
+                    baskets: baskets,
                     addressId: selectedDeliveryAddress?.id,
                     note: "",
                     promotionCode: code,
@@ -365,7 +379,7 @@ extension AppState {
                 // Take the tracking screen back down and hand the cart back —
                 // and say so, rather than leaving the user to guess.
                 deliveryCart = lines
-                deliveryCartRestaurantID = merchantID
+                deliveryCartRestaurantID = lines.first?.merchantID ?? merchantID
                 deliveryOrderRestaurantID = nil
                 withAnimation(.easeInOut(duration: 0.3)) { deliveryStatus = nil }
                 showDeliveryCheckout = true
@@ -475,6 +489,10 @@ extension AppState {
         deliveryPin = order.deliveryPin ?? ""
         deliveryProofPhotoURL = order.proofPhotoUrl
         deliveryConversationID = order.conversationId
+        // The kitchens on this order (Phase 4 M3). Empty for a backend that
+        // predates M3, which the tracking card reads as "one restaurant" —
+        // exactly what it always drew.
+        deliveryKitchens = order.kitchens
         if let rating = order.rating { deliveryRating = rating }
         // The tracking map reads the restaurant's coordinates out of the
         // catalog; an order placed before this session's browse may not be in it.
@@ -547,6 +565,7 @@ extension AppState {
         deliveryPin = ""
         deliveryProofPhotoURL = nil
         deliveryConversationID = nil
+        deliveryKitchens = []
         deliveryRating = 0
         withAnimation(.easeInOut(duration: 0.3)) { deliveryStatus = nil }
     }
@@ -575,6 +594,35 @@ extension AppState {
                 withAnimation(.ggSnappy) { deliveryHandoffMode = previous }
                 showDeliveryNotice(Self.message(from: error,
                                                 fallback: "Couldn't change how this is handed over."))
+            }
+        }
+    }
+
+    // MARK: One kitchen at a time (Phase 4 M3)
+
+    /// Drops one restaurant from an order that spans several.
+    ///
+    /// Deliberately not optimistic, unlike the handoff-mode control: this
+    /// moves money and can be refused ("that restaurant is already cooking"),
+    /// and a row that disappears and comes back is worse than one that takes a
+    /// moment. The refreshed order is the answer either way.
+    func cancelDeliverySubOrder(_ subOrderID: UUID) {
+        guard let orderID = deliveryLiveOrderID, !deliverySubOrderBusy else { return }
+        deliverySubOrderBusy = true
+        Task {
+            defer { deliverySubOrderBusy = false }
+            do {
+                applyLiveOrder(try await DeliveryStore.shared
+                    .cancelSubOrder(orderID, subOrderId: subOrderID))
+            } catch {
+                showDeliveryNotice(Self.message(from: error,
+                                                fallback: "Couldn't cancel that restaurant."))
+                // The screen just proved itself stale — that kitchen may have
+                // accepted a second ago. Re-read rather than leaving a Cancel
+                // button that will keep failing.
+                if let order = try? await DeliveryStore.shared.order(orderID) {
+                    applyLiveOrder(order)
+                }
             }
         }
     }

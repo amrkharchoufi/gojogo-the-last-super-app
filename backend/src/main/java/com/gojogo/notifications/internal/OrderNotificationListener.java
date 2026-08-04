@@ -52,6 +52,13 @@ class OrderNotificationListener {
                 title = "Your order was cancelled";
                 body = "Anything you paid has gone straight back to your wallet.";
             }
+            // Not one of the six order statuses: one kitchen's slice ended
+            // while the rest of the order carries on (Phase 4 M3). A client
+            // that predates it lands in the default arm and stays quiet.
+            case "SUB_CANCELLED" -> {
+                title = merchant + " couldn't take part of your order";
+                body = "That part went straight back to your wallet — the rest is still coming.";
+            }
             default -> {
                 return;
             }

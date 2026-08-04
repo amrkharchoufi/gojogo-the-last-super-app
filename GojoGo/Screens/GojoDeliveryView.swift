@@ -1030,11 +1030,11 @@ private struct DeliveryCheckoutSheet: View {
 
     private var header: some View {
         VStack(spacing: 3) {
-            Text(restaurant?.name ?? "Your cart")
+            Text(cartTitle)
                 .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(GGColor.textPrimary)
-            if let r = restaurant {
-                Text("Arrives in about \(r.etaMinutes)–\(r.etaMinutes + 10) min")
+            if let wait = cartWaitLabel {
+                Text(wait)
                     .font(.system(size: 12))
                     .foregroundStyle(GGColor.textSecondary)
             }
@@ -1043,42 +1043,102 @@ private struct DeliveryCheckoutSheet: View {
         .padding(.bottom, 14)
     }
 
+    /// One restaurant keeps its name over the cart; several get a count,
+    /// because a sheet headed "Forno Nero" over two kitchens' food is the app
+    /// telling somebody their order is smaller than it is.
+    private var cartTitle: String {
+        let kitchens = app.deliveryCartByMerchant
+        if kitchens.count > 1 { return "\(kitchens.count) restaurants" }
+        return kitchens.first?.name ?? restaurant?.name ?? "Your cart"
+    }
+
+    /// The slowest kitchen sets the wait: the courier collects everything
+    /// before starting for the door, so the fastest one's estimate is a promise
+    /// nothing in the system is trying to keep.
+    private var cartWaitLabel: String? {
+        let etas = app.deliveryCartMerchantIDs.compactMap { id in
+            app.deliveryRestaurants.first(where: { $0.id == id })?.etaMinutes
+        }
+        guard let slowest = etas.max() else { return nil }
+        return "Arrives in about \(slowest)–\(slowest + 10) min"
+    }
+
     private var cartLines: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(app.deliveryCart.enumerated()), id: \.element.id) { i, line in
-                HStack(spacing: 12) {
-                    MediaImage(url: line.item.imageURL, cornerRadius: 10)
-                        .frame(width: 46, height: 46)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(line.item.name)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(GGColor.textPrimary)
-                            .lineLimit(1)
-                        Text(String(format: "$%.2f", line.item.price))
-                            .font(.ggMono(11, .medium))
-                            .foregroundStyle(GGColor.textSecondary)
+        VStack(spacing: 14) {
+            ForEach(app.deliveryCartByMerchant, id: \.merchantID) { kitchen in
+                VStack(spacing: 0) {
+                    // Only drawn when there is more than one: a heading over
+                    // the single restaurant whose name is already at the top
+                    // of the sheet is noise.
+                    if app.deliveryCartByMerchant.count > 1 {
+                        HStack {
+                            Text(kitchen.name)
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(GGColor.textPrimary)
+                            Spacer()
+                            Text(kitchenFeeLabel(kitchen.merchantID))
+                                .font(.ggMono(11, .medium))
+                                .foregroundStyle(GGColor.textSecondary)
+                        }
+                        .padding(.top, 12)
+                        .padding(.bottom, 2)
                     }
-                    Spacer()
-                    HStack(spacing: 0) {
-                        sheetStepper("minus") { app.decrementDeliveryItem(line.item) }
-                        Text("\(line.qty)")
-                            .font(.ggMono(13, .semibold))
-                            .foregroundStyle(GGColor.textPrimary)
-                            .frame(minWidth: 22)
-                        sheetStepper("plus") {
-                            if let r = restaurant { app.addDeliveryItem(line.item, from: r) }
+                    ForEach(Array(kitchen.lines.enumerated()), id: \.element.id) { i, line in
+                        cartLineRow(line)
+                        if i < kitchen.lines.count - 1 {
+                            Divider().background(GGColor.ink(0.07))
                         }
                     }
-                    .background(Capsule().fill(GGColor.ink(0.08)))
                 }
-                .padding(.vertical, 10)
-                if i < app.deliveryCart.count - 1 {
-                    Divider().background(GGColor.ink(0.07))
-                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 2)
+                .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
             }
         }
-        .padding(.horizontal, 14)
-        .glass(cornerRadius: 18, fillOpacity: 0.05, borderOpacity: 0.08)
+    }
+
+    /// What the courier's stop at this kitchen costs — shown per kitchen once
+    /// there are several, because "delivery fee" as one number over two
+    /// restaurants looks like an error.
+    private func kitchenFeeLabel(_ merchantID: UUID) -> String {
+        guard let r = app.deliveryRestaurants.first(where: { $0.id == merchantID }) else {
+            return ""
+        }
+        return r.feeCents == 0 ? "Free delivery" : DeliveryStore.money(cents: r.feeCents) + " delivery"
+    }
+
+    private func cartLineRow(_ line: DeliveryCartLine) -> some View {
+        HStack(spacing: 12) {
+            MediaImage(url: line.item.imageURL, cornerRadius: 10)
+                .frame(width: 46, height: 46)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(line.item.name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .lineLimit(1)
+                Text(String(format: "$%.2f", line.item.price))
+                    .font(.ggMono(11, .medium))
+                    .foregroundStyle(GGColor.textSecondary)
+            }
+            Spacer()
+            HStack(spacing: 0) {
+                sheetStepper("minus") { app.decrementDeliveryItem(line.item) }
+                Text("\(line.qty)")
+                    .font(.ggMono(13, .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .frame(minWidth: 22)
+                sheetStepper("plus") {
+                    // The line's own kitchen, not whichever restaurant the
+                    // sheet happens to be over: a "+" on the second
+                    // restaurant's dish must not add the first one's.
+                    if let r = app.deliveryRestaurants.first(where: { $0.id == line.merchantID }) {
+                        app.addDeliveryItem(line.item, from: r)
+                    }
+                }
+            }
+            .background(Capsule().fill(GGColor.ink(0.08)))
+        }
+        .padding(.vertical, 10)
     }
 
     private var feeBreakdown: some View {
@@ -1109,12 +1169,29 @@ private struct DeliveryCheckoutSheet: View {
     private var quotedBreakdown: some View {
         VStack(spacing: 8) {
             if let quote = app.deliveryQuote {
-                quoteRow("Subtotal", quote.subtotalCents)
-                if quote.discountCents > 0 {
-                    quoteRow(quote.promotionLabel.isEmpty ? "Discount" : quote.promotionLabel,
-                             -quote.discountCents)
+                // Per kitchen once there are several, so somebody can see which
+                // restaurant the discount landed on — a shared code applies
+                // where it belongs and nowhere else, and a single "Discount"
+                // line over two kitchens hides that entirely.
+                if quote.kitchens.count > 1 {
+                    ForEach(quote.kitchens) { kitchen in
+                        quoteRow(kitchen.name, kitchen.subtotalCents)
+                        if kitchen.discountCents > 0 {
+                            quoteRow("  " + (kitchen.promotionLabel.isEmpty
+                                ? "Discount" : kitchen.promotionLabel),
+                                -kitchen.discountCents)
+                        }
+                    }
+                    Divider().background(GGColor.ink(0.07))
+                } else {
+                    quoteRow("Subtotal", quote.subtotalCents)
+                    if quote.discountCents > 0 {
+                        quoteRow(quote.promotionLabel.isEmpty ? "Discount" : quote.promotionLabel,
+                                 -quote.discountCents)
+                    }
                 }
-                quoteRow("Delivery fee", quote.deliveryFeeCents, freeWhenZero: true)
+                quoteRow(quote.kitchens.count > 1 ? "Delivery fees" : "Delivery fee",
+                         quote.deliveryFeeCents, freeWhenZero: true)
                 quoteRow("Service fee", quote.serviceFeeCents)
                 if quote.tipCents > 0 { quoteRow("Courier tip", quote.tipCents) }
                 Divider().background(GGColor.ink(0.1))
@@ -1488,7 +1565,31 @@ private struct DeliveryTrackingView: View {
                     .glass(cornerRadius: 16, tint: GGColor.ink(0.10))
             }
 
-            if let r = app.deliveryOrderRestaurant {
+            // One row per kitchen once an order spans several (Phase 4 M3):
+            // each has its own state, and "preparing" over an order where one
+            // restaurant is cooking and another has refused would be the app
+            // averaging two facts into a wrong one.
+            if app.deliveryKitchens.count > 1 {
+                VStack(spacing: 0) {
+                    ForEach(Array(app.deliveryKitchens.enumerated()), id: \.element.id) { i, kitchen in
+                        kitchenRow(kitchen)
+                        if i < app.deliveryKitchens.count - 1 {
+                            Divider().background(GGColor.ink(0.07))
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .glass(cornerRadius: 16)
+                HStack {
+                    Text("Total")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(GGColor.textSecondary)
+                    Spacer()
+                    Text(app.deliveryOrderTotalLabel)
+                        .font(.ggMono(13, .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                }
+            } else if let r = app.deliveryOrderRestaurant {
                 HStack {
                     Text(r.name)
                         .font(.system(size: 13, weight: .semibold))
@@ -1519,6 +1620,57 @@ private struct DeliveryTrackingView: View {
         .padding(18)
         .glass(cornerRadius: 24, tint: Color.black.opacity(0.52), floating: true)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    /// One kitchen on a multi-restaurant order: where it has got to, and — only
+    /// while that kitchen hasn't answered — the way to drop it without
+    /// abandoning the rest of the order.
+    ///
+    /// The Cancel is drawn on the server's own `cancellable`, never on a status
+    /// read here: the rule ("until that restaurant accepts") lives in one place,
+    /// and a button the app decides to draw is a button the app can be wrong
+    /// about a second after a kitchen taps accept.
+    private func kitchenRow(_ kitchen: SubOrderDTO) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: kitchen.isCancelled ? "xmark.circle.fill"
+                  : kitchen.isCollected ? "checkmark.circle.fill" : "circle.dotted")
+                .font(.system(size: 14))
+                .foregroundStyle(kitchen.isCancelled ? GGColor.textTertiary : GGColor.textSecondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(kitchen.merchantName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(kitchen.isCancelled ? GGColor.textTertiary : GGColor.textPrimary)
+                    .strikethrough(kitchen.isCancelled)
+                    .lineLimit(1)
+                Text(kitchen.progressLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            if kitchen.cancellable {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    app.cancelDeliverySubOrder(kitchen.id)
+                } label: {
+                    Text("Remove")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .glass(cornerRadius: 12)
+                }
+                .buttonStyle(PressableStyle())
+                .disabled(app.deliverySubOrderBusy)
+                .opacity(app.deliverySubOrderBusy ? 0.5 : 1)
+            } else {
+                Text(DeliveryStore.money(cents: kitchen.subtotalCents - kitchen.discountCents))
+                    .font(.ggMono(12, .medium))
+                    .foregroundStyle(kitchen.isCancelled ? GGColor.textTertiary : GGColor.textSecondary)
+                    .strikethrough(kitchen.isCancelled)
+            }
+        }
+        .padding(.vertical, 10)
     }
 
     private var timeline: some View {

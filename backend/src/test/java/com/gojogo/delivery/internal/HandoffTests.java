@@ -54,9 +54,11 @@ class HandoffTests {
     private static final UUID COURIER_USER = UUID.randomUUID();
     private static final UUID COURIER_WORKER = UUID.randomUUID();
     private static final UUID ORDER = UUID.randomUUID();
+    private static final UUID SLICE = UUID.randomUUID();
     private static final UUID CONVERSATION = UUID.randomUUID();
 
     private OrderRepository orders;
+    private SubOrderRepository subOrders;
     private MerchantRepository merchants;
     private OrderPayments payments;
     private DispatchApi dispatch;
@@ -65,10 +67,12 @@ class HandoffTests {
     private MediaDocumentApi privateMedia;
     private OrderFulfilmentService service;
     private CustomerOrder order;
+    private SubOrder slice;
 
     @BeforeEach
     void setUp() {
         orders = mock(OrderRepository.class);
+        subOrders = mock(SubOrderRepository.class);
         merchants = mock(MerchantRepository.class);
         payments = mock(OrderPayments.class);
         dispatch = mock(DispatchApi.class);
@@ -77,7 +81,7 @@ class HandoffTests {
         privateMedia = mock(MediaDocumentApi.class);
         ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
 
-        service = new OrderFulfilmentService(orders, merchants, payments,
+        service = new OrderFulfilmentService(orders, subOrders, merchants, payments,
             new DeliveryPolicy(new StubConfig()), dispatch, profiles, messaging,
             privateMedia, events);
 
@@ -86,16 +90,20 @@ class HandoffTests {
         set(merchant, "id", MERCHANT);
         when(merchants.findFirstByOwnerId(OWNER)).thenReturn(Optional.of(merchant));
         when(merchants.findById(MERCHANT)).thenReturn(Optional.of(merchant));
+        when(merchants.findAllById(any())).thenReturn(java.util.List.of(merchant));
         when(messaging.openDirectConversation(any(), any(), any())).thenReturn(CONVERSATION);
         when(profiles.findById(COURIER_USER)).thenReturn(Optional.of(profile()));
 
-        order = new CustomerOrder(CUSTOMER, MERCHANT, "USD", "Second floor",
+        order = new CustomerOrder(CUSTOMER, "USD", "Second floor",
             OffsetDateTime.now().plusMinutes(30));
         set(order, "id", ORDER);
         order.deliverTo(null, "Home", "12 Rue Ali", "", 33.58, -7.60);
-        order.priceIt(Basket.of(2_000, 300, 99, 0, 0, "USD"), null, null);
-        order.addLine(UUID.randomUUID(), "Margherita", 2_000, 2);
+        slice = order.addSubOrder(MERCHANT, 2_000, 300, 0, null, "");
+        set(slice, "id", SLICE);
+        order.priceIt(Basket.of(MERCHANT, 2_000, 300, 99, 0, 0, "USD"));
+        order.addLine(slice, UUID.randomUUID(), "Margherita", 2_000, 2);
         when(orders.findById(ORDER)).thenReturn(Optional.of(order));
+        when(subOrders.findById(SLICE)).thenReturn(Optional.of(slice));
     }
 
     // MARK: Minting
@@ -109,14 +117,14 @@ class HandoffTests {
     @Test
     @DisplayName("both codes are minted when the restaurant accepts, and not before")
     void codesAppearWithTheBag() {
-        assertThat(order.getPickupCode()).isEmpty();
+        assertThat(slice.getPickupCode()).isEmpty();
         assertThat(order.getDeliveryPin()).isEmpty();
 
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
 
         // Numeric so it can be read aloud across a counter, six because that is
         // the length people already type from memory.
-        assertThat(order.getPickupCode()).hasSize(6).containsOnlyDigits();
+        assertThat(slice.getPickupCode()).hasSize(6).containsOnlyDigits();
         assertThat(order.getDeliveryPin()).hasSize(6).containsOnlyDigits();
     }
 
@@ -124,13 +132,14 @@ class HandoffTests {
      *  courier holding the right code wrong. */
     @Test
     void aCodeSomebodyHasAlreadyReadOutIsNeverReplaced() {
-        service.accept(OWNER, ORDER, 20);
-        String pickup = order.getPickupCode();
+        service.accept(OWNER, SLICE, 20);
+        String pickup = slice.getPickupCode();
         String pin = order.getDeliveryPin();
 
-        order.mintHandoffCodes("000000", "111111");
+        slice.mintPickupCode("000000");
+        order.mintDeliveryPin("111111");
 
-        assertThat(order.getPickupCode()).isEqualTo(pickup);
+        assertThat(slice.getPickupCode()).isEqualTo(pickup);
         assertThat(order.getDeliveryPin()).isEqualTo(pin);
     }
 
@@ -148,7 +157,7 @@ class HandoffTests {
     void theRightCodeCollectsTheOrder() {
         atTheCounter();
 
-        HandoffResultDto result = service.pickedUp(COURIER_USER, ORDER, order.getPickupCode());
+        HandoffResultDto result = service.pickedUp(COURIER_USER, ORDER, slice.getPickupCode());
 
         assertThat(result.accepted()).isTrue();
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERING);
@@ -160,8 +169,8 @@ class HandoffTests {
     @Test
     void aCodeTypedWithSpacesIsStillTheRightCode() {
         atTheCounter();
-        String spaced = order.getPickupCode().substring(0, 3) + " "
-            + order.getPickupCode().substring(3);
+        String spaced = slice.getPickupCode().substring(0, 3) + " "
+            + slice.getPickupCode().substring(3);
 
         assertThat(service.pickedUp(COURIER_USER, ORDER, spaced).accepted()).isTrue();
     }
@@ -180,7 +189,7 @@ class HandoffTests {
         HandoffResultDto result = service.pickedUp(COURIER_USER, ORDER, "000000");
 
         assertThat(result.accepted()).isFalse();
-        assertThat(result.message()).doesNotContain(order.getPickupCode());
+        assertThat(result.message()).doesNotContain(slice.getPickupCode());
         assertThat(order.getStatus()).isEqualTo(OrderStatus.COURIER_TO_RESTAURANT);
         // The job comes back with the refusal: a mistyped digit must not blank
         // the screen telling them where they are.
@@ -217,7 +226,7 @@ class HandoffTests {
             assertThat(refusal.supportUnlocked()).isFalse();
         }
         assertThat(order.getHandoffAttempts()).isZero();
-        assertThat(service.pickedUp(COURIER_USER, ORDER, order.getPickupCode()).accepted()).isTrue();
+        assertThat(service.pickedUp(COURIER_USER, ORDER, slice.getPickupCode()).accepted()).isTrue();
     }
 
     /** An order accepted before V38 has no code, and a migration must not
@@ -227,7 +236,7 @@ class HandoffTests {
     @DisplayName("an order minted before V38 is collected with no code at all")
     void aPreV38OrderStillCollects() {
         atTheCounter();
-        set(order, "pickupCode", "");
+        set(slice, "pickupCode", "");
 
         assertThat(service.pickedUp(COURIER_USER, ORDER, null).accepted()).isTrue();
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERING);
@@ -243,7 +252,7 @@ class HandoffTests {
 
         assertThat(result.accepted()).isTrue();
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERED);
-        verify(payments).settle(order, "Forno Nero");
+        verify(payments).settle(order, java.util.Map.of(MERCHANT, "Forno Nero"));
         verify(dispatch).complete(JobKind.DELIVERY, ORDER, null);
     }
 
@@ -286,7 +295,7 @@ class HandoffTests {
         service.delivered(COURIER_USER, ORDER, "000000");
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERING);
-        verify(payments, never()).settle(any(), anyString());
+        verify(payments, never()).settle(any(), any());
         verify(dispatch, never()).complete(any(), any(), any());
     }
 
@@ -315,7 +324,7 @@ class HandoffTests {
         assertThat(result.accepted()).isTrue();
         // Nothing is counted on a confirm, so there is no budget to report.
         assertThat(result.attemptsLeft()).isEqualTo(-1);
-        verify(payments).settle(order, "Forno Nero");
+        verify(payments).settle(order, java.util.Map.of(MERCHANT, "Forno Nero"));
     }
 
     /** A PIN order that predates V38 has no PIN to check, and falls back to the
@@ -343,7 +352,7 @@ class HandoffTests {
         assertThat(result.accepted()).isFalse();
         assertThat(result.message()).isEqualTo("Take a photo of the drop-off first");
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERING);
-        verify(payments, never()).settle(any(), anyString());
+        verify(payments, never()).settle(any(), any());
     }
 
     @Test
@@ -354,7 +363,7 @@ class HandoffTests {
         service.proofPhotoUpload(COURIER_USER, ORDER);
 
         assertThat(service.delivered(COURIER_USER, ORDER, null).accepted()).isTrue();
-        verify(payments).settle(order, "Forno Nero");
+        verify(payments).settle(order, java.util.Map.of(MERCHANT, "Forno Nero"));
     }
 
     /**
@@ -488,7 +497,7 @@ class HandoffTests {
     @DisplayName("the courier's job carries neither the pickup code nor the PIN")
     void theCourierSeesNeitherCode() {
         atTheDoor();
-        set(order, "pickupCode", "888888");
+        set(slice, "pickupCode", "888888");
         set(order, "deliveryPin", "999999");
 
         // Taken off a refusal, which is the one response that carries the job
@@ -504,11 +513,11 @@ class HandoffTests {
      *  somebody's door. */
     @Test
     void theKitchenSeesThePickupCodeAndNothingElse() {
-        service.accept(OWNER, ORDER, 20);
-        set(order, "pickupCode", "888888");
+        service.accept(OWNER, SLICE, 20);
+        set(slice, "pickupCode", "888888");
         set(order, "deliveryPin", "999999");
-        when(orders.findByMerchantIdAndStatusInOrderByPlacedAtAsc(eq(MERCHANT), any()))
-            .thenReturn(java.util.List.of(order));
+        when(subOrders.queueFor(eq(MERCHANT), any()))
+            .thenReturn(java.util.List.of(slice));
 
         MerchantOrderDto queued = service.queue(OWNER).getFirst();
 
@@ -527,7 +536,7 @@ class HandoffTests {
     @Test
     @DisplayName("assignment opens the courier↔customer thread with a card back to the order")
     void theThreadOpensWithAnOrderCard() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
 
         service.courierAssigned(ORDER, assignment());
 
@@ -550,7 +559,7 @@ class HandoffTests {
     void messagingFailingIsSwallowed() {
         when(messaging.openDirectConversation(any(), any(), any()))
             .thenThrow(new IllegalStateException("dynamo is having a moment"));
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
 
         service.courierAssigned(ORDER, assignment());
 
@@ -562,14 +571,14 @@ class HandoffTests {
 
     /** An accepted order with a courier on their way to collect it. */
     private void atTheCounter() {
-        service.accept(OWNER, ORDER, 20);
+        service.accept(OWNER, SLICE, 20);
         service.courierAssigned(ORDER, assignment());
     }
 
     /** The same, with the food already in the courier's hands. */
     private void atTheDoor() {
         atTheCounter();
-        service.pickedUp(COURIER_USER, ORDER, order.getPickupCode());
+        service.pickedUp(COURIER_USER, ORDER, slice.getPickupCode());
     }
 
     private void presign(String objectKey) {

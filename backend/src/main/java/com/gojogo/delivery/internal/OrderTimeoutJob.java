@@ -41,15 +41,17 @@ class OrderTimeoutJob {
 
     @Scheduled(fixedDelayString = "${gojogo.delivery.timeout-poll-ms:60000}")
     void tick() {
-        for (UUID orderId : fulfilment.unansweredOrderIds(BATCH)) {
+        // Per kitchen since Phase 4 M3: the slice nobody answered is cancelled
+        // and refunded on its own, and the order carries on with whoever did.
+        for (UUID subOrderId : fulfilment.unansweredSubOrderIds(BATCH)) {
             try {
-                fulfilment.timeOut(orderId);
+                fulfilment.timeOut(subOrderId);
             } catch (OptimisticLockingFailureException anotherInstanceGotThere) {
                 // Expected when more than one task runs the poller — the winner's
                 // write is the one that counts, and this order is finished either
                 // way.
             } catch (RuntimeException e) {
-                log.warn("Could not time out delivery order {}: {}", orderId, e.toString());
+                log.warn("Could not time out delivery sub-order {}: {}", subOrderId, e.toString());
             }
         }
     }

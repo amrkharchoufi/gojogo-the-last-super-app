@@ -71,12 +71,13 @@ class PromotionService {
             .orElse(Applied.none());
     }
 
-    /** Records that it was used. One row per order — a retried checkout must not
-     *  count twice against someone's allowance. */
+    /** Records that it was used. One row per (promotion, order) — a retried
+     *  checkout must not count twice against someone's allowance, and an order
+     *  spanning merchants may carry one promotion per kitchen. */
     @Transactional
     void redeem(Applied applied, UUID userId, UUID orderId) {
         if (applied.promotionId() == null || applied.discountCents() <= 0) return;
-        if (redemptions.existsByOrderId(orderId)) return;
+        if (redemptions.existsByPromotionIdAndOrderId(applied.promotionId(), orderId)) return;
         redemptions.save(new PromotionRedemption(applied.promotionId(), userId, orderId,
             applied.discountCents()));
     }

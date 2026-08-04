@@ -55,27 +55,52 @@ final class DeliveryStore {
     /// Prices a basket without placing it. The app never adds an order up
     /// itself — fees, discounts and what the wallet can cover are all the
     /// server's answer, and this is how the checkout screen learns them.
-    func quote(merchantId: UUID, lines: [DeliveryCartLine],
+    /// Prices a cart without placing it — one basket per kitchen since Phase 4
+    /// M3, which is the only shape this app sends now.
+    func quote(baskets: [UUID: [DeliveryCartLine]],
                promotionCode: String?, tipCents: Int) async throws -> QuoteDTO {
         let body = QuoteBody(
-            merchantId: merchantId,
-            lines: lines.map { PlaceOrderLineBody(menuItemId: $0.item.id, qty: $0.qty) },
+            merchantId: nil,
+            lines: nil,
+            baskets: Self.baskets(baskets),
             promotionCode: promotionCode?.isEmpty == false ? promotionCode : nil,
             tipCents: tipCents)
         return try await APIClient.shared.post("/v1/delivery/orders/quote", body: body)
     }
 
-    func placeOrder(merchantId: UUID, lines: [DeliveryCartLine],
+    func placeOrder(baskets: [UUID: [DeliveryCartLine]],
                     addressId: UUID?, note: String,
                     promotionCode: String? = nil, tipCents: Int = 0) async throws -> OrderDTO {
         let body = PlaceOrderBody(
-            merchantId: merchantId,
-            lines: lines.map { PlaceOrderLineBody(menuItemId: $0.item.id, qty: $0.qty) },
+            merchantId: nil,
+            lines: nil,
+            baskets: Self.baskets(baskets),
             addressId: addressId,
             note: note,
             promotionCode: promotionCode?.isEmpty == false ? promotionCode : nil,
             tipCents: tipCents)
         return try await APIClient.shared.post("/v1/delivery/orders", body: body)
+    }
+
+    /// Sorted by merchant id so two identical carts serialise identically —
+    /// dictionary order is not stable, and a body that shuffles between calls
+    /// makes a diff of two failed checkouts unreadable.
+    private static func baskets(_ byMerchant: [UUID: [DeliveryCartLine]]) -> [BasketBody] {
+        byMerchant
+            .sorted { $0.key.uuidString < $1.key.uuidString }
+            .map { merchantId, lines in
+                BasketBody(merchantId: merchantId,
+                           lines: lines.map { PlaceOrderLineBody(menuItemId: $0.item.id,
+                                                                 qty: $0.qty) },
+                           promotionCode: nil)
+            }
+    }
+
+    /// Cancels one kitchen's slice (Phase 4 M3). Refused with a 409 once that
+    /// restaurant is cooking — the rest of the order is untouched either way.
+    func cancelSubOrder(_ orderId: UUID, subOrderId: UUID) async throws -> OrderDTO {
+        try await APIClient.shared
+            .post("/v1/delivery/orders/\(orderId)/sub-orders/\(subOrderId)/cancel")
     }
 
     /// A tip after the food arrived. 100% of it goes to whoever delivered it.

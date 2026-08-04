@@ -400,6 +400,11 @@ final class AppState: ObservableObject {
     /// The thread with whoever is bringing it, opened server-side at assignment.
     @Published var deliveryConversationID: UUID? = nil
     @Published var deliveryHandoffBusy: Bool = false
+    /// The kitchens on the live order (Phase 4 M3), each with its own state.
+    /// Empty for an order from a backend that predates sub-orders, which the
+    /// tracking card reads as the one restaurant it always drew.
+    @Published var deliveryKitchens: [SubOrderDTO] = []
+    @Published var deliverySubOrderBusy: Bool = false
     @Published var deliveryRating: Int = 0
     @Published var deliveryPastOrders: [DeliveryPastOrder] = []
     /// Restaurant the active order was placed from (kept after cart clears).
@@ -3956,33 +3961,79 @@ final class AppState: ObservableObject {
         deliveryCart.reduce(0) { $0 + $1.item.price * Double($1.qty) }
     }
 
+    /// Every kitchen's fee, because the courier makes a stop at each of them
+    /// and is paid for each (Phase 4 M3). The server's quote replaces this the
+    /// moment there is one; it is the offline demo's arithmetic.
     var deliveryFeeAmount: Double {
-        guard let rid = deliveryCartRestaurantID,
-              let r = deliveryRestaurants.first(where: { $0.id == rid }) else { return 1.49 }
-        return Double(r.feeCents) / 100
+        let ids = Set(deliveryCart.map(\.merchantID))
+        guard !ids.isEmpty else { return 0 }
+        return ids.reduce(0.0) { running, id in
+            guard let r = deliveryRestaurants.first(where: { $0.id == id }) else {
+                return running + 1.49
+            }
+            return running + Double(r.feeCents) / 100
+        }
     }
 
+    /// Once per checkout, not per kitchen — the platform charges for the order.
     var deliveryServiceFee: Double { deliveryCart.isEmpty ? 0 : 0.99 }
 
     var deliveryCartTotal: Double {
         deliveryCartSubtotal + deliveryFeeAmount + deliveryServiceFee
     }
 
+    /// How many kitchens an order may span, mirroring the server's own cap
+    /// (`delivery.order.max.merchants`). One courier collects every bag, so
+    /// three counters is a trip one person makes and five is a relay.
+    static let deliveryMaxMerchants = 3
+
+    /// The cart grouped the way it will be sent, and the way checkout draws it.
+    /// Ordered by when each kitchen first entered the cart, so the list does
+    /// not reshuffle under somebody's thumb as they add things.
+    var deliveryCartByMerchant: [(merchantID: UUID, name: String, lines: [DeliveryCartLine])] {
+        var order: [UUID] = []
+        var byMerchant: [UUID: [DeliveryCartLine]] = [:]
+        for line in deliveryCart {
+            if byMerchant[line.merchantID] == nil { order.append(line.merchantID) }
+            byMerchant[line.merchantID, default: []].append(line)
+        }
+        return order.map { id in
+            let lines = byMerchant[id] ?? []
+            return (id, lines.first?.merchantName ?? "Restaurant", lines)
+        }
+    }
+
+    var deliveryCartMerchantIDs: [UUID] { deliveryCartByMerchant.map(\.merchantID) }
+
     func deliveryQty(of item: DeliveryMenuItem) -> Int {
         deliveryCart.first(where: { $0.id == item.id })?.qty ?? 0
     }
 
-    /// Adds an item; starting a cart at a different restaurant replaces the old cart.
+    /// Whether adding from this restaurant would exceed the cap. Asked by the
+    /// menu screen so the refusal lands on the button rather than at checkout,
+    /// where somebody has already chosen the food.
+    func deliveryCartIsFull(for restaurant: DeliveryRestaurant) -> Bool {
+        let ids = Set(deliveryCart.map(\.merchantID))
+        return !ids.contains(restaurant.id) && ids.count >= Self.deliveryMaxMerchants
+    }
+
+    /// Adds an item. Since Phase 4 M3 a second restaurant joins the cart
+    /// instead of replacing it — up to the cap, past which the add is refused
+    /// out loud rather than silently wiping a cart somebody built.
     func addDeliveryItem(_ item: DeliveryMenuItem, from restaurant: DeliveryRestaurant) {
+        guard !deliveryCartIsFull(for: restaurant) else {
+            showDeliveryNotice(
+                "One order can cover \(Self.deliveryMaxMerchants) restaurants — one courier picks it all up.")
+            return
+        }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
-            if deliveryCartRestaurantID != restaurant.id {
-                deliveryCart = []
-                deliveryCartRestaurantID = restaurant.id
-            }
+            if deliveryCartRestaurantID == nil { deliveryCartRestaurantID = restaurant.id }
             if let i = deliveryCart.firstIndex(where: { $0.id == item.id }) {
                 deliveryCart[i].qty += 1
             } else {
-                deliveryCart.append(DeliveryCartLine(item: item, qty: 1))
+                deliveryCart.append(DeliveryCartLine(item: item, qty: 1,
+                                                     merchantID: restaurant.id,
+                                                     merchantName: restaurant.name))
             }
         }
     }
@@ -3995,8 +4046,11 @@ final class AppState: ObservableObject {
             } else {
                 deliveryCart.remove(at: i)
             }
+            // The cart-level id names the first kitchen left in it, which is
+            // what the demo path and every "which restaurant is this" read
+            // still ask for.
+            deliveryCartRestaurantID = deliveryCart.first?.merchantID
             if deliveryCart.isEmpty {
-                deliveryCartRestaurantID = nil
                 showDeliveryCheckout = false
             }
         }
@@ -4014,9 +4068,14 @@ final class AppState: ObservableObject {
 
     func placeDeliveryOrder() {
         guard !deliveryCart.isEmpty, let rid = deliveryCartRestaurantID else { return }
-        // A live restaurant means a real order: the backend prices it and owns
-        // the fulfilment timeline. Everything below is the offline demo.
-        if backendConnected, DeliveryStore.shared.isRemote(rid) {
+        // Live restaurants mean a real order: the backend prices it and owns the
+        // fulfilment timeline. Everything below is the offline demo.
+        //
+        // `deliveryCartIsLive` asks about *every* kitchen in the cart, not just
+        // the first: since Phase 4 M3 a cart can span restaurants, and sending
+        // one the server has never heard of would 404 a checkout that the demo
+        // can run perfectly well on its own.
+        if deliveryCartIsLive {
             placeLiveDeliveryOrder(merchantID: rid)
             return
         }

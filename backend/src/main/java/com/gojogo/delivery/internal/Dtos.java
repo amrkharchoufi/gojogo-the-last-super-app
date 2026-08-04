@@ -109,6 +109,24 @@ record CourierDto(String name, String vehicle, double rating, int deliveries,
 record OrderLineDto(UUID menuItemId, String name, int unitPriceCents, int qty) {
 }
 
+/**
+ * One merchant's slice of an order, as the customer sees it (Phase 4 M3).
+ *
+ * <p>{@code status} is the sub-order's own vocabulary — CONFIRMED / PREPARING /
+ * COLLECTED / DELIVERED / CANCELLED — beside the parent's six words, because
+ * "Dar Zellij is cooking, Sweet Corner turned theirs down" is per-kitchen news
+ * the parent status cannot carry. {@code cancellable} says whether this slice
+ * alone can still be cancelled: true exactly while its merchant hasn't
+ * answered, which is the SPECS §5 rule, computed here so the client never
+ * re-derives it.
+ */
+record SubOrderDto(UUID id, UUID merchantId, String merchantName, String merchantImageUrl,
+                   String status, boolean cancellable, List<OrderLineDto> lines,
+                   int subtotalCents, int deliveryFeeCents, int discountCents,
+                   String promotionCode, int prepMinutes, OffsetDateTime readyAt,
+                   OffsetDateTime collectedAt, String cancelReason) {
+}
+
 /** A saved delivery address. */
 record AddressDto(UUID id, String label, String line1, String note,
                   Double latitude, Double longitude, boolean isDefault) {
@@ -156,6 +174,11 @@ record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinute
                 double courierProgress, CourierDto courier,
                 String courierSearch, String cancelReason, OffsetDateTime readyAt,
                 List<OrderLineDto> lines,
+                /* One per merchant since Phase 4 M3. The flat fields above stay
+                 * populated — merchant is the first slice's, lines are all of
+                 * them — so a client that predates sub-orders keeps rendering
+                 * the common single-merchant case exactly as before. */
+                List<SubOrderDto> subOrders,
                 int subtotalCents, int deliveryFeeCents, int serviceFeeCents, int totalCents,
                 int discountCents, int tipCents, String promotionCode,
                 String paymentStatus,
@@ -176,22 +199,26 @@ record HandoffModeRequest(@Size(max = 16) String mode) {
 // MARK: The kitchen's queue (OrderFulfilmentService)
 
 /**
- * One order as the restaurant sees it — the first time in this product that a
- * restaurant sees one at all. Under the simulation there was nothing for a
- * kitchen to do, so there was deliberately no surface for it (see the old note
- * on {@code MerchantManagementService}): a button the fulfilment job would
- * immediately overrule is worse than no button.
+ * One kitchen's slice of an order, as that restaurant sees it. Since Phase 4
+ * M3 {@code id} is the <b>sub-order</b> id — accept, reject and ready act on
+ * it — and the DTO deliberately says nothing about the other merchants on the
+ * order: what another kitchen is cooking is not this one's business.
  *
- * @param earningsMinor what this order is worth to them after commission, which
+ * <p>{@code status} keeps the order's six-word vocabulary, derived from the
+ * slice plus the parent (a COLLECTED slice reads as DELIVERING — "the courier
+ * has your bag"), so the deployed kitchen screen renders a multi-merchant
+ * order without having been taught a new word.
+ *
+ * @param earningsMinor what this slice is worth to them after commission, which
  *                      is the number an owner actually reads
  * @param courierSearch whether anybody is coming for it — a kitchen with food
  *                      ready and no courier needs to know that before the food
  *                      does
- * @param pickupCode    the six digits the courier has to type to collect it,
- *                      which this screen exists to display. It is on the
- *                      kitchen's DTO and on no other, and the delivery PIN is on
- *                      neither: a restaurant has no business knowing the number
- *                      that confirms the food reached somebody's door
+ * @param pickupCode    the six digits the courier has to type at <em>this</em>
+ *                      counter. On the kitchen's DTO and on no other, and the
+ *                      delivery PIN is on neither: a restaurant has no business
+ *                      knowing the number that confirms the food reached
+ *                      somebody's door
  */
 record MerchantOrderDto(UUID id, String status, List<OrderLineDto> lines,
                         int subtotalCents, int discountCents, String currency,
@@ -250,8 +277,24 @@ record CourierJobDto(UUID id, String status, String merchantName,
                      Double addressLatitude, Double addressLongitude,
                      int itemCount, String note, String handoffMode,
                      long payMinor, String currency, UUID conversationId,
+                     /* One per merchant since Phase 4 M3, in collection order.
+                      * The single merchantName/lat/lng above stay populated
+                      * with the next uncollected stop, so an older client's
+                      * one-restaurant screen always points at the right
+                      * counter. */
+                     List<CourierStopDto> stops,
                      OffsetDateTime readyAt, OffsetDateTime pickedUpAt,
                      OffsetDateTime statusChangedAt) {
+}
+
+/**
+ * One counter on the courier's route. {@code collected} flips when the code
+ * typed at that counter matched — the code itself is on the kitchen's screen
+ * and never here, which is the whole point of there being one per kitchen.
+ */
+record CourierStopDto(UUID subOrderId, String merchantName,
+                      Double latitude, Double longitude, int itemCount,
+                      boolean collected, OffsetDateTime readyAt) {
 }
 
 /** Wrapper so "not carrying anything" is a 200 with {@code job: null}. */
@@ -316,11 +359,34 @@ record ProofUploadDto(String uploadUrl, String objectKey, String contentType,
 record QuoteDto(int subtotalCents, int deliveryFeeCents, int serviceFeeCents,
                 int discountCents, int tipCents, int totalCents, String currency,
                 String promotionCode, String promotionLabel,
+                /* The per-merchant breakdown (Phase 4 M3), so a checkout sheet
+                 * can group by kitchen. Sums to the flat fields above. */
+                List<MerchantQuoteDto> merchants,
                 long walletAvailableMinor, boolean walletCovers, long shortfallMinor) {
 }
 
-record QuoteRequest(@NotNull UUID merchantId,
-                    @NotEmpty @Size(max = 40) List<@Valid OrderLineRequest> lines,
+/** One merchant's slice of a quote. */
+record MerchantQuoteDto(UUID merchantId, String name, int subtotalCents,
+                        int deliveryFeeCents, int discountCents,
+                        String promotionCode, String promotionLabel) {
+}
+
+/**
+ * One merchant's basket inside a multi-merchant checkout (Phase 4 M3). The
+ * promotion code is per basket because a promotion is one merchant's own
+ * campaign; the top-level code on the request is tried against every basket
+ * instead, for the client with one code field.
+ */
+record BasketRequest(@NotNull UUID merchantId,
+                     @NotEmpty @Size(max = 40) List<@Valid OrderLineRequest> lines,
+                     @Size(max = 32) String promotionCode) {
+}
+
+/** Either the legacy single-merchant fields or {@code baskets} — one of the
+ *  two is required, checked in the service where the message can say so. */
+record QuoteRequest(UUID merchantId,
+                    @Size(max = 40) List<@Valid OrderLineRequest> lines,
+                    @Size(max = 10) List<@Valid BasketRequest> baskets,
                     @Size(max = 32) String promotionCode,
                     @Min(0) @Max(100_000) int tipCents) {
 }
@@ -383,9 +449,12 @@ record OrderLineRequest(@NotNull UUID menuItemId, @Min(1) @Max(50) int qty) {
 
 /** {@code addressId} is a saved address of the caller's; the older
  *  {@code addressLabel} free-text form is still accepted so a client that
- *  predates saved addresses keeps working. One of the two is required. */
-record PlaceOrderRequest(@NotNull UUID merchantId,
-                         @NotEmpty @Size(max = 40) List<@Valid OrderLineRequest> lines,
+ *  predates saved addresses keeps working. One of the two is required — and so
+ *  is one of {@code merchantId + lines} (the pre-M3 single-merchant shape) or
+ *  {@code baskets}, checked in the service where the message can say so. */
+record PlaceOrderRequest(UUID merchantId,
+                         @Size(max = 40) List<@Valid OrderLineRequest> lines,
+                         @Size(max = 10) List<@Valid BasketRequest> baskets,
                          UUID addressId,
                          @Size(max = 120) String addressLabel,
                          @Size(max = 280) String note,

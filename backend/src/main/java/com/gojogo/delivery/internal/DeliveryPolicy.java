@@ -61,6 +61,16 @@ class DeliveryPolicy {
     }
 
     /**
+     * Most merchants one order may span (Phase 4 M3, SPECS §5). One courier
+     * collects every bag — the per-leg multi-courier split is not built — and
+     * this cap is what keeps that honest: three counters is a trip one person
+     * makes, five is a relay.
+     */
+    int maxMerchantsPerOrder() {
+        return (int) Math.clamp(config.number("delivery.order.max.merchants", 3), 1, 10);
+    }
+
+    /**
      * Ready-to-door, for the customer's countdown. A flat number until dispatch
      * has a routing authority — SPECS §3 reserves Mapbox Directions for that and
      * it is not built, and a made-up per-order estimate would be no more honest

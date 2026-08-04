@@ -492,11 +492,36 @@ private struct CourierDeliveryCard: View {
                         .foregroundStyle(GGColor.textSecondary)
                 }
                 Spacer(minLength: 4)
+                // "Pickup 2 of 3" (Phase 4 M3) — a run with several counters
+                // needs to say where in it you are, and it belongs beside the
+                // instruction rather than buried in the leg list.
+                if let progress = app.courierStopProgress {
+                    Text(progress)
+                        .font(.ggMono(11, .semibold))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(GGColor.ink(0.10)))
+                }
             }
 
-            courierLeg(icon: "storefront.fill", title: job.merchantName,
-                       detail: job.isCollected ? "Collected" : "Pick up here",
-                       dim: job.isCollected)
+            // One leg per counter (Phase 4 M3), each dimmed once its own code
+            // has been typed — the collected flag is the server's, because the
+            // only thing that knows a bag is in hand is the code that proved it.
+            // A single-stop run draws exactly the one leg it always did.
+            if job.hasMultipleStops {
+                ForEach(job.counters) { stop in
+                    courierLeg(icon: "storefront.fill", title: stop.merchantName,
+                               detail: stop.collected
+                                   ? "Collected"
+                                   : "\(stop.itemCount) \(stop.itemCount == 1 ? "item" : "items") · pick up here",
+                               dim: stop.collected)
+                }
+            } else {
+                courierLeg(icon: "storefront.fill", title: job.merchantName,
+                           detail: job.isCollected ? "Collected" : "Pick up here",
+                           dim: job.isCollected)
+            }
             courierLeg(icon: "house.fill", title: job.addressLabel,
                        detail: job.addressLine.isEmpty ? "Delivery address" : job.addressLine,
                        dim: !job.isCollected)
@@ -577,6 +602,10 @@ private struct CourierDeliveryCard: View {
     /// one built: a scanner needs a camera the Simulator does not have, and a
     /// number somebody can say out loud works through a hatch, in the dark, and
     /// on a phone with a cracked lens.
+    /// The counter's code. On a multi-stop run (Phase 4 M3) the same field
+    /// serves every counter and the digits themselves say which one this is —
+    /// the server matches the typed code against the stops still waiting, so a
+    /// courier never picks a restaurant from a list before typing.
     private var collect: some View {
         VStack(alignment: .leading, spacing: 10) {
             CourierCodeField(
@@ -588,11 +617,21 @@ private struct CourierDeliveryCard: View {
                 Keyboard.dismiss()
                 app.courierPickedUp(code: pickupCode)
             } label: {
-                primaryLabel("I've collected the order")
+                primaryLabel(job.hasMultipleStops
+                             ? "I've collected from \(job.merchantName)"
+                             : "I've collected the order")
             }
             .buttonStyle(PressableStyle())
             .disabled(busy)
             .opacity(busy ? 0.55 : 1)
+        }
+        // The next counter has a different code, so a collected bag has to take
+        // its digits off the screen or somebody deletes six of them at every
+        // stop. Keyed on a stop actually flipping to collected rather than on
+        // the tap: a refusal must leave what they typed exactly where it is,
+        // which is the rule the whole handoff screen is built on.
+        .onChange(of: job.counters.filter(\.collected).count) { _, _ in
+            pickupCode = ""
         }
     }
 

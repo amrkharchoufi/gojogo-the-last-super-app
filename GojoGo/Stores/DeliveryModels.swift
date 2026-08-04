@@ -75,6 +75,48 @@ struct OrderLineDTO: Decodable {
     let qty: Int
 }
 
+/// One kitchen's slice of an order (Phase 4 M3).
+///
+/// `status` is the sub-order's own vocabulary — CONFIRMED / PREPARING /
+/// COLLECTED / DELIVERED / CANCELLED — which sits beside the parent's six
+/// words because "Dar Zellij is cooking, Sweet Corner turned theirs down" is
+/// per-kitchen news the order status cannot carry.
+struct SubOrderDTO: Decodable, Identifiable {
+    let id: UUID
+    let merchantId: UUID
+    let merchantName: String
+    let merchantImageUrl: String?
+    let status: String
+    /// Whether this slice alone can still be cancelled — true exactly while its
+    /// kitchen hasn't answered. The server computes it so the app never
+    /// re-derives the rule and gets it a version out of date.
+    let cancellable: Bool
+    let lines: [OrderLineDTO]
+    let subtotalCents: Int
+    let deliveryFeeCents: Int
+    let discountCents: Int
+    let promotionCode: String
+    let prepMinutes: Int
+    let readyAt: String?
+    let collectedAt: String?
+    let cancelReason: String
+
+    var itemCount: Int { lines.reduce(0) { $0 + $1.qty } }
+    var isCancelled: Bool { status == "CANCELLED" }
+    var isCollected: Bool { status == "COLLECTED" || status == "DELIVERED" }
+
+    /// What this kitchen's row says it is doing, in the customer's words.
+    var progressLabel: String {
+        switch status {
+        case "CONFIRMED": return "Waiting for the restaurant"
+        case "PREPARING": return "Cooking"
+        case "COLLECTED": return "With your courier"
+        case "DELIVERED": return "Delivered"
+        default:          return cancelReason.isEmpty ? "Cancelled" : cancelReason
+        }
+    }
+}
+
 struct DeliveryAddressDTO: Decodable {
     let id: UUID
     let label: String
@@ -123,9 +165,15 @@ struct OrderDTO: Decodable {
     /// Why it ended, when it ended badly. "Cancelled" on its own leaves someone
     /// wondering whether they did it themselves.
     let cancelReason: String?
-    /// When the kitchen says the food will be done. Null until they accept.
+    /// When the kitchen says the food will be done. Null until they accept —
+    /// and since Phase 4 M3 it is the *last* kitchen still cooking, which is
+    /// what the countdown and the courier's pickup time are both drawn from.
     let readyAt: String?
     let lines: [OrderLineDTO]
+    /// One per kitchen (Phase 4 M3). Optional-decoded like every field added
+    /// after a release; the flat fields above stay populated either way, so a
+    /// single-restaurant order renders identically whether or not this arrives.
+    let subOrders: [SubOrderDTO]?
     let subtotalCents: Int
     let deliveryFeeCents: Int
     let serviceFeeCents: Int
@@ -168,6 +216,14 @@ struct OrderDTO: Decodable {
     /// nothing, and the honest reading of that is CONFIRM: it is what those
     /// orders actually do.
     var handoff: String { handoffMode ?? "CONFIRM" }
+
+    /// The kitchens on this order, never empty: a backend that predates M3
+    /// sends none, and one restaurant's order is exactly what it always was.
+    var kitchens: [SubOrderDTO] { subOrders ?? [] }
+
+    /// Whether this order is worth drawing as several kitchens. One is the
+    /// overwhelming case and gets the screen it has always had.
+    var spansKitchens: Bool { kitchens.count > 1 }
 }
 
 /// "Nothing in flight" is a 200 with a null order, not a 404.
@@ -180,9 +236,24 @@ struct PlaceOrderLineBody: Encodable {
     let qty: Int
 }
 
-struct PlaceOrderBody: Encodable {
+/// One kitchen's basket inside a checkout (Phase 4 M3).
+struct BasketBody: Encodable {
     let merchantId: UUID
     let lines: [PlaceOrderLineBody]
+    /// Per basket, because a promotion is one merchant's own campaign. Nil
+    /// leaves the checkout-level code to be tried against this kitchen too.
+    let promotionCode: String?
+}
+
+struct PlaceOrderBody: Encodable {
+    /// The pre-M3 single-merchant fields. Left nil when `baskets` is used —
+    /// the server takes either shape and refuses only when both are missing.
+    let merchantId: UUID?
+    let lines: [PlaceOrderLineBody]?
+    /// One per kitchen. The app always sends this now; the fields above stay
+    /// in the type because the wire still accepts them and a stale client in
+    /// the field is still speaking that shape.
+    let baskets: [BasketBody]?
     /// A saved address of the caller's. Nil falls back to their default one.
     let addressId: UUID?
     let note: String
@@ -209,10 +280,25 @@ struct TipBody: Encodable {
 // MARK: Checkout
 
 struct QuoteBody: Encodable {
-    let merchantId: UUID
-    let lines: [PlaceOrderLineBody]
+    let merchantId: UUID?
+    let lines: [PlaceOrderLineBody]?
+    let baskets: [BasketBody]?
     let promotionCode: String?
     let tipCents: Int
+}
+
+/// One kitchen's slice of a quote (Phase 4 M3) — what the checkout sheet
+/// groups by, and where a shared code visibly landed.
+struct MerchantQuoteDTO: Decodable, Identifiable {
+    let merchantId: UUID
+    let name: String
+    let subtotalCents: Int
+    let deliveryFeeCents: Int
+    let discountCents: Int
+    let promotionCode: String
+    let promotionLabel: String
+
+    var id: UUID { merchantId }
 }
 
 /// What a basket costs, priced by the server before anything is charged — and
@@ -228,9 +314,15 @@ struct QuoteDTO: Decodable {
     let currency: String
     let promotionCode: String
     let promotionLabel: String
+    /// The per-kitchen breakdown (Phase 4 M3), summing to the flat fields
+    /// above. Optional-decoded: a backend that predates M3 sends none, and a
+    /// one-restaurant checkout has nothing to group anyway.
+    let merchants: [MerchantQuoteDTO]?
     let walletAvailableMinor: Int
     let walletCovers: Bool
     let shortfallMinor: Int
+
+    var kitchens: [MerchantQuoteDTO] { merchants ?? [] }
 }
 
 struct DeliveryPromotionDTO: Decodable, Identifiable {
@@ -390,13 +482,40 @@ struct CourierJobDTO: Decodable, Identifiable {
     /// asked them not to. It is optional here for the usual forward-compat
     /// reason — an older backend simply doesn't send it.
     let handoffMode: String?
+    /// Every counter on this run, in collection order (Phase 4 M3). Each has
+    /// its own code, shown on that kitchen's screen and never here — one code
+    /// that opened every counter would prove presence at none of them.
+    let stops: [CourierStopDTO]?
 
     var isCollected: Bool { status == "DELIVERING" }
+
+    /// The stops, never empty: a backend that predates M3 sends none, and the
+    /// single merchantName/lat/lng above are exactly that one stop.
+    var counters: [CourierStopDTO] { stops ?? [] }
+
+    /// What is still to be picked up. The screen leads with the first of these
+    /// — the legacy `merchantName` points at the same place.
+    var remainingStops: [CourierStopDTO] { counters.filter { !$0.collected } }
+
+    var hasMultipleStops: Bool { counters.count > 1 }
 
     /// Whether this door asked for a photograph. Absent means no — an app that
     /// guessed "contactless" from a missing field would leave food on a step
     /// for somebody who was standing behind the door waiting for it.
     var wantsPhoto: Bool { handoffMode == "PHOTO" }
+}
+
+/// One counter on the courier's route (Phase 4 M3).
+struct CourierStopDTO: Decodable, Identifiable {
+    let subOrderId: UUID
+    let merchantName: String
+    let latitude: Double?
+    let longitude: Double?
+    let itemCount: Int
+    let collected: Bool
+    let readyAt: String?
+
+    var id: UUID { subOrderId }
 }
 
 /// "Not carrying anything" is a 200 with a null job.

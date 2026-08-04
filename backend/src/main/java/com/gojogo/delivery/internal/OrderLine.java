@@ -28,6 +28,12 @@ class OrderLine {
     @JoinColumn(name = "order_id", nullable = false)
     private CustomerOrder order;
 
+    /** Whose bag this line is in (Phase 4 M3). The parent reference stays —
+     *  a receipt is still read flat. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "sub_order_id", nullable = false)
+    private SubOrder subOrder;
+
     @Column(name = "menu_item_id", nullable = false)
     private UUID menuItemId;
 
@@ -46,13 +52,28 @@ class OrderLine {
     protected OrderLine() {
     }
 
-    OrderLine(CustomerOrder order, UUID menuItemId, String name, int unitPriceCents, int qty, int sortOrder) {
+    OrderLine(CustomerOrder order, SubOrder subOrder, UUID menuItemId, String name,
+              int unitPriceCents, int qty, int sortOrder) {
         this.order = order;
+        this.subOrder = subOrder;
         this.menuItemId = menuItemId;
         this.name = name;
         this.unitPriceCents = unitPriceCents;
         this.qty = qty;
         this.sortOrder = sortOrder;
+    }
+
+    SubOrder getSubOrder() {
+        return subOrder;
+    }
+
+    /** Whether this line is in the given slice's bag. Identity first, id
+     *  second: a freshly built order has no ids yet, and within a persistence
+     *  context the same row is the same instance anyway. */
+    boolean belongsTo(SubOrder slice) {
+        if (subOrder == null || slice == null) return false;
+        if (subOrder == slice) return true;
+        return slice.getId() != null && slice.getId().equals(subOrder.getId());
     }
 
     UUID getMenuItemId() {

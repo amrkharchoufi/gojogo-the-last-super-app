@@ -158,7 +158,17 @@ Extends live `partner` machinery; the application object is unchanged, `kind=DRI
 
 ---
 
-## 5. Delivery at full vision — missing pieces (real couriers **BUILT 2026-08-02**; handoff integrity **BUILT 2026-08-02**)
+## 5. Delivery at full vision — missing pieces (real couriers **BUILT 2026-08-02**; handoff integrity **BUILT 2026-08-02**; multi-merchant orders **BUILT 2026-08-04**)
+
+Refinements the **Phase 4 M3** build made to this section's multi-merchant paragraph:
+
+- **The pickup code moved down to the sub-order, as this section said it would.** M2 put it on the order because there was exactly one merchant; a courier collecting three bags now proves each counter separately, and the typed digits are what say *which* counter — the code lands on the slice it was minted for, so a courier cannot mark the far kitchen's bag collected while standing at the near one. The delivery PIN stayed on the order: there is one door however many kitchens there were.
+- **Courier states stay on the parent, and the per-leg split is not built.** This section allows courier states "on the parent (single-courier default) or per leg when dispatch splits merchants across couriers". Only the first is built. What makes that honest rather than a silent gap is the cap: **CONFIG `delivery.order.max.merchants` = 3**, because one person collects every bag and three counters is a trip somebody makes. `maxMerchantsPerCourier` as a *routing* threshold is therefore not implemented — there is nothing yet to split.
+- **A sub-order gets one word of its own: `COLLECTED`.** The prep state machine is "today's order states minus courier states" as specified, plus this — "this kitchen's bag is in the courier's hand" is a fact about one merchant, and without it a collected slice and a cooking one on the same order are indistinguishable. The parent reaches DELIVERING only when the last bag is collected. Still no seventh *order* status.
+- **The courier search waits for every kitchen and is timed to the slowest.** `max(readyAt) − pickupLead`, still `DispatchRequest.startAfter`. A rejection counts as an answer, so one kitchen saying no releases the search rather than stalling it.
+- **Cancellation per sub-order releases exactly that slice's share** — `subtotal − discount + its own delivery fee`. The service fee and the tip belong to the order and only move at the end. `released_cents` on the parent carries the running total, and settlement refuses unless **splits + released = held**, which is the single-merchant invariant with a second term. The last live slice cancelling ends the whole order and releases the remainder in one movement.
+- **A promotion is resolved per kitchen**, because a promotion is one merchant's campaign. A checkout-level code is tried against every basket and applied where it lands; it is refused out loud only if it lands nowhere. Redemption is keyed on (promotion, order) rather than order, so two kitchens' promotions on one order are both recorded.
+- **`OrderPlaced` is published once per kitchen**, carrying that slice's food value — each owner is told about their own slice and nothing about the others'. Per-slice cancellation publishes **`SUB_CANCELLED`**, which is deliberately not one of the six order statuses: the parent has not moved, and a client that has never heard the word drops it.
 
 Refinements the **Phase 4 M2** build made to this section's handoff paragraph (§11.4: update SPECS when a build refines it):
 

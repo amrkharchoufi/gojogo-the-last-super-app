@@ -1466,6 +1466,14 @@ struct DeliveryCartLine: Identifiable {
     var id: UUID { item.id }
     var item: DeliveryMenuItem
     var qty: Int
+    /// Which kitchen this line belongs to (Phase 4 M3). A cart can now span
+    /// restaurants, so a line has to carry its own — the cart-level id it used
+    /// to be read from now names only the first one.
+    var merchantID: UUID
+    /// Copied at add time so the checkout can group under a name without
+    /// holding the catalog: a restaurant you added from an hour ago may not be
+    /// in this session's browse results any more.
+    var merchantName: String
 }
 
 struct DeliveryCourier: Identifiable {

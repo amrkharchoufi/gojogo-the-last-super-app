@@ -62,12 +62,15 @@ class HandoffModeTests {
         set(merchant, "id", MERCHANT);
         when(merchants.findById(MERCHANT)).thenReturn(Optional.of(merchant));
 
-        order = new CustomerOrder(CUSTOMER, MERCHANT, "USD", "Second floor",
+        order = new CustomerOrder(CUSTOMER, "USD", "Second floor",
             OffsetDateTime.now().plusMinutes(30));
         set(order, "id", ORDER);
         order.deliverTo(null, "Home", "12 Rue Ali", "", 33.58, -7.60);
-        order.priceIt(Basket.of(2_000, 300, 99, 0, 0, "USD"), null, null);
-        order.mintHandoffCodes("482913", "901224");
+        SubOrder slice = order.addSubOrder(MERCHANT, 2_000, 300, 0, null, "");
+        set(slice, "id", UUID.randomUUID());
+        order.priceIt(Basket.of(MERCHANT, 2_000, 300, 99, 0, 0, "USD"));
+        slice.mintPickupCode("482913");
+        order.mintDeliveryPin("901224");
         when(orders.findById(ORDER)).thenReturn(Optional.of(order));
     }
 

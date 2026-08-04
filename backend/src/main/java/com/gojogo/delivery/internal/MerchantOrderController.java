@@ -63,26 +63,32 @@ class MerchantOrderController {
      * the prep estimate decides when a courier is looked for and what the
      * customer's countdown says.
      */
-    @PostMapping("/v1/delivery/merchants/mine/orders/{orderId}/accept")
-    MerchantOrderDto accept(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
+    /* Since Phase 4 M3 the {id} on these three verbs is the sub-order id —
+     * one kitchen's slice of a possibly multi-merchant order. The queue above
+     * is where clients get the id, so the deployed app needed no change: the
+     * id was always opaque to it. */
+
+    @PostMapping("/v1/delivery/merchants/mine/orders/{subOrderId}/accept")
+    MerchantOrderDto accept(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID subOrderId,
                             @Valid @RequestBody(required = false) AcceptOrderRequest request) {
-        return fulfilment.accept(current.require(jwt).id(), orderId,
+        return fulfilment.accept(current.require(jwt).id(), subOrderId,
             request == null ? null : request.prepMinutes());
     }
 
-    /** Only before accepting. Cancels the order and gives the customer their
-     *  money back in the same transaction. */
-    @PostMapping("/v1/delivery/merchants/mine/orders/{orderId}/reject")
-    MerchantOrderDto reject(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
+    /** Only before accepting. Cancels this kitchen's slice and gives the
+     *  customer that slice's money back in the same transaction; the rest of
+     *  the order, if there is one, carries on. */
+    @PostMapping("/v1/delivery/merchants/mine/orders/{subOrderId}/reject")
+    MerchantOrderDto reject(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID subOrderId,
                             @Valid @RequestBody(required = false) RejectOrderRequest request) {
-        return fulfilment.reject(current.require(jwt).id(), orderId,
+        return fulfilment.reject(current.require(jwt).id(), subOrderId,
             request == null ? null : request.reason());
     }
 
-    /** The food is done — sooner or later than they guessed. Does not change the
-     *  order's status; it corrects the time the courier is expecting. */
-    @PostMapping("/v1/delivery/merchants/mine/orders/{orderId}/ready")
-    MerchantOrderDto ready(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
-        return fulfilment.markReady(current.require(jwt).id(), orderId);
+    /** The food is done — sooner or later than they guessed. Does not change any
+     *  status; it corrects the time the courier is expecting. */
+    @PostMapping("/v1/delivery/merchants/mine/orders/{subOrderId}/ready")
+    MerchantOrderDto ready(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID subOrderId) {
+        return fulfilment.markReady(current.require(jwt).id(), subOrderId);
     }
 }

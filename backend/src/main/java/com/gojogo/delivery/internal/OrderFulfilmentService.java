@@ -5,7 +5,6 @@ import com.gojogo.dispatch.Assignment;
 import com.gojogo.dispatch.DispatchApi;
 import com.gojogo.dispatch.DispatchRequest;
 import com.gojogo.dispatch.JobKind;
-import com.gojogo.dispatch.WorkerKind;
 import com.gojogo.media.MediaDocumentApi;
 import com.gojogo.messaging.ConversationContext;
 import com.gojogo.messaging.MessagingApi;
@@ -37,44 +36,39 @@ import java.util.stream.Collectors;
  *
  * <p>Until Phase 4 M1 this file did not exist, because none of it was anybody's
  * decision: {@code OrderFulfilmentJob} read a clock and walked every order to
- * wherever a timeline said it should be, inventing a kitchen that always took
- * twenty seconds and a courier from a roster of four names. The state machine,
- * the events and the API were real; the actors were not. This is the swap 2b M4
- * was designed for, and what it means concretely is that <b>every transition
- * below is now caused by somebody</b> — a restaurant accepting, a courier
- * accepting, a courier picking food up, a courier handing it over.
+ * wherever a timeline said it should be. Every transition below is caused by
+ * somebody — a restaurant accepting, a courier accepting, a courier picking
+ * food up, a courier handing it over.
  *
- * <p>Kept out of {@link DeliveryService}, which is the customer's side of the
- * same schema, for the reason {@link MerchantManagementService} is: that class
- * already owns the catalog, addresses, quoting and placement, and the file this
- * one replaced was separate too.
+ * <p><b>Phase 4 M3 makes the kitchen's half per-merchant.</b> An order can span
+ * kitchens, so accept / reject / ready act on a <em>sub-order</em>, each kitchen
+ * mints its own pickup code, and the courier proves every counter separately.
+ * The parent keeps the six statuses and the one courier: CONFIRMED until the
+ * first kitchen says yes, DELIVERING once the last bag is in hand.
  *
- * <p><b>The one mechanism worth understanding is the courier trigger.</b> A
- * courier is not looked for when the order is placed — they would arrive to a
- * cold counter and wait unpaid for twenty minutes — and not when the food is
- * ready either, because then the food waits instead. The search starts at
- * {@code readyAt − pickupLead}, and that is not a new mechanism: it is
- * {@link DispatchRequest#startAfter}, which dispatch has carried since M1
- * precisely for this and which no caller had ever used. A job whose first wave
- * is in the future is all "approaching readiness" (SPECS §3) ever was.
+ * <p><b>The courier trigger waits for the slowest kitchen.</b> The search opens
+ * only once every sub-order is answered — a kitchen still deciding could push
+ * the whole order's timing — and starts at {@code max(readyAt) − pickupLead}:
+ * {@link DispatchRequest#startAfter}, exactly as M1 used it, with the max over
+ * kitchens instead of one kitchen's clock.
  *
- * <p><b>Phase 4 M2 makes the two courier taps evidence rather than assertions.</b>
- * M1's "I have the food" and "I handed it over" moved an order and then moved
- * money on nothing but somebody's word. Now a pickup is backed by a code only
- * the counter can show and a handoff by a PIN only the customer knows, a photo
- * of the doorstep, or an explicit choice to need neither. Nothing about the
- * state machine changed to accommodate any of it — a failed handoff leaves the
- * order in {@code DELIVERING}, because that is exactly what it is: the courier
- * still has the food.
+ * <p><b>Phase 4 M2's handoff evidence is unchanged in kind.</b> A pickup is
+ * backed by a code only that counter can show — now one per counter — and the
+ * handoff by a PIN only the customer knows, a photo, or an explicit choice to
+ * need neither. A failed handoff still leaves the order in {@code DELIVERING},
+ * because that is exactly what it is: the courier still has the food.
  */
 @Service
 class OrderFulfilmentService {
 
     private static final Logger log = LoggerFactory.getLogger(OrderFulfilmentService.class);
 
-    /** What a restaurant is looking at: everything not finished. */
-    private static final Set<OrderStatus> LIVE = EnumSet.of(OrderStatus.CONFIRMED,
-        OrderStatus.PREPARING, OrderStatus.COURIER_TO_RESTAURANT, OrderStatus.DELIVERING);
+    /** What a kitchen is looking at: their slices not yet finished. */
+    private static final Set<SubOrderStatus> LIVE_SLICES = EnumSet.of(SubOrderStatus.CONFIRMED,
+        SubOrderStatus.PREPARING, SubOrderStatus.COLLECTED);
+
+    private static final Set<SubOrderStatus> FINISHED_SLICES =
+        EnumSet.of(SubOrderStatus.DELIVERED, SubOrderStatus.CANCELLED);
 
     private static final Set<OrderStatus> TERMINAL =
         EnumSet.of(OrderStatus.DELIVERED, OrderStatus.CANCELLED);
@@ -91,6 +85,7 @@ class OrderFulfilmentService {
     private static final String PROOF_CONTENT_TYPE = "image/jpeg";
 
     private final OrderRepository orders;
+    private final SubOrderRepository subOrders;
     private final MerchantRepository merchants;
     private final OrderPayments payments;
     private final DeliveryPolicy policy;
@@ -100,12 +95,14 @@ class OrderFulfilmentService {
     private final MediaDocumentApi privateMedia;
     private final ApplicationEventPublisher events;
 
-    OrderFulfilmentService(OrderRepository orders, MerchantRepository merchants,
+    OrderFulfilmentService(OrderRepository orders, SubOrderRepository subOrders,
+                           MerchantRepository merchants,
                            OrderPayments payments, DeliveryPolicy policy,
                            DispatchApi dispatch, ProfileApi profiles,
                            MessagingApi messaging, MediaDocumentApi privateMedia,
                            ApplicationEventPublisher events) {
         this.orders = orders;
+        this.subOrders = subOrders;
         this.merchants = merchants;
         this.payments = payments;
         this.policy = policy;
@@ -118,47 +115,49 @@ class OrderFulfilmentService {
 
     // MARK: The restaurant's side
 
-    /** The live queue, oldest first — a kitchen works in the order things arrived. */
+    /** The live queue, oldest first — a kitchen works in the order things
+     *  arrived. Since Phase 4 M3 each row is this kitchen's own slice, and says
+     *  nothing about the other merchants on the same order. */
     @Transactional(readOnly = true)
     List<MerchantOrderDto> queue(UUID ownerId) {
         Merchant merchant = requireMine(ownerId);
-        return orders.findByMerchantIdAndStatusInOrderByPlacedAtAsc(merchant.getId(), LIVE)
+        return subOrders.queueFor(merchant.getId(), LIVE_SLICES)
             .stream().map(this::toMerchantOrderDto).toList();
     }
 
     @Transactional(readOnly = true)
     List<MerchantOrderDto> recent(UUID ownerId, int limit) {
         Merchant merchant = requireMine(ownerId);
-        return orders.findByMerchantIdAndStatusInOrderByStatusChangedAtDesc(
-                merchant.getId(), TERMINAL, PageRequest.of(0, Math.clamp(limit, 1, 50)))
+        return subOrders.historyFor(merchant.getId(), FINISHED_SLICES,
+                PageRequest.of(0, Math.clamp(limit, 1, 50)))
             .stream().map(this::toMerchantOrderDto).toList();
     }
 
     /**
-     * The restaurant takes the order and says how long it needs.
+     * The restaurant takes their slice and says how long they need.
      *
      * <p>The prep estimate is the load-bearing part, and it is why this is not a
      * bare "accept" button: it is the only thing in the system that knows when
-     * the food will be ready, and everything downstream — when a courier is
-     * looked for, what the customer's countdown says, when the courier should
-     * arrive — is derived from it. A missing or absurd number falls back to the
+     * this kitchen's food will be ready, and the courier search, the customer's
+     * countdown and the courier's arrival are all timed to the <em>latest</em>
+     * of these across the order. A missing or absurd number falls back to the
      * configured default rather than failing: an accept that can be rejected by
      * validation is an accept somebody in a kitchen does not make.
      *
-     * <p><b>Both handoff codes are minted here</b>, and this is the moment for
-     * two reasons. It is the first point at which there is a bag to hand over —
-     * a code on an order the restaurant may still refuse is a code for a
-     * delivery that never happens. And it is early enough that no screen ever
-     * has to render a null: by the time a courier is even looked for, the
-     * kitchen has a code to read out and the customer has a PIN to give.
+     * <p><b>This kitchen's pickup code is minted here</b> — one per counter
+     * since M3, because a courier collecting three bags proves each counter
+     * separately. The delivery PIN is minted on the first accept: there is one
+     * door however many kitchens, and by the time anybody could need either, the
+     * screen that shows it has it.
      */
     @Transactional
-    MerchantOrderDto accept(UUID ownerId, UUID orderId, Integer requestedPrepMinutes) {
+    MerchantOrderDto accept(UUID ownerId, UUID subOrderId, Integer requestedPrepMinutes) {
         Merchant merchant = requireMine(ownerId);
-        CustomerOrder order = requireForMerchant(merchant, orderId);
-        if (order.getStatus() != OrderStatus.CONFIRMED) {
+        SubOrder sub = requireSlice(merchant, subOrderId);
+        CustomerOrder order = sub.getOrder();
+        if (order.getStatus().isTerminal() || sub.getStatus() != SubOrderStatus.CONFIRMED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                order.getStatus() == OrderStatus.CANCELLED
+                sub.getStatus() == SubOrderStatus.CANCELLED || order.getStatus().isTerminal()
                     ? "That order was cancelled"
                     : "You've already accepted that order");
         }
@@ -167,64 +166,94 @@ class OrderFulfilmentService {
             : Math.min(requestedPrepMinutes, policy.maxPrepMinutes());
 
         OffsetDateTime now = OffsetDateTime.now();
-        order.accepted(now, prep, now.plusMinutes(prep + policy.dropoffMinutes()));
+        sub.accepted(now, prep);
         int digits = policy.handoffCodeLength();
-        order.mintHandoffCodes(HandoffCodes.numeric(digits), HandoffCodes.numeric(digits));
-        order.moveTo(OrderStatus.PREPARING, now);
+        sub.mintPickupCode(HandoffCodes.numeric(digits));
+        order.mintDeliveryPin(HandoffCodes.numeric(digits));
+        boolean firstAccept = order.getStatus() == OrderStatus.CONFIRMED;
+        if (firstAccept) {
+            order.moveTo(OrderStatus.PREPARING, now);
+        }
+        retime(order);
         // Flushed before dispatch is asked, so an order that fails to save never
         // puts a job in front of a courier.
         orders.flush();
-        findCourierFor(order, merchant);
-        publish(order, merchant.getName());
-        return toMerchantOrderDto(order);
+        maybeOpenCourierSearch(order);
+        if (firstAccept) {
+            publish(order, merchant.getName());
+        }
+        return toMerchantOrderDto(sub);
     }
 
     /**
-     * The restaurant says no. Only before they have accepted — once a kitchen
-     * has started, "reject" is a cancellation with food already made, which is a
-     * dispute (SPECS §5) rather than a button.
+     * The restaurant says no to their slice. Only before they have accepted —
+     * once a kitchen has started, "reject" is a cancellation with food already
+     * made, which is a dispute (SPECS §5) rather than a button.
      */
     @Transactional
-    MerchantOrderDto reject(UUID ownerId, UUID orderId, String reason) {
+    MerchantOrderDto reject(UUID ownerId, UUID subOrderId, String reason) {
         Merchant merchant = requireMine(ownerId);
-        CustomerOrder order = requireForMerchant(merchant, orderId);
-        if (order.getStatus() != OrderStatus.CONFIRMED) {
+        SubOrder sub = requireSlice(merchant, subOrderId);
+        if (sub.getStatus() != SubOrderStatus.CONFIRMED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Too late to turn that one down");
         }
-        cancel(order, merchant.getName(), reason == null || reason.isBlank()
+        cancelSubOrder(sub.getOrder(), sub, reason == null || reason.isBlank()
             ? "The restaurant couldn't take this order" : reason.trim());
-        return toMerchantOrderDto(order);
+        return toMerchantOrderDto(sub);
     }
 
     /**
-     * The food is ready — sooner or later than the kitchen guessed.
+     * This kitchen's food is ready — sooner or later than they guessed.
      *
      * <p>Worth having even though the courier has usually been found by now:
-     * {@code readyAt} is what the pickup time on their screen is drawn from, and
-     * a courier told the wrong one either waits at a counter or arrives to food
-     * that has been sitting. It does not change the order's status, because
-     * "cooked" is not a stage of an order the customer can act on — their food
-     * is still coming, and the screen still says so.
+     * the order's {@code readyAt} is the latest kitchen's, and the pickup time
+     * on the courier's screen is drawn from it. It does not change any status,
+     * because "cooked" is not a stage the customer can act on — their food is
+     * still coming, and the screen still says so.
      */
     @Transactional
-    MerchantOrderDto markReady(UUID ownerId, UUID orderId) {
+    MerchantOrderDto markReady(UUID ownerId, UUID subOrderId) {
         Merchant merchant = requireMine(ownerId);
-        CustomerOrder order = requireForMerchant(merchant, orderId);
-        if (order.getStatus() != OrderStatus.PREPARING
-            && order.getStatus() != OrderStatus.COURIER_TO_RESTAURANT) {
+        SubOrder sub = requireSlice(merchant, subOrderId);
+        if (sub.getStatus() != SubOrderStatus.PREPARING) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "That order isn't being prepared");
         }
-        OffsetDateTime now = OffsetDateTime.now();
-        order.readyNow(now, now.plusMinutes(policy.dropoffMinutes()));
-        return toMerchantOrderDto(order);
+        sub.readyNow(OffsetDateTime.now());
+        retime(sub.getOrder());
+        return toMerchantOrderDto(sub);
     }
 
-    // MARK: Asking dispatch
+    // MARK: Order-level clockwork
 
     /**
-     * Opens the courier search, timed to the kitchen.
+     * Re-derives the parent's clock from its kitchens: ready when the last one
+     * still cooking is, at the door a dropoff after that. Collected and
+     * cancelled slices no longer bind — food already in the bag does not push
+     * the ETA.
+     */
+    private void retime(CustomerOrder order) {
+        OffsetDateTime latest = order.getSubOrders().stream()
+            .filter(s -> s.getStatus() == SubOrderStatus.PREPARING)
+            .map(SubOrder::getReadyAt)
+            .filter(java.util.Objects::nonNull)
+            .max(OffsetDateTime::compareTo)
+            .orElse(order.getReadyAt());
+        if (latest != null) {
+            order.retime(latest, latest.plusMinutes(policy.dropoffMinutes()));
+        }
+    }
+
+    /**
+     * Opens the courier search once every kitchen has answered, timed to the
+     * slowest of them.
+     *
+     * <p>Not on the first accept: a kitchen still deciding could add twenty
+     * minutes to the order, and a courier searched for on the fast kitchen's
+     * clock stands at a counter waiting for the slow one. A slice that gets
+     * rejected instead of accepted still counts as an answer — the search opens
+     * for whatever survived.
      *
      * <p>Never throws into the accept that called it. A restaurant's accept is
      * not the right transaction to fail because dispatch had a bad moment — the
@@ -233,11 +262,32 @@ class OrderFulfilmentService {
      * {@code SEARCHING = NONE} and reads as a failed search to everybody looking
      * at it.
      */
-    private void findCourierFor(CustomerOrder order, Merchant merchant) {
+    private void maybeOpenCourierSearch(CustomerOrder order) {
+        if (order.getCourierSearch() != CourierSearch.NONE || order.getStatus().isTerminal()) {
+            return;
+        }
+        if (!order.allSubOrdersAnswered()) {
+            return;
+        }
+        List<SubOrder> cooking = order.getSubOrders().stream()
+            .filter(s -> s.getStatus() == SubOrderStatus.PREPARING)
+            .toList();
+        if (cooking.isEmpty()) {
+            return;
+        }
+        Merchant firstStop = merchants.findById(cooking.getFirst().getMerchantId()).orElse(null);
+        if (firstStop == null) {
+            order.noCourierFound();
+            return;
+        }
+        String pickupName = cooking.size() == 1
+            ? firstStop.getName()
+            : firstStop.getName() + " + " + (cooking.size() - 1) + " more";
         try {
             dispatch.request(new DispatchRequest(JobKind.DELIVERY, order.getId(),
-                WorkerKind.COURIER, policy.courierCategories(), order.getUserId(),
-                merchant.getLatitude(), merchant.getLongitude(), merchant.getName(),
+                com.gojogo.dispatch.WorkerKind.COURIER, policy.courierCategories(),
+                order.getUserId(),
+                firstStop.getLatitude(), firstStop.getLongitude(), pickupName,
                 order.getAddressLatitude(), order.getAddressLongitude(),
                 order.getAddressLabel(), order.getNote(),
                 order.getReadyAt().minusSeconds(policy.pickupLeadSeconds())));
@@ -285,9 +335,9 @@ class OrderFulfilmentService {
             vehicleLabel(assignment), BigDecimal.valueOf(assignment.rating()),
             assignment.completedCount());
         order.moveTo(OrderStatus.COURIER_TO_RESTAURANT, OffsetDateTime.now());
-        Merchant merchant = merchants.findById(order.getMerchantId()).orElse(null);
-        openConversation(order, merchant);
-        publish(order, merchant == null ? "Restaurant" : merchant.getName());
+        Merchant primary = primaryMerchant(order);
+        openConversation(order, primary);
+        publish(order, primary == null ? "Restaurant" : primary.getName());
     }
 
     /**
@@ -364,35 +414,28 @@ class OrderFulfilmentService {
         // One query for the restaurants rather than one per row — the same thing
         // the customer's own history does, and the difference between 1 query
         // and 50 for a screen somebody scrolls.
-        Map<UUID, Merchant> byId = merchants
-            .findAllById(page.stream().map(CustomerOrder::getMerchantId).collect(Collectors.toSet()))
-            .stream().collect(Collectors.toMap(Merchant::getId, Function.identity()));
-        return page.stream().map(o -> toCourierJobDto(o, byId.get(o.getMerchantId()))).toList();
+        Map<UUID, Merchant> byId = merchantsOf(page);
+        return page.stream().map(o -> toCourierJobDto(o, byId)).toList();
     }
 
     /**
-     * They have the food, and they can prove they were standing at the counter.
+     * They have a bag, and they can prove they were standing at its counter.
      *
-     * <p>The proof is a code <b>the merchant's screen shows and the courier
-     * types</b>, which is the reverse of SPECS §5 and deliberate. The spec has
-     * the courier show a code and the merchant confirm it; the party who must
-     * act should be the party with the incentive. A merchant who forgets to tap
-     * leaves a courier holding food they cannot mark collected and cannot be
-     * paid for, whereas a courier is motivated to finish the step and can only
-     * learn the code by standing at that counter — which is the fact the code
-     * exists to prove.
+     * <p>The proof is a code <b>that merchant's screen shows and the courier
+     * types</b> — since Phase 4 M3 one code per kitchen, and the typed digits
+     * are what say which counter this is: the code lands on the slice it was
+     * minted for, so a courier cannot mark the far kitchen's bag collected from
+     * the near kitchen's counter. The direction is still the reverse of SPECS
+     * §5 and still deliberate: the party who must act is the party with the
+     * incentive.
      *
-     * <p><b>A wrong code here is never counted and never locks anybody out</b>,
-     * and the asymmetry with the delivery PIN is the point. At the door, the
-     * risk is a courier marking an undelivered order delivered, so the attempts
-     * are counted. At the counter, the merchant is standing right there: the
-     * code is a check rather than a gate, and a courier who fails it three times
-     * with the food in front of them must not be locked out of a delivery
-     * everybody in the room can see is theirs. {@code attemptsLeft} is
-     * {@code -1} on this endpoint to say "not counted" rather than "none left".
+     * <p><b>A wrong code here is never counted and never locks anybody out</b> —
+     * the asymmetry with the delivery PIN is the point. At the counter the
+     * merchant is standing right there; the code is a check rather than a gate.
+     * {@code attemptsLeft} is {@code -1} on this endpoint to say "not counted".
      *
-     * <p>From here the order can no longer be cancelled — the rule that predates
-     * real couriers, now with a real event behind it.
+     * <p>The order stops being cancellable at the <em>first</em> collected bag;
+     * the parent moves to DELIVERING at the last one.
      */
     @Transactional
     HandoffResultDto pickedUp(UUID courierUserId, UUID orderId, String typedCode) {
@@ -403,35 +446,68 @@ class OrderFulfilmentService {
                     ? "You've already picked that up"
                     : "That order isn't waiting for you any more");
         }
-        // A blank code on the row is an order accepted before V38. It is not a
-        // locked door: there is no code for anybody in that restaurant to read
-        // out, so there is nothing to check and the collect works as it did in
-        // M1. A migration must not lock a courier out of food they are holding.
-        if (!order.getPickupCode().isBlank()) {
-            String typed = HandoffCodes.digitsOf(typedCode);
-            if (typed.isEmpty()) {
+        List<SubOrder> waiting = order.getSubOrders().stream()
+            .filter(s -> s.getStatus() == SubOrderStatus.PREPARING)
+            .toList();
+        if (waiting.isEmpty()) {
+            // Every surviving bag is already in hand — the status just hasn't
+            // caught up, which the block below fixes.
+            return advanceIfAllCollected(order);
+        }
+
+        String typed = HandoffCodes.digitsOf(typedCode);
+        SubOrder collected;
+        if (typed.isEmpty()) {
+            // A blank code on the row is an order accepted before V38. It is
+            // not a locked door: there is no code for anybody in that
+            // restaurant to read out, so there is nothing to check and the
+            // collect works as it did in M1. A migration must not lock a
+            // courier out of food they are holding.
+            collected = waiting.size() == 1 && waiting.getFirst().getPickupCode().isBlank()
+                ? waiting.getFirst() : null;
+            if (collected == null) {
                 return refused(order, "Ask the restaurant for the pickup code", -1, false);
             }
-            if (!typed.equals(order.getPickupCode())) {
-                // Never says how wrong. "One digit off" is a hint, and a hint
-                // is a shorter guess list.
+        } else {
+            // The digits say which counter this is. Never says how wrong a miss
+            // was — "one digit off" is a hint, and a hint is a shorter guess
+            // list.
+            collected = waiting.stream()
+                .filter(s -> typed.equals(s.getPickupCode()))
+                .findFirst().orElse(null);
+            if (collected == null) {
                 return refused(order, "That code doesn't match — check the screen at the counter",
                     -1, false);
             }
         }
-        OffsetDateTime now = OffsetDateTime.now();
-        order.pickedUp(now);
-        order.moveTo(OrderStatus.DELIVERING, now);
-        publish(order, merchantName(order.getMerchantId()));
-        return new HandoffResultDto(true, "Collected", -1, false, toCourierJobDto(order));
+        collected.collected(OffsetDateTime.now());
+        return advanceIfAllCollected(order);
+    }
+
+    /** Moves the parent once the last bag is in hand; otherwise reports the
+     *  stop and how many are left. */
+    private HandoffResultDto advanceIfAllCollected(CustomerOrder order) {
+        long left = order.getSubOrders().stream()
+            .filter(s -> s.getStatus() == SubOrderStatus.PREPARING)
+            .count();
+        if (left == 0) {
+            OffsetDateTime now = OffsetDateTime.now();
+            order.pickedUp(now);
+            order.moveTo(OrderStatus.DELIVERING, now);
+            publish(order, primaryMerchantName(order));
+            return new HandoffResultDto(true, "Collected", -1, false, toCourierJobDto(order));
+        }
+        return new HandoffResultDto(true,
+            left == 1 ? "Collected — 1 more pickup to go" : "Collected — " + left + " more pickups to go",
+            -1, false, toCourierJobDto(order));
     }
 
     /**
      * Handed over. The one transition that moves money: the hold placed at
-     * checkout is split between the merchant, the platform and — since Phase 4
-     * M1 — the courier who actually carried it. Which is exactly why this is the
-     * handoff that is verified and counted: everything upstream can be redone,
-     * and this one pays somebody.
+     * checkout is split between every surviving merchant, the platform and the
+     * courier who carried it. Which is exactly why this is the handoff that is
+     * verified and counted: everything upstream can be redone, and this one
+     * pays somebody.
      *
      * <p>Three ways to satisfy it, chosen by the customer and readable off the
      * order:
@@ -512,13 +588,17 @@ class OrderFulfilmentService {
             }
         }
 
-        String merchantName = merchantName(order.getMerchantId());
+        Map<UUID, Merchant> byId = merchantsOf(List.of(order));
         order.moveTo(OrderStatus.DELIVERED, OffsetDateTime.now());
-        payments.settle(order, merchantName);
+        order.getSubOrders().stream()
+            .filter(s -> s.getStatus() != SubOrderStatus.CANCELLED)
+            .forEach(SubOrder::deliveredWithParent);
+        payments.settle(order, byId.entrySet().stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().getName())));
         dispatch.complete(JobKind.DELIVERY, order.getId(), null);
-        publish(order, merchantName);
+        publish(order, primaryMerchantName(order));
         return new HandoffResultDto(true, "Delivered", attemptsLeft(order, max),
-            unlocked, toCourierJobDto(order));
+            unlocked, toCourierJobDto(order, byId));
     }
 
     /**
@@ -550,7 +630,7 @@ class OrderFulfilmentService {
         // not a document somebody chooses the type of, every phone can produce
         // a JPEG, and one content type means the presigned PUT and the header
         // the client sends cannot disagree — which is the failure that looks
-        // like a broken upload and is actually a mismatched signature.
+        // like a broken upload and is actually a bad signature.
         MediaDocumentApi.DocumentUpload upload =
             privateMedia.presignDocumentUpload(courierUserId, PROOF_FOLDER, PROOF_CONTENT_TYPE);
         String previous = order.getProofPhotoKey();
@@ -588,50 +668,78 @@ class OrderFulfilmentService {
     // MARK: Timeouts (called by OrderTimeoutJob)
 
     /**
-     * Orders nobody in a kitchen ever answered.
+     * Slices nobody in a kitchen ever answered.
      *
-     * <p>The simulation had no way to fail, so it needed no sweep; a real
-     * restaurant can simply not look at their tablet, and an order left in
-     * CONFIRMED holds a customer's money in escrow and their one live-order slot
-     * with it, forever. The same query catches the rows stranded by this
-     * milestone's own deploy — an order in flight when the fulfilment job was
-     * deleted also has no {@code acceptedAt}, which is exactly what "nobody ever
-     * accepted this" looks like.
+     * <p>Per kitchen since Phase 4 M3, because "the restaurant didn't answer"
+     * is a fact about one restaurant and must not time out the two that did:
+     * the silent kitchen's slice is cancelled and refunded, and the order
+     * carries on with whoever answered. Only when every slice has ended does
+     * the order itself. The same query still catches whole orders stranded
+     * before a kitchen ever saw them.
      */
     @Transactional(readOnly = true)
-    List<UUID> unansweredOrderIds(int limit) {
+    List<UUID> unansweredSubOrderIds(int limit) {
         OffsetDateTime cutoff = OffsetDateTime.now().minusMinutes(policy.acceptTimeoutMinutes());
-        return orders.findByStatusNotInAndAcceptedAtIsNullAndPlacedAtBeforeOrderByPlacedAtAsc(
-                TERMINAL, cutoff, PageRequest.of(0, limit))
-            .stream().map(CustomerOrder::getId).toList();
+        return subOrders.unansweredIds(TERMINAL, cutoff, PageRequest.of(0, limit));
     }
 
     @Transactional
-    void timeOut(UUID orderId) {
-        CustomerOrder order = orders.findById(orderId).orElse(null);
-        if (order == null || order.getStatus().isTerminal() || order.getAcceptedAt() != null) {
+    void timeOut(UUID subOrderId) {
+        SubOrder sub = subOrders.findById(subOrderId).orElse(null);
+        if (sub == null || sub.getStatus() != SubOrderStatus.CONFIRMED
+            || sub.getOrder().getStatus().isTerminal()) {
             return;
         }
-        cancel(order, merchantName(order.getMerchantId()),
+        cancelSubOrder(sub.getOrder(), sub,
             "The restaurant didn't answer in time — you haven't been charged");
     }
 
     // MARK: Shared
 
     /**
-     * Ends an order and gives the money back. Dispatch is told whatever stage it
-     * had reached, and told nothing at all if it never heard of this order —
-     * {@code cancel} is safe for a job that was never requested, which is what
-     * lets this one method serve a rejection, a timeout and a customer changing
-     * their mind.
+     * Ends one kitchen's slice and gives its share back. If it was the last
+     * live slice the whole order ends with it; otherwise the order re-times
+     * around the kitchens that remain, and the courier search opens if this
+     * was the answer it had been waiting on.
      */
-    void cancel(CustomerOrder order, String merchantName, String reason) {
+    void cancelSubOrder(CustomerOrder order, SubOrder sub, String reason) {
+        String merchantName = merchantName(sub.getMerchantId());
+        sub.cancelledBecause(reason);
+        boolean anyLeft = order.getSubOrders().stream()
+            .anyMatch(s -> s.getStatus().isLive());
+        if (!anyLeft) {
+            // The last live slice ends the order, and the full release covers
+            // this slice's share too — one movement, not a share plus a rump.
+            cancel(order, reason);
+            return;
+        }
+        payments.releaseSubOrder(order, sub, merchantName);
+        retime(order);
+        maybeOpenCourierSearch(order);
+        // The parent's status hasn't moved, so this is its own word: the push
+        // listener turns SUB_CANCELLED into "part of your order was refunded"
+        // and clients that predate it drop it on the floor.
+        events.publishEvent(new OrderStatusChanged(order.getId(), order.getUserId(),
+            merchantName, "SUB_CANCELLED", Eta.minutesLeft(order)));
+    }
+
+    /**
+     * Ends an order and gives back whatever money is still held. Dispatch is
+     * told whatever stage it had reached, and told nothing at all if it never
+     * heard of this order — {@code cancel} is safe for a job that was never
+     * requested, which is what lets this one method serve a rejection, a
+     * timeout and a customer changing their mind.
+     */
+    void cancel(CustomerOrder order, String reason) {
         order.moveTo(OrderStatus.CANCELLED, OffsetDateTime.now());
         order.cancelledBecause(reason);
+        order.getSubOrders().stream()
+            .filter(s -> s.getStatus().isLive())
+            .forEach(s -> s.cancelledBecause(reason));
         // Never the courier's fault: they are being stood down, not walking away.
         dispatch.cancel(JobKind.DELIVERY, order.getId(), false);
         payments.release(order);
-        publish(order, merchantName);
+        publish(order, primaryMerchantName(order));
     }
 
     private void publish(CustomerOrder order, String merchantName) {
@@ -644,11 +752,11 @@ class OrderFulfilmentService {
             new ResponseStatusException(HttpStatus.NOT_FOUND, "You don't manage a restaurant"));
     }
 
-    /** 404 rather than 403 for another restaurant's order — the same rule the
+    /** 404 rather than 403 for another restaurant's slice — the same rule the
      *  customer surface follows: don't confirm it exists. */
-    private CustomerOrder requireForMerchant(Merchant merchant, UUID orderId) {
-        return orders.findById(orderId)
-            .filter(o -> o.getMerchantId().equals(merchant.getId()))
+    private SubOrder requireSlice(Merchant merchant, UUID subOrderId) {
+        return subOrders.findById(subOrderId)
+            .filter(s -> s.getMerchantId().equals(merchant.getId()))
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No such order"));
     }
 
@@ -660,6 +768,28 @@ class OrderFulfilmentService {
 
     private String merchantName(UUID merchantId) {
         return merchants.findById(merchantId).map(Merchant::getName).orElse("Restaurant");
+    }
+
+    /** The order's face for anything that wants one name: its first slice's
+     *  restaurant. */
+    private Merchant primaryMerchant(CustomerOrder order) {
+        return order.getSubOrders().isEmpty() ? null
+            : merchants.findById(order.getSubOrders().getFirst().getMerchantId()).orElse(null);
+    }
+
+    private String primaryMerchantName(CustomerOrder order) {
+        Merchant primary = primaryMerchant(order);
+        return primary == null ? "Restaurant" : primary.getName();
+    }
+
+    /** One query for every merchant these orders span. */
+    private Map<UUID, Merchant> merchantsOf(List<CustomerOrder> page) {
+        return merchants
+            .findAllById(page.stream()
+                .flatMap(o -> o.getSubOrders().stream())
+                .map(SubOrder::getMerchantId)
+                .collect(Collectors.toSet()))
+            .stream().collect(Collectors.toMap(Merchant::getId, Function.identity()));
     }
 
     /** What dispatch knows about the bike or the scooter — "E-bike", "Scooter ·
@@ -681,64 +811,109 @@ class OrderFulfilmentService {
 
     // MARK: Mapping
 
-    private MerchantOrderDto toMerchantOrderDto(CustomerOrder order) {
+    /**
+     * One kitchen's slice, in the order vocabulary that kitchen's screen has
+     * always spoken. The slice's own states map onto the six words — a
+     * COLLECTED slice reads as DELIVERING, "the courier has your bag" — so the
+     * deployed app renders a multi-merchant order without a client release.
+     */
+    private MerchantOrderDto toMerchantOrderDto(SubOrder sub) {
+        CustomerOrder order = sub.getOrder();
+        String status = switch (sub.getStatus()) {
+            case CONFIRMED -> OrderStatus.CONFIRMED.name();
+            case PREPARING -> order.getStatus() == OrderStatus.COURIER_TO_RESTAURANT
+                ? OrderStatus.COURIER_TO_RESTAURANT.name()
+                : OrderStatus.PREPARING.name();
+            case COLLECTED -> OrderStatus.DELIVERING.name();
+            case DELIVERED -> OrderStatus.DELIVERED.name();
+            case CANCELLED -> OrderStatus.CANCELLED.name();
+        };
         return new MerchantOrderDto(
-            order.getId(),
-            order.getStatus().name(),
+            sub.getId(),
+            status,
             order.getLines().stream()
+                .filter(l -> l.belongsTo(sub))
                 .map(l -> new OrderLineDto(l.getMenuItemId(), l.getName(),
                     l.getUnitPriceCents(), l.getQty()))
                 .toList(),
-            order.getSubtotalCents(), order.getDiscountCents(), order.getCurrency(),
-            payments.merchantEarningsOn(order),
+            sub.getSubtotalCents(), sub.getDiscountCents(), order.getCurrency(),
+            payments.merchantEarningsOn(sub),
             order.getNote(),
             order.getAddressLabel(),
             order.getCourierName(),
             order.getCourierSearch().name(),
-            order.getPrepMinutes() == null ? 0 : order.getPrepMinutes(),
-            order.getCancelReason(),
-            // The kitchen's copy of the pickup code, and the only place it is
-            // returned. The delivery PIN is deliberately not here: a restaurant
-            // has no business knowing the number that confirms the food reached
-            // somebody's door.
-            order.getPickupCode(),
-            order.getPlacedAt(), order.getAcceptedAt(), order.getReadyAt(),
+            sub.getPrepMinutes() == null ? 0 : sub.getPrepMinutes(),
+            sub.getCancelReason().isEmpty() ? order.getCancelReason() : sub.getCancelReason(),
+            // The kitchen's copy of their own pickup code, and the only place
+            // it is returned. The delivery PIN is deliberately not here: a
+            // restaurant has no business knowing the number that confirms the
+            // food reached somebody's door.
+            sub.getPickupCode(),
+            order.getPlacedAt(), sub.getAcceptedAt(), sub.getReadyAt(),
             order.getStatusChangedAt());
     }
 
     /**
-     * What the courier's phone shows. Two addresses and two names, and
+     * What the courier's phone shows. The addresses, the stops, and
      * deliberately nothing else about the customer: a courier needs to find a
      * door, not to know who lives behind it.
      *
-     * <p>Neither handoff code is on it, which is the entire point of them. What
-     * M2 adds here is a conversation id — a way to reach the person waiting,
-     * which is the one thing a courier at a wrong door actually needs.
+     * <p>No pickup code and no PIN are on it, which is the entire point of
+     * them. The single merchant fields carry the <em>next uncollected</em>
+     * stop, so an older client's one-restaurant screen always points at the
+     * right counter.
      */
     private CourierJobDto toCourierJobDto(CustomerOrder order) {
-        return toCourierJobDto(order, merchants.findById(order.getMerchantId()).orElse(null));
+        return toCourierJobDto(order, merchantsOf(List.of(order)));
     }
 
-    private CourierJobDto toCourierJobDto(CustomerOrder order, Merchant merchant) {
-        int items = order.getLines().stream().mapToInt(OrderLine::getQty).sum();
+    private CourierJobDto toCourierJobDto(CustomerOrder order, Map<UUID, Merchant> byId) {
+        List<SubOrder> slices = order.getSubOrders().stream()
+            .filter(s -> s.getStatus() != SubOrderStatus.CANCELLED)
+            .toList();
+        List<CourierStopDto> stops = slices.stream().map(sub -> {
+            Merchant merchant = byId.get(sub.getMerchantId());
+            return new CourierStopDto(sub.getId(),
+                merchant == null ? "Restaurant" : merchant.getName(),
+                merchant == null ? null : merchant.getLatitude(),
+                merchant == null ? null : merchant.getLongitude(),
+                itemsIn(order, sub),
+                sub.getStatus() == SubOrderStatus.COLLECTED
+                    || sub.getStatus() == SubOrderStatus.DELIVERED,
+                sub.getReadyAt());
+        }).toList();
+        CourierStopDto target = stops.stream()
+            .filter(stop -> !stop.collected())
+            .findFirst()
+            .orElse(stops.isEmpty() ? null : stops.getFirst());
+        int items = stops.stream().mapToInt(CourierStopDto::itemCount).sum();
+        int fees = slices.stream().mapToInt(SubOrder::getDeliveryFeeCents).sum();
         return new CourierJobDto(
             order.getId(),
             order.getStatus().name(),
-            merchant == null ? "Restaurant" : merchant.getName(),
-            merchant == null ? null : merchant.getLatitude(),
-            merchant == null ? null : merchant.getLongitude(),
+            target == null ? "Restaurant" : target.merchantName(),
+            target == null ? null : target.latitude(),
+            target == null ? null : target.longitude(),
             order.getAddressLabel(), order.getAddressLine(), order.getAddressNote(),
             order.getAddressLatitude(), order.getAddressLongitude(),
             items, order.getNote(),
             // How they want it handed over — an instruction the customer gave,
-            // not one of the two secrets. Withholding it would have the app
+            // not one of the secrets. Withholding it would have the app
             // quietly dropping "leave it at the door" on the way to the person
             // standing at it.
             order.getHandoffMode().name(),
             // What this delivery pays them, which is the number a courier
-            // decides by — the fee plus whatever was tipped up front.
-            order.getDeliveryFeeCents() + order.getTipCents(), order.getCurrency(),
+            // decides by — every stop's fee plus whatever was tipped up front.
+            fees + order.getTipCents(), order.getCurrency(),
             order.getConversationId(),
+            stops,
             order.getReadyAt(), order.getPickedUpAt(), order.getStatusChangedAt());
+    }
+
+    private static int itemsIn(CustomerOrder order, SubOrder sub) {
+        return order.getLines().stream()
+            .filter(l -> l.belongsTo(sub))
+            .mapToInt(OrderLine::getQty)
+            .sum();
     }
 }

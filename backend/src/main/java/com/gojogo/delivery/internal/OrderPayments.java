@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -21,32 +22,31 @@ import java.util.UUID;
  * this vertical makes is in this file.
  *
  * <p>Kept out of {@code DeliveryService} deliberately: that class already owns
- * the catalog, addresses, orders and fulfilment, and settlement is the one part
+ * the catalog, addresses, quoting and placement, and settlement is the one part
  * where a mistake is expensive rather than annoying. It is worth being able to
  * read all of it at once.
  *
- * <p>The shape of an order's money:
+ * <p>The shape of an order's money, since Phase 4 M3 with a merchant subscript:
  *
  * <pre>
- *   placement   AVAILABLE ─── total ──▶ ESCROW          (the customer's, still)
- *   delivered   ESCROW ─── food − commission ──▶ merchant
- *               ESCROW ─── commission + service fee ──▶ platform
- *               ESCROW ─── delivery fee ──▶ courier
- *               ESCROW ─── tip ──▶ courier
- *   cancelled   ESCROW ─── total ──▶ AVAILABLE
+ *   placement    AVAILABLE ─── total ──▶ ESCROW           (the customer's, still)
+ *   sub cancel   ESCROW ─── that slice's share ──▶ AVAILABLE
+ *   delivered    ESCROW ─── food_i − commission_i ──▶ merchant_i   (per live slice)
+ *                ESCROW ─── Σ commission + service fee ──▶ platform
+ *                ESCROW ─── Σ delivery fees ──▶ courier
+ *                ESCROW ─── tip ──▶ courier
+ *   cancelled    ESCROW ─── whatever is left ──▶ AVAILABLE
  * </pre>
  *
- * <p><b>The courier's two lines were the whole point of the arrangement 2e M3
- * left behind, and Phase 4 M1 is the line that changes.</b> Until couriers
- * existed, the delivery fee and the tip settled to the platform under their own
- * kinds ({@code COURIER_FEE}, {@code TIP}) rather than being folded into
- * commission — so redirecting them is a payee, and a year of tips does not have
- * to be un-picked out of platform revenue to find out what couriers were owed.
+ * <p><b>The invariant is unchanged and now has a second term:</b> what the
+ * settlement splits plus what per-sub-order cancellations already released must
+ * equal what was held, to the cent, or nothing settles. A slice's share is
+ * always {@code subtotal − discount + its delivery fee}; the service fee and
+ * the tip belong to the order and only move at the end, whichever end that is.
  *
- * <p>They still fall back to the platform when an order has no courier, which is
- * not dead code: every order delivered before this milestone had none, and a
- * split has to name <em>somebody</em> or the arithmetic below refuses to settle
- * and the money stays in escrow.
+ * <p>The courier's lines still fall back to the platform when an order has no
+ * courier, which is not dead code: every order delivered before Phase 4 M1 had
+ * none, and a split has to name <em>somebody</em> or the money stays in escrow.
  */
 @Service
 class OrderPayments {
@@ -89,59 +89,91 @@ class OrderPayments {
      * wallet is short, which the global handler turns into a 402 — the status
      * the app reads to offer a top-up rather than an apology.
      */
-    void hold(CustomerOrder order, String merchantName) {
+    void hold(CustomerOrder order, String memo) {
         if (!required() || order.getTotalCents() <= 0) return;
         wallet.hold(OwnerKind.USER, order.getUserId(), order.getTotalCents(),
-            WalletApi.Reference.of(REF_KIND, order.getId(), merchantName),
+            WalletApi.Reference.of(REF_KIND, order.getId(), memo),
             key(order, "hold"));
         order.held(OffsetDateTime.now());
     }
 
     /**
-     * Splits the hold at delivery. Idempotent on the order, so the fulfilment
-     * job passing through DELIVERED twice cannot pay a merchant twice.
+     * Splits what is left of the hold at delivery: each surviving merchant
+     * their base minus commission, the platform every commission plus the
+     * service fee, the courier every delivery fee and the tip. Idempotent on
+     * the order, so passing through DELIVERED twice cannot pay anybody twice.
+     *
+     * @param merchantNames display names per merchant id, for the statement
      */
-    void settle(CustomerOrder order, String merchantName) {
+    void settle(CustomerOrder order, Map<UUID, String> merchantNames) {
         if (order.getPaymentStatus() != PaymentStatus.HELD) return;
 
-        int merchantBase = order.getSubtotalCents() - order.getDiscountCents();
-        long commission = fees.platformFee(FeeApi.DELIVERY, merchantBase);
-        long platformTake = commission + order.getServiceFeeCents();
-
-        List<WalletApi.Split> splits = new ArrayList<>(4);
-        splits.add(new WalletApi.Split(
-            AccountRef.merchant(order.getMerchantId(), Bucket.AVAILABLE),
-            merchantBase - commission, LedgerKind.CAPTURE, merchantName));
+        List<WalletApi.Split> splits = new ArrayList<>();
+        long platformTake = order.getServiceFeeCents();
+        int courierFees = 0;
+        for (SubOrder sub : order.getSubOrders()) {
+            if (sub.getStatus() == SubOrderStatus.CANCELLED) continue;
+            int merchantBase = sub.getSubtotalCents() - sub.getDiscountCents();
+            long commission = fees.platformFee(FeeApi.DELIVERY, merchantBase);
+            platformTake += commission;
+            courierFees += sub.getDeliveryFeeCents();
+            splits.add(new WalletApi.Split(
+                AccountRef.merchant(sub.getMerchantId(), Bucket.AVAILABLE),
+                merchantBase - commission, LedgerKind.CAPTURE,
+                merchantNames.getOrDefault(sub.getMerchantId(), "Restaurant")));
+        }
         splits.add(new WalletApi.Split(AccountRef.platform(), platformTake,
             LedgerKind.FEE, "Service + commission"));
         // The courier's two lines, now that there is a courier.
         AccountRef courier = courierAccount(order);
-        splits.add(new WalletApi.Split(courier, order.getDeliveryFeeCents(),
+        splits.add(new WalletApi.Split(courier, courierFees,
             LedgerKind.COURIER_FEE, "Delivery"));
         splits.add(new WalletApi.Split(courier, order.getTipCents(),
             LedgerKind.TIP, "Tip"));
 
         long sum = splits.stream().mapToLong(WalletApi.Split::amountMinor).sum();
-        if (sum != order.getTotalCents()) {
-            // Impossible unless the arithmetic in Basket and the arithmetic here
-            // have drifted. Refusing beats stranding the difference in escrow
-            // where nobody would notice it for a month.
-            log.error("Order {} splits sum to {} but {} was held — not settling",
-                order.getId(), sum, order.getTotalCents());
+        if (sum != order.heldRemainingCents()) {
+            // Impossible unless the arithmetic in Basket, the per-slice releases
+            // and the arithmetic here have drifted. Refusing beats stranding the
+            // difference in escrow where nobody would notice it for a month.
+            log.error("Order {} splits sum to {} but {} remains held — not settling",
+                order.getId(), sum, order.heldRemainingCents());
             return;
         }
 
         wallet.capture(OwnerKind.USER, order.getUserId(), splits,
-            WalletApi.Reference.of(REF_KIND, order.getId(), merchantName), key(order, "capture"));
+            WalletApi.Reference.of(REF_KIND, order.getId(), memoFor(order, merchantNames)),
+            key(order, "capture"));
         order.settled(OffsetDateTime.now());
     }
 
-    /** Gives it all back. The order was cancelled before the courier moved. */
+    /**
+     * One slice's share goes back — its merchant rejected it, never answered,
+     * or the customer changed their mind about that kitchen before it started.
+     *
+     * <p>The key carries the sub-order id, so releasing two different slices is
+     * two movements while a retried release of one is one. The running total on
+     * the parent is what keeps the final settlement honest.
+     */
+    void releaseSubOrder(CustomerOrder order, SubOrder sub, String merchantName) {
+        int share = sub.shareCents();
+        if (order.getPaymentStatus() != PaymentStatus.HELD || share <= 0) return;
+        wallet.release(OwnerKind.USER, order.getUserId(), share,
+            WalletApi.Reference.of(REF_KIND, order.getId(), merchantName),
+            key(order, "release:" + sub.getId()));
+        order.partiallyReleased(share);
+    }
+
+    /** Gives back whatever the hold still covers. The order ended before the
+     *  courier moved — including the case where its last live slice just did. */
     void release(CustomerOrder order) {
         if (order.getPaymentStatus() != PaymentStatus.HELD) return;
-        wallet.release(OwnerKind.USER, order.getUserId(), order.getTotalCents(),
-            WalletApi.Reference.of(REF_KIND, order.getId(), "Order cancelled"),
-            key(order, "release"));
+        int remaining = order.heldRemainingCents();
+        if (remaining > 0) {
+            wallet.release(OwnerKind.USER, order.getUserId(), remaining,
+                WalletApi.Reference.of(REF_KIND, order.getId(), "Order cancelled"),
+                key(order, "release"));
+        }
         order.releasedFunds(OffsetDateTime.now());
     }
 
@@ -163,7 +195,7 @@ class OrderPayments {
     }
 
     /**
-     * Who the delivery fee and the tip belong to.
+     * Who the delivery fees and the tip belong to.
      *
      * <p>The platform fallback is for the orders that predate Phase 4 M1 and had
      * no courier at all — not a soft failure mode for one that should have. It
@@ -176,10 +208,19 @@ class OrderPayments {
             : AccountRef.user(order.getCourierUserId(), Bucket.AVAILABLE);
     }
 
-    /** What the merchant actually earned on an order, for their dashboard. */
-    long merchantEarningsOn(CustomerOrder order) {
-        int base = order.getSubtotalCents() - order.getDiscountCents();
+    /** What the merchant actually earned on their slice, for their dashboard. */
+    long merchantEarningsOn(SubOrder sub) {
+        int base = sub.getSubtotalCents() - sub.getDiscountCents();
         return base - fees.platformFee(FeeApi.DELIVERY, base);
+    }
+
+    private static String memoFor(CustomerOrder order, Map<UUID, String> merchantNames) {
+        return order.getSubOrders().stream()
+            .filter(s -> s.getStatus() != SubOrderStatus.CANCELLED)
+            .map(s -> merchantNames.getOrDefault(s.getMerchantId(), "Restaurant"))
+            .distinct()
+            .reduce((a, b) -> a + ", " + b)
+            .orElse("Order");
     }
 
     private static String key(CustomerOrder order, String verb) {

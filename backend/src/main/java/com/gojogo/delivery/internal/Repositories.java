@@ -106,7 +106,10 @@ interface PromotionRedemptionRepository extends JpaRepository<PromotionRedemptio
 
     long countByPromotionIdAndUserId(UUID promotionId, UUID userId);
 
-    boolean existsByOrderId(UUID orderId);
+    /** Keyed on both since Phase 4 M3: one order can carry a different
+     *  promotion per merchant, and the second must not be skipped because the
+     *  first was recorded. */
+    boolean existsByPromotionIdAndOrderId(UUID promotionId, UUID orderId);
 }
 
 interface OrderRepository extends JpaRepository<CustomerOrder, UUID> {
@@ -119,16 +122,6 @@ interface OrderRepository extends JpaRepository<CustomerOrder, UUID> {
     List<CustomerOrder> findByUserIdAndStatusInOrderByPlacedAtDesc(
         UUID userId, Collection<OrderStatus> terminal, Pageable page);
 
-
-    /** The restaurant's live queue, oldest first — a kitchen works in the order
-     *  things arrived in. */
-    List<CustomerOrder> findByMerchantIdAndStatusInOrderByPlacedAtAsc(
-        UUID merchantId, Collection<OrderStatus> statuses);
-
-    /** What they finished (or lost), newest first. */
-    List<CustomerOrder> findByMerchantIdAndStatusInOrderByStatusChangedAtDesc(
-        UUID merchantId, Collection<OrderStatus> statuses, Pageable page);
-
     /** The one order a courier is carrying. Never more than one — accepting
      *  anything makes a worker BUSY in every registration they hold. */
     Optional<CustomerOrder> findFirstByCourierUserIdAndStatusInOrderByStatusChangedAtDesc(
@@ -136,13 +129,34 @@ interface OrderRepository extends JpaRepository<CustomerOrder, UUID> {
 
     List<CustomerOrder> findByCourierUserIdAndStatusOrderByStatusChangedAtDesc(
         UUID courierUserId, OrderStatus status, Pageable page);
+}
+
+interface SubOrderRepository extends JpaRepository<SubOrder, UUID> {
+
+    /** The restaurant's live queue, oldest first — a kitchen works in the order
+     *  things arrived in. Since Phase 4 M3 a kitchen sees its own slice of an
+     *  order and nothing about the other merchants on it. */
+    @Query("select s from SubOrder s where s.merchantId = :merchantId "
+        + "and s.status in :statuses order by s.order.placedAt asc")
+    List<SubOrder> queueFor(@Param("merchantId") UUID merchantId,
+                            @Param("statuses") Collection<SubOrderStatus> statuses);
+
+    /** What they finished (or lost), newest first. */
+    @Query("select s from SubOrder s where s.merchantId = :merchantId "
+        + "and s.status in :statuses order by s.order.statusChangedAt desc")
+    List<SubOrder> historyFor(@Param("merchantId") UUID merchantId,
+                              @Param("statuses") Collection<SubOrderStatus> statuses,
+                              Pageable page);
 
     /**
-     * Orders nobody in a kitchen ever answered — and, by the same test, the ones
-     * stranded by the Phase 4 M1 deploy, since an order in flight when the
-     * simulated fulfilment job was deleted also has no {@code acceptedAt}. Both
-     * are "placed, never accepted, and old", and both want the same outcome.
+     * Slices nobody in a kitchen ever answered — still CONFIRMED past the
+     * cutoff on an order that is still going. The same query that used to run
+     * on the order runs per kitchen now, because "the restaurant didn't answer"
+     * is a fact about one restaurant and must not time out the two that did.
      */
-    List<CustomerOrder> findByStatusNotInAndAcceptedAtIsNullAndPlacedAtBeforeOrderByPlacedAtAsc(
-        Collection<OrderStatus> terminal, OffsetDateTime cutoff, Pageable page);
+    @Query("select s.id from SubOrder s where s.status = com.gojogo.delivery.internal.SubOrderStatus.CONFIRMED "
+        + "and s.order.status not in :terminal and s.order.placedAt < :cutoff "
+        + "order by s.order.placedAt asc")
+    List<UUID> unansweredIds(@Param("terminal") Collection<OrderStatus> terminal,
+                             @Param("cutoff") OffsetDateTime cutoff, Pageable page);
 }
