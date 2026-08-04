@@ -116,11 +116,18 @@ struct MainAppView: View {
                     app.closeWorldMediaViewer()
                 }
                 .environmentObject(app)
-                .transition(.opacity)
+                // A plain crossfade put a full-screen photo on top of a
+                // full-screen chat wallpaper at 50% each — a double exposure of
+                // two busy pictures, which reads as a smear rather than a close.
+                // Shrinking back towards the thread gives the eye a direction and
+                // gets the photo's alpha down fast.
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .scale(scale: 1.04)),
+                    removal: .opacity.combined(with: .scale(scale: 0.92))))
                 .zIndex(60)
             }
         }
-        .animation(.ggOverlay, value: app.worldMediaViewerItems.isEmpty)
+        .animation(.ggSnappy, value: app.worldMediaViewerItems.isEmpty)
         .animation(.ggOverlay, value: app.storyOverlayActive)
         // Don't ignore keyboard — composer must sit above it when open.
         .animation(.ggOverlay, value: app.isComposing)

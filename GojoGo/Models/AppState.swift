@@ -980,10 +980,13 @@ final class AppState: ObservableObject {
         // The list stays mounted under the thread now, search field and all, so
         // its keyboard would come along for the ride.
         Keyboard.dismiss()
-        showWorldAppsMenu = false
-        showWorldContact = false
         showWorldFilters = false
-        selectedWorldConversationID = id
+        // Carries the push-in transition, the mirror of `closeWorldConversation()`.
+        withAnimation(.ggNav) {
+            showWorldAppsMenu = false
+            showWorldContact = false
+            selectedWorldConversationID = id
+        }
         PushRegistrar.shared.activeConversationID = id
         if let i = worldConversations.firstIndex(where: { $0.id == id }) {
             worldConversations[i].unread = 0
@@ -1000,20 +1003,31 @@ final class AppState: ObservableObject {
     }
 
     func closeWorldConversation() {
-        ChatAudioPlayer.shared.stop()
         clearWorldNotice()
-        selectedWorldConversationID = nil
+        // The navigation flip goes first and carries its own animation, the way
+        // `closeWorldContact()` does. Leaving it to `.animation(value:)` on the
+        // MyWorld stack meant the removal transition had to survive the twelve
+        // other published mutations below landing in the same turn — it didn't,
+        // and the thread disappeared in a single frame while opening it still
+        // slid in properly.
+        withAnimation(.ggNav) {
+            selectedWorldConversationID = nil
+            showWorldContact = false
+            showWorldAppsMenu = false
+        }
         PushRegistrar.shared.activeConversationID = nil
         worldDraft = ""
         worldPendingAttachments = []
-        showWorldAppsMenu = false
-        showWorldContact = false
         worldReactionTarget = nil
         worldReplyingTo = nil
         worldSendLaterLabel = nil
         worldSheet = nil
         showWorldPollOverlay = false
         showWorldSendLaterOverlay = false
+        // Tearing down the audio session blocks the main thread for long enough
+        // to eat the opening frames of that transition. Nobody is listening to a
+        // thread they just closed — one turn later is soon enough.
+        DispatchQueue.main.async { ChatAudioPlayer.shared.stop() }
     }
 
     /// Badge count — muted threads still show their own unread dot, but they
@@ -1583,8 +1597,10 @@ final class AppState: ObservableObject {
     }
 
     func closeWorldMediaViewer() {
-        worldMediaViewerItems = []
-        worldMediaViewerIndex = 0
+        withAnimation(.ggSnappy) {
+            worldMediaViewerItems = []
+            worldMediaViewerIndex = 0
+        }
     }
 
     func openWorldContact() {

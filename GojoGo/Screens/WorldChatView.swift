@@ -115,9 +115,11 @@ struct WorldChatView: View {
                 offset: $dismissDrag,
                 onDismiss: {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    DispatchQueue.main.async {
-                        app.closeWorldConversation()
-                    }
+                    // Straight through, inside the recognizer's own animated
+                    // transaction. The hop through `main.async` used to land the
+                    // close in a *later* turn than the animation that was meant
+                    // to carry it, so the thread vanished in one frame.
+                    app.closeWorldConversation()
                 }
             )
         }
@@ -1815,10 +1817,20 @@ private struct SwipeLeftDismissBridge: UIViewRepresentable {
         context.coordinator.attach(from: uiView)
     }
 
+    /// The recognizer lives on the *window*, which outlives this view by a long
+    /// way. Without this, every thread you opened left another edge recognizer
+    /// behind on the window — each one with a dead target, each one still
+    /// claiming the left edge and refusing to run alongside its replacement. Two
+    /// or three threads in, the swipe simply stopped doing anything.
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var offset: Binding<CGFloat>
         var onDismiss: () -> Void
         private weak var host: UIView?
+        private weak var anchor: UIView?
         private var edgePan: UIScreenEdgePanGestureRecognizer?
 
         init(offset: Binding<CGFloat>, onDismiss: @escaping () -> Void) {
@@ -1826,7 +1838,10 @@ private struct SwipeLeftDismissBridge: UIViewRepresentable {
             self.onDismiss = onDismiss
         }
 
+        deinit { detach() }
+
         func attach(from anchor: UIView) {
+            self.anchor = anchor
             // The recognizer is installed once; skip the hop on every body update.
             if edgePan != nil, host != nil { return }
             DispatchQueue.main.async { [weak self, weak anchor] in
@@ -1845,6 +1860,20 @@ private struct SwipeLeftDismissBridge: UIViewRepresentable {
             }
         }
 
+        func detach() {
+            guard let edge = edgePan else { return }
+            edgePan = nil
+            let host = self.host
+            self.host = nil
+            // Teardown can arrive off the main actor when the coordinator is
+            // released; UIKit will not tolerate that.
+            if Thread.isMainThread {
+                host?.removeGestureRecognizer(edge)
+            } else {
+                DispatchQueue.main.async { host?.removeGestureRecognizer(edge) }
+            }
+        }
+
         private static func nearestHost(from view: UIView) -> UIView? {
             var current: UIView? = view.superview
             while let c = current {
@@ -1852,6 +1881,22 @@ private struct SwipeLeftDismissBridge: UIViewRepresentable {
                 current = c.superview
             }
             return view.window
+        }
+
+        /// The thread this recognizer speaks for has to still be on screen. It
+        /// isn't while a sheet (photos, stickers, forward) is covering it, and it
+        /// isn't once the view has been torn down but the recognizer hasn't been
+        /// removed yet.
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard let anchor, anchor.window != nil else { return false }
+            var responder: UIResponder? = anchor
+            while let r = responder {
+                if let vc = r as? UIViewController {
+                    return vc.presentedViewController == nil
+                }
+                responder = r.next
+            }
+            return true
         }
 
         @objc func handleEdge(_ g: UIScreenEdgePanGestureRecognizer) {
@@ -1863,19 +1908,34 @@ private struct SwipeLeftDismissBridge: UIViewRepresentable {
             switch g.state {
             case .changed:
                 offset.wrappedValue = min(max(t.x, 0), view.bounds.width)
-            case .ended, .cancelled:
-                let shouldDismiss = t.x > 90 || vel.x > 500
-                if shouldDismiss {
-                    UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseIn) {
-                        self.offset.wrappedValue = UIScreen.main.bounds.width
-                    } completion: { _ in
-                        self.onDismiss()
-                        self.offset.wrappedValue = 0
+            case .ended:
+                if t.x > 90 || vel.x > 500 {
+                    // Close in an animated transaction and leave the drag offset
+                    // exactly where the finger left it — the removal transition
+                    // then carries the thread on off the trailing edge, picking
+                    // up the gesture instead of fighting it. (Unwinding the
+                    // offset to zero here would drag the thread back left while
+                    // the transition pushed it right, and the two cancel.) The
+                    // state is `.id`-keyed per conversation, so the next thread
+                    // starts from zero regardless.
+                    //
+                    // `UIView.animate` was doing none of this: it does not drive
+                    // SwiftUI state, so the offset jumped a full screen width in
+                    // a single frame, and its completion block then sat on the
+                    // actual close for another 200ms.
+                    withAnimation(.ggNav) {
+                        onDismiss()
                     }
                 } else {
                     withAnimation(.ggNav) {
                         offset.wrappedValue = 0
                     }
+                }
+            case .cancelled, .failed:
+                // The system took the gesture back (a call banner, a notification
+                // pull). That is not a dismissal — put the thread back.
+                withAnimation(.ggNav) {
+                    offset.wrappedValue = 0
                 }
             default:
                 break
@@ -2073,6 +2133,22 @@ struct ReactionBadge: View {
 
 // MARK: - Long-press tapback + action overlay
 
+private struct LiftedBubbleHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Fixed metrics of the long-press stack. Free-standing because the overlay is
+/// generic, and a generic type can't hold stored statics.
+private enum ReactionMetrics {
+    static let barHeight: CGFloat = 54      // 38pt icons + 8pt padding, doubled
+    static let barGap: CGFloat = 44         // bar centre, above the bubble's top edge
+    static let menuGap: CGFloat = 12
+    static let edgeMargin: CGFloat = 12
+}
+
 struct WorldReactionOverlay<Bubble: View>: View {
     let message: WorldMessage
     let bubbleFrame: CGRect
@@ -2085,14 +2161,81 @@ struct WorldReactionOverlay<Bubble: View>: View {
     @ViewBuilder var bubble: () -> Bubble
 
     @State private var appeared = false
+    /// The lifted bubble measures itself. `bubbleFrame` comes from the row in the
+    /// thread, which lays out against the list's width — the overlay re-renders
+    /// the same content unconstrained and an image bubble comes out
+    /// substantially taller, so laying the stack out from the thread's number
+    /// still ran the menu off the bottom.
+    @State private var measuredHeight: CGFloat = 0
 
     private var fromUser: Bool { message.fromUser }
 
-    /// Keep the lifted bubble on-screen even when the original sits under the tapback bar.
+    private var naturalHeight: CGFloat {
+        measuredHeight > 0 ? measuredHeight : bubbleFrame.height
+    }
+
+    // The lifted bubble is the middle of a three-part stack — tapback bar above,
+    // action menu below — so it is the *stack* that has to fit on screen, not
+    // the bubble. Clamping `bubbleY` into a fixed window (190 … height − 240)
+    // only ever kept the bubble itself in view: 240pt is less than the menu's
+    // own 192 plus the gap plus half a bubble, so anything taller than a line or
+    // two of text pushed Delete, then Translate, then Copy off the bottom edge.
+    // A photo attachment lost everything below Reply.
+    private static var windowInsets: UIEdgeInsets {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let window = scenes.first?.windows.first { $0.isKeyWindow } ?? scenes.first?.windows.first
+        return window?.safeAreaInsets ?? .zero
+    }
+
+    // Floors on the insets: the window lookup can come back empty (no key window
+    // yet), and a zero bottom inset would put the Delete row under the home
+    // indicator on every device that has one.
+    private var topLimit: CGFloat {
+        max(Self.windowInsets.top, 24) + ReactionMetrics.edgeMargin
+    }
+    private var bottomLimit: CGFloat {
+        UIScreen.main.bounds.height - max(Self.windowInsets.bottom, 20) - ReactionMetrics.edgeMargin
+    }
+
+    /// What's left for the bubble once the bar and the whole menu have been
+    /// given their room. The menu is never the thing that gets sacrificed.
+    private var bubbleAllowance: CGFloat {
+        bottomLimit - topLimit - ReactionMetrics.barGap - ReactionMetrics.barHeight / 2 - ReactionMetrics.menuGap - menuHeight
+    }
+
+    /// A tall attachment is shrunk to fit rather than shoving the menu off-screen.
+    private var bubbleScale: CGFloat {
+        guard naturalHeight > 0, naturalHeight > bubbleAllowance else { return 1 }
+        return max(bubbleAllowance / naturalHeight, 0.3)
+    }
+
+    private var liftedHeight: CGFloat { naturalHeight * bubbleScale }
+
+    /// Best-effort placement: keeps the whole stack inside the safe area, and
+    /// otherwise leaves the bubble where it already was so the lift reads as a
+    /// lift.
+    private var preferredBubbleY: CGFloat {
+        let lower = topLimit + liftedHeight / 2 + ReactionMetrics.barGap + ReactionMetrics.barHeight / 2
+        let upper = bottomLimit - liftedHeight / 2 - ReactionMetrics.menuGap - menuHeight
+        guard upper > lower else { return (lower + upper) / 2 }
+        return min(max(bubbleFrame.midY, lower), upper)
+    }
+
+    // The menu is placed against the bottom limit directly rather than purely as
+    // an offset from the bubble. Every arithmetic placement depends on knowing
+    // the bubble's drawn height, and that number has already been wrong once —
+    // the thread's measured frame is not the size the overlay re-renders at. So
+    // the menu gets a floor it cannot cross whatever the bubble turns out to be,
+    // and the bubble is then pushed up to sit above it. Worst case the tapback
+    // bar rides high; the actions are always fully on screen and tappable.
+    private var menuCenterY: CGFloat {
+        let preferred = preferredBubbleY + liftedHeight / 2 + ReactionMetrics.menuGap + menuHeight / 2
+        return min(preferred, bottomLimit - menuHeight / 2)
+    }
+
     private var bubbleY: CGFloat {
-        let minY: CGFloat = 190
-        let maxY = UIScreen.main.bounds.height - 240
-        return min(max(bubbleFrame.midY, minY), maxY)
+        let ceiling = menuCenterY - menuHeight / 2 - ReactionMetrics.menuGap - liftedHeight / 2
+        return min(preferredBubbleY, ceiling)
     }
 
     var body: some View {
@@ -2106,20 +2249,31 @@ struct WorldReactionOverlay<Bubble: View>: View {
 
             // Tapback picker bar
             tapbackBar
-                .position(x: barX, y: bubbleY - bubbleFrame.height / 2 - 44)
+                .position(x: barX, y: bubbleY - liftedHeight / 2 - ReactionMetrics.barGap)
                 .scaleEffect(appeared ? 1 : 0.6, anchor: .bottom)
                 .opacity(appeared ? 1 : 0)
 
             // The lifted bubble
             bubble()
-                .position(x: fromUser ? bubbleFrame.midX : bubbleFrame.midX, y: bubbleY)
+                .background {
+                    GeometryReader { g in
+                        Color.clear.preference(key: LiftedBubbleHeightKey.self, value: g.size.height)
+                    }
+                }
+                .scaleEffect(bubbleScale)
+                .position(x: bubbleFrame.midX, y: bubbleY)
                 .scaleEffect(appeared ? 1 : 0.9, anchor: fromUser ? .trailing : .leading)
 
             // Action menu
             actionMenu
-                .position(x: menuX, y: bubbleY + bubbleFrame.height / 2 + 12 + menuHeight / 2)
+                .position(x: menuX, y: menuCenterY)
                 .scaleEffect(appeared ? 1 : 0.8, anchor: fromUser ? .topTrailing : .topLeading)
                 .opacity(appeared ? 1 : 0)
+        }
+        .onPreferenceChange(LiftedBubbleHeightKey.self) { h in
+            // The measurement is of the unscaled content, so it can't feed back
+            // into `bubbleScale` and oscillate.
+            if h > 0, abs(h - measuredHeight) > 0.5 { measuredHeight = h }
         }
         .onAppear {
             withAnimation(.ggSnappy) { appeared = true }

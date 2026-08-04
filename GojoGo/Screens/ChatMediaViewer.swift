@@ -63,7 +63,13 @@ struct ChatMediaViewer: View {
                     }
                     .onEnded { value in
                         if abs(value.translation.height) > 140 || abs(value.predictedEndTranslation.height) > 300 {
-                            onDismiss()
+                            // Same transaction as the close, so the page keeps
+                            // travelling in the direction the finger threw it
+                            // instead of snapping back to centre to fade out.
+                            withAnimation(.ggSnappy) {
+                                dragOffset.height += value.predictedEndTranslation.height > 0 ? 260 : -260
+                                onDismiss()
+                            }
                         } else {
                             withAnimation(.ggSnappy) { dragOffset = .zero }
                         }

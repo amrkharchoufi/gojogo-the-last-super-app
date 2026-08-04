@@ -45,8 +45,14 @@ struct MyWorldView: View {
                     .zIndex(1)
             }
         }
-        .animation(.ggOverlay, value: app.selectedWorldConversationID)
-        .animation(.ggOverlay, value: app.showWorldContact)
+        // No `.animation(_:value:)` pair here any more. Two of them stacked over
+        // one subtree decide between themselves what ends up in the transaction,
+        // and closing a thread was the case that lost: the id changed but
+        // `showWorldContact` didn't, and the removal transition never played
+        // while the insertion still did. `openWorldConversation` and
+        // `closeWorldConversation` each carry their own `withAnimation` now, so
+        // the animation travels with the state change and nothing upstream can
+        // drop it.
         .modifier(WorldSheetHost())
     }
 }
@@ -150,7 +156,13 @@ private struct WorldMessagesList: View {
         // changed while it was open.
         .onChange(of: covered) { _, nowCovered in
             guard !nowCovered else { return }
-            Task { await app.refreshWorldConversations() }
+            // Wait out the dismiss transition. Firing straight away republishes
+            // the whole conversation list into the middle of it, and the thread
+            // sliding off the trailing edge stutters or skips outright.
+            Task {
+                try? await Task.sleep(nanoseconds: 380_000_000)
+                await app.refreshWorldConversations()
+            }
         }
         .onReceive(tick) { now in
             clock = now
