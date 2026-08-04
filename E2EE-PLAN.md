@@ -187,12 +187,27 @@ still up, and the archive-derived preview showed on the list before any fetch.
   package resolution. (Both workflows fetch the full archive — the 151 MB tar
   isn't separable per slice server-side; the cache makes it a one-time cost.)
 
-**Remaining for Phase B:**
-- Client publish flow: generate signed + Kyber prekeys and a one-time pool,
-  `PUT /v1/keys` on messaging connect, top up when `/count` runs low.
-- Session establishment between two accounts via the directory (needs the
-  publish flow plus a second account, like Phase A's pending check).
-- First CI run with the new fetch step needs watching once this pushes.
+**Publish flow landed and verified against the live directory.**
+`WorldKeyPublisher.syncIfNeeded()` runs detached on messaging connect: publishes
+on first run, tops up when `/count` drops below 20, no-ops otherwise. Private
+halves are written to the store *before* the PUT — a bundle the server could
+hand out while this device had lost the private half would poison every session
+started from it. Prekey ids count monotonically across batches (a reuse would
+collide in the directory's zero-padded sort keys). The Phase B smoke test in
+`GojoGoApp.init` is retired; the publisher is the real bootstrap now.
+
+**Proof (on-device key store, live server):** after connect, the store held 50
+one-time prekeys, 1 signed prekey (id 1), 1 Kyber prekey (id 2),
+`nextPreKeyId: 53`, and `published: true`. That flag is written *only* after the
+`PUT /v1/keys` returns 204 — so its presence is proof the publish reached the
+deployed directory (`30910738705`, green). Backend deploy for the directory
+itself also green.
+
+**Remaining for Phase B — needs a second account (same blocker as Phase A):**
+- Session handshake: fetch a peer bundle via `keyBundle(for:)`, run
+  `processPreKeyBundle`, and confirm both sides derive the same session. Single
+  account can publish and self-fetch but can't complete a two-party handshake.
+- First CI run with the `vendor_libsignal` step (watch the cache warm on run 2).
 
 ### Phase C — swap the cipher
 - Replace the identity transform with libsignal session encrypt/decrypt.

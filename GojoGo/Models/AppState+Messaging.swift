@@ -56,6 +56,14 @@ extension AppState {
             #endif
         }
 
+        // E2EE (Phase B): make sure this device's public bundle is in the key
+        // directory and its one-time pool is topped up. Fire-and-forget — the
+        // screen never waits on key material, and a failure retries on the
+        // next connect.
+        if worldSetupComplete {
+            Task.detached(priority: .utility) { await WorldKeyPublisher.syncIfNeeded() }
+        }
+
         worldConversationsLoading = false
         worldConversationsLoaded = true
         // Awaited last so a slow graph can't hold the list back, and so the two
