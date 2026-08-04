@@ -117,7 +117,9 @@ struct UserAvatar: View {
     private var inner: some View {
         ZStack {
             Circle().fill(GGColor.surface2)
-            if let imageData, let ui = UIImage(data: imageData) {
+            // Same decoded-bytes cache as MediaImage — `body` runs per render
+            // pass, and avatars sit in every list row.
+            if let imageData, let ui = MediaImage.decoded(imageData) {
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFill()

@@ -640,6 +640,25 @@ struct WorldContactView: View {
         Rectangle().fill(IMColor.separator.opacity(0.5)).frame(width: 0.5, height: 28)
     }
 
+    /// The card is named after whatever opened the thread, so the row reads as
+    /// the thing it controls rather than as jargon about a "context card".
+    private static func contextCardLabel(_ ctx: WorldListingContext) -> String {
+        switch ctx.kind {
+        case "ride": return "Show trip card"
+        case "order": return "Show order card"
+        case "listing": return "Show listing card"
+        default: return "Show thread card"
+        }
+    }
+
+    private static func contextCardIcon(_ ctx: WorldListingContext) -> String {
+        switch ctx.kind {
+        case "ride": return "car.fill"
+        case "order": return "bag.fill"
+        default: return "tag.fill"
+        }
+    }
+
     private var settingsCard: some View {
         VStack(spacing: 0) {
             Toggle(isOn: Binding(
@@ -675,6 +694,29 @@ struct WorldContactView: View {
             .frame(height: 52)
 
             rowDivider
+
+            // Only for a thread that has one. This is the way back from the ×
+            // on the card itself — without it, tidying the card away would
+            // silently cost you the only route from the thread to the listing
+            // it is about.
+            if let convo, let ctx = convo.listingContext {
+                Toggle(isOn: Binding(
+                    get: { !app.isWorldContextCardHidden(convo.id) },
+                    set: { _ in app.toggleWorldContextCard(convo.id) }
+                )) {
+                    Label {
+                        Text(Self.contextCardLabel(ctx)).font(.system(size: 16))
+                    } icon: {
+                        Image(systemName: Self.contextCardIcon(ctx)).foregroundStyle(IMColor.blue)
+                    }
+                    .foregroundStyle(IMColor.label)
+                }
+                .tint(IMColor.blue)
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+
+                rowDivider
+            }
 
             if let cid = contactID {
                 Button {

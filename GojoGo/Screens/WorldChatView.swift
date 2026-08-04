@@ -28,6 +28,15 @@ struct WorldChatView: View {
     /// position has to survive the prepend.
     @State private var loadingOlder = false
     @State private var anchorAfterPrepend: UUID?
+    /// What the thread's context card actually points at, once checked against
+    /// the vertical that owns it.
+    @State private var contextState: WorldContextState = .checking
+    /// Composer text, owned by this screen. Routing every keystroke through the
+    /// app-wide `AppState` re-rendered every observer of it — the whole thread,
+    /// plus the list and feed still mounted underneath — per character typed.
+    /// `app.worldDraft` stays the hand-off slot: it seeds this on appear (the
+    /// "Message seller" prefill) and receives the text back only on send.
+    @State private var draft: String = ""
 
     private var live: WorldConversation {
         app.worldConversations.first(where: { $0.id == conversationID })
@@ -38,8 +47,14 @@ struct WorldChatView: View {
         app.worldTypingConversationID == conversationID
     }
 
+    /// The thread's reference card, unless the reader has put it away. Drives
+    /// both the bar itself and the headroom the messages leave for it.
+    private var visibleListingContext: WorldListingContext? {
+        app.isWorldContextCardHidden(conversationID) ? nil : live.listingContext
+    }
+
     private var canSend: Bool {
-        !app.worldDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !app.worldPendingAttachments.isEmpty
     }
 
@@ -61,13 +76,14 @@ struct WorldChatView: View {
             // Floats over the thread so messages scroll underneath the glass bar.
             VStack(spacing: 0) {
                 chatHeader
-                if let ctx = live.listingContext {
+                if let ctx = visibleListingContext {
                     listingContextBar(ctx)
                 }
                 addToContactsBar
                 Spacer(minLength: 0)
                     .allowsHitTesting(false)
             }
+            .animation(.ggNav, value: visibleListingContext == nil)
 
             reactionOverlay
             pollComposerOverlay
@@ -157,6 +173,13 @@ struct WorldChatView: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
             .presentationBackground(IMColor.sheetBG)
+        }
+        .task { await resolveContext() }
+        .onAppear { draft = app.worldDraft }
+        // Only external writers touch `app.worldDraft` now (the seller prefill,
+        // the post-send clear) — adopt whatever they set.
+        .onChange(of: app.worldDraft) { _, external in
+            if external != draft { draft = external }
         }
         .onDisappear { hold.abort() }
     }
@@ -519,44 +542,103 @@ struct WorldChatView: View {
         )
     }
 
-    /// The listing this thread was started from — a pinned card both buyer and
-    /// seller see. Tapping opens the live listing detail. Opaque so messages
-    /// scroll underneath it, not through it.
+    /// The object this thread was started from — a pinned card both sides see.
+    ///
+    /// The card is a *snapshot*: the vertical writes title, price and image onto
+    /// the conversation when the thread opens and never revisits them, which is
+    /// what lets messaging carry a listing, a ride and an order without knowing
+    /// what any of them are. The cost of that is a card that keeps advertising a
+    /// price after the listing is deleted, and a trip that ended weeks ago. So
+    /// the snapshot is checked against the real object before the card offers to
+    /// open anything — see `resolveContext()`. Opaque, so messages scroll
+    /// underneath it rather than through it.
     private func listingContextBar(_ ctx: WorldListingContext) -> some View {
+        HStack(spacing: 0) {
+            // Only the card's own body opens anything. The dismiss control is a
+            // sibling rather than a button inside a button, which SwiftUI
+            // resolves by giving the outer one every tap.
+            Group {
+                if contextState.isOpenable {
+                    Button { app.openListingContext(ctx) } label: {
+                        contextCard(ctx)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    // Nothing to open: a deleted listing, or a kind this app has
+                    // no destination for. It stays as a record of what the
+                    // thread is about and stops pretending to be a link — a
+                    // "View ›" that goes nowhere is worse than no affordance.
+                    contextCard(ctx)
+                }
+            }
+
+            dismissContextButton
+        }
+        .background(IMColor.chrome.opacity(0.55))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(IMColor.separator).frame(height: 0.5)
+        }
+        .background(chromeFill)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 2)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    /// Puts the card away for this thread, on this device. It comes back from
+    /// the thread's info page, so nothing is lost by tidying it — see
+    /// `toggleWorldContextCard`.
+    private var dismissContextButton: some View {
         Button {
-            app.openListingContext(ctx)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            app.toggleWorldContextCard(conversationID)
         } label: {
-            HStack(spacing: 10) {
-                Group {
-                    if let url = ctx.imageURL {
-                        MediaImage(url: url, cornerRadius: 8)
-                    } else {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(IMColor.chrome)
-                            .overlay(
-                                Image(systemName: "tag.fill")
-                                    .font(.system(size: 16))
-                                    .foregroundStyle(IMColor.secondary))
-                    }
-                }
-                .frame(width: 40, height: 40)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(IMColor.secondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 6)
+        .accessibilityLabel("Hide this card")
+    }
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(ctx.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(IMColor.label)
+    private func contextCard(_ ctx: WorldListingContext) -> some View {
+        HStack(spacing: 10) {
+            Group {
+                if let url = ctx.imageURL {
+                    MediaImage(url: url, cornerRadius: 8)
+                } else {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(IMColor.chrome)
+                        .overlay(
+                            Image(systemName: contextGlyph(ctx))
+                                .font(.system(size: 16))
+                                .foregroundStyle(IMColor.secondary))
+                }
+            }
+            .frame(width: 40, height: 40)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            // A picture of something that is gone shouldn't read as merchandise.
+            .opacity(contextState == .gone ? 0.45 : 1)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(ctx.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(contextState == .gone ? IMColor.secondary : IMColor.label)
+                    .lineLimit(1)
+                    .strikethrough(contextState == .gone)
+                if let line = contextSubtitle(ctx) {
+                    Text(line.text)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(line.muted ? IMColor.secondary : IMColor.blue)
                         .lineLimit(1)
-                    if let subtitle = ctx.subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(IMColor.blue)
-                            .lineLimit(1)
-                    }
                 }
+            }
 
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
+            if contextState.isOpenable {
                 Text("View")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(IMColor.blue)
@@ -564,18 +646,68 @@ struct WorldChatView: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(IMColor.secondary)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(IMColor.chrome.opacity(0.55))
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(IMColor.separator).frame(height: 0.5)
-            }
-            .background(chromeFill)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .padding(.bottom, 2)
+        .padding(.leading, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .animation(.ggSnappy, value: contextState)
+    }
+
+    private func contextGlyph(_ ctx: WorldListingContext) -> String {
+        switch ctx.kind {
+        case "ride": return "car.fill"
+        case "order": return "bag.fill"
+        default: return "tag.fill"
+        }
+    }
+
+    /// What the second line says once the card has been checked. The snapshot's
+    /// own subtitle is the seller's asking price or the fare that was agreed —
+    /// true when it was written, and not a claim worth repeating in blue once
+    /// the thing it describes is gone.
+    private func contextSubtitle(_ ctx: WorldListingContext) -> (text: String, muted: Bool)? {
+        switch contextState {
+        case .gone:
+            return ("No longer available", true)
+        case .available(let status) where status != .active:
+            return (status.label, true)
+        default:
+            guard let subtitle = ctx.subtitle, !subtitle.isEmpty else { return nil }
+            return (subtitle, contextState == .inert)
+        }
+    }
+
+    /// Checks the card's referent so the bar can tell the truth about it.
+    ///
+    /// One small GET per thread that actually has a listing card, on open. Kinds
+    /// with no destination in this app — a ride, a delivery order — resolve to
+    /// `.inert` without a request: there is nothing to verify against because
+    /// there is nowhere for the tap to go.
+    private func resolveContext() async {
+        guard let ctx = live.listingContext else { return }
+        guard ctx.kind == "listing", let id = ctx.listingID else {
+            contextState = .inert
+            return
+        }
+        if let existing = app.liveProduct(id: id) {
+            contextState = .available(existing.status)
+            return
+        }
+        do {
+            let product = try await EconomyStore.shared.get(id)
+            contextState = .available(product.status)
+        } catch APIClient.APIError.http(404, _) {
+            // The one answer that means the thing is actually gone — the seller
+            // deleted it, or moderation took it down.
+            contextState = .gone
+        } catch {
+            // Anything else is *this device* failing to ask: no signal, a
+            // timeout, a 500. "No longer available" would be as wrong as the
+            // stale price was, in the other direction — so the card keeps what
+            // the snapshot says and simply doesn't offer to open it.
+            contextState = .inert
+        }
     }
 
     /// The person you're talking to, when there is exactly one, they're real,
@@ -689,12 +821,17 @@ struct WorldChatView: View {
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.top, live.listingContext == nil ? 88 : 150)
+                .padding(.top, visibleListingContext == nil ? 88 : 150)
                 .padding(.bottom, 12)
-                .animation(.ggSnappy, value: live.messages.count)
+                // No stack-level `.animation(value: count)` here: the sites that
+                // append a single bubble already wrap the mutation in
+                // `withAnimation`, which is what plays the pop-in transition. The
+                // stack-level animation additionally fired on *bulk* changes —
+                // the first page load popped fifty bubbles in at once, which is
+                // exactly the "opening a thread stutters" complaint.
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: live.messages.count) { _, _ in
+            .onChange(of: live.messages.count) { previous, _ in
                 // A page prepended above what you're reading must not throw you
                 // back to the newest message — hold the bubble that was on top
                 // in place instead, so scrolling back feels like scrolling.
@@ -702,7 +839,9 @@ struct WorldChatView: View {
                     anchorAfterPrepend = nil
                     DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) }
                 } else {
-                    scrollToEnd(proxy)
+                    // The first page filling an empty thread jumps straight to
+                    // the newest message; only live sends/receives glide.
+                    scrollToEnd(proxy, animated: previous != 0)
                 }
             }
             .onChange(of: isTyping) { _, typing in
@@ -712,7 +851,7 @@ struct WorldChatView: View {
                     }
                 }
             }
-            .onAppear { scrollToEnd(proxy) }
+            .onAppear { scrollToEnd(proxy, animated: false) }
         }
     }
 
@@ -733,10 +872,14 @@ struct WorldChatView: View {
         }
     }
 
-    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+    private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
         guard let last = live.messages.last else { return }
         DispatchQueue.main.async {
-            withAnimation(.ggNav) {
+            if animated {
+                withAnimation(.ggNav) {
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            } else {
                 proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
@@ -826,15 +969,18 @@ struct WorldChatView: View {
                 if msg.fromUser { Spacer(minLength: spacing) }
                 bubbleContent(msg, tailed: tailed)
                     .opacity(app.worldReactionTarget == msg.id ? 0 : 1)
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: BubbleFrameKey.self,
-                                value: app.worldReactionTarget == msg.id
-                                    ? [msg.id: proxy.frame(in: .named("worldChat"))]
-                                    : [:])
+                    // Only the long-pressed bubble measures itself — a standing
+                    // GeometryReader on every visible row taxed each layout pass
+                    // for a frame that is read once per tapback.
+                    .background {
+                        if app.worldReactionTarget == msg.id {
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: BubbleFrameKey.self,
+                                    value: [msg.id: proxy.frame(in: .named("worldChat"))])
+                            }
                         }
-                    )
+                    }
                     .overlay(alignment: msg.fromUser ? .topLeading : .topTrailing) {
                         if !msg.reactions.isEmpty {
                             ReactionBadge(reactions: msg.reactions, fromUser: msg.fromUser)
@@ -1317,7 +1463,7 @@ struct WorldChatView: View {
                 } else {
                     HStack(alignment: .bottom, spacing: 6) {
                         TextField(app.worldSendLaterLabel == nil ? "iMessage" : "Send Later",
-                                  text: $app.worldDraft, axis: .vertical)
+                                  text: $draft, axis: .vertical)
                             .font(.system(size: 17))
                             .foregroundStyle(IMColor.label)
                             .lineLimit(1...5)
@@ -1325,12 +1471,17 @@ struct WorldChatView: View {
                             .tint(IMColor.blue)
                             .padding(.leading, 16)
                             .padding(.vertical, 10)
-                            .onChange(of: app.worldDraft) { _, _ in app.worldTypingChanged() }
+                            .onChange(of: draft) { _, text in app.worldTypingChanged(text) }
 
                         if canSend {
                             Button {
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                app.worldDraft = draft
                                 app.sendWorldMessage()
+                                // Cleared here, not via onChange: worldDraft goes
+                                // "" → text → "" inside one render pass, which
+                                // onChange coalesces into no change at all.
+                                draft = ""
                             } label: {
                                 Image(systemName: "arrow.up")
                                     .font(.system(size: 17, weight: .bold))
@@ -1484,8 +1635,35 @@ struct WorldChatView: View {
     }
 }
 
+// MARK: - Thread context card state
+
+/// Whether a thread's pinned reference card still points at something, and
+/// whether this app has anywhere to send a tap.
+///
+/// The card is written once by whichever vertical opened the thread and is never
+/// refreshed, so "what the card says" and "what is actually there" drift apart
+/// the moment a listing is deleted or a trip ends. This is the difference.
+enum WorldContextState: Equatable {
+    /// The check is in flight. Renders as a plain card — no affordance is
+    /// offered until there is something to back it up.
+    case checking
+    /// Resolved, and openable. Carries the listing's real status so a sold or
+    /// paused item says so instead of showing its asking price in blue.
+    case available(ListingStatus)
+    /// The referent is gone — deleted, taken down, or unconfirmable.
+    case gone
+    /// A kind this app has no destination for (a ride, a delivery order). The
+    /// card is a record of what the thread is about and nothing more.
+    case inert
+
+    var isOpenable: Bool {
+        if case .available = self { return true }
+        return false
+    }
+}
+
 private extension WorldMessageKind {
-    /// Kinds that render as chat bubbles and participate in tail clustering.
+    /// Kinds that render as bubbles and participate in tail clustering.
     var isBubble: Bool {
         switch self {
         case .text, .file, .emoji, .sticker, .photo, .video,

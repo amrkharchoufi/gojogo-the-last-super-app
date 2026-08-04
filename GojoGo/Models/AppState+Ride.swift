@@ -264,6 +264,28 @@ extension AppState {
         }
     }
 
+    // MARK: Talking to the driver
+
+    /// The rider's way into the thread the server opened when this trip was
+    /// matched — the same navigation as "Message seller" and the courier's
+    /// "Message customer", because there is one way into a conversation here.
+    ///
+    /// `RideService.confirm` has opened this thread since 2b M3 and `RideDTO`
+    /// has carried its id ever since, but nothing on the rider's side ever read
+    /// it: the thread existed, arrived in GojoMessages with its trip card, and
+    /// could not be reached from the trip it belonged to. What it is for is the
+    /// half of a pickup a dropped pin cannot carry — which entrance, which
+    /// corner, that you're the one with the pram.
+    var canMessageRideDriver: Bool { rideConversationID != nil }
+
+    var rideConversationID: UUID? { ride?.conversationId }
+
+    func messageRideDriver() {
+        guard let id = rideConversationID else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        openJobConversation(id)
+    }
+
     // MARK: Ending it
 
     func cancelRide(reason: String? = nil) {

@@ -387,10 +387,16 @@ extension AppState {
     /// Opens the listing a thread's context card points at. The listing may not
     /// be in the loaded catalog page (the seller's own item, or a rotated browse
     /// page), so fetch it and seed the catalog before presenting the detail —
-    /// `ProductDetailView` resolves through `liveProduct(id:)`. Falls back to a
-    /// card-derived product if the fetch fails, so the tap is never dead.
+    /// `ProductDetailView` resolves through `liveProduct(id:)`.
+    ///
+    /// A failure says so. It used to build a stand-in `Product` out of the card
+    /// and open *that*, on the theory that a dead tap is worse than a thin one —
+    /// but the card is a snapshot the seller can delete out from under, so what
+    /// that actually rendered was a deleted item, at its old price, on a detail
+    /// screen offering to buy it. An invented listing is the same class of lie
+    /// as the invented contacts this app stopped fabricating in Phase 2f.
     func openListingContext(_ context: WorldListingContext) {
-        guard let id = context.listingID else { return }
+        guard context.kind == "listing", let id = context.listingID else { return }
         if let existing = liveProduct(id: id) {
             openProduct(existing)
             return
@@ -401,12 +407,7 @@ extension AppState {
                 seedCatalog(product)
                 openProduct(product)
             } catch {
-                #if DEBUG
-                print("Listing context fetch failed: \(error.localizedDescription)")
-                #endif
-                let fallback = productFromContext(context, id: id)
-                seedCatalog(fallback)
-                openProduct(fallback)
+                showWorldNotice("This listing isn't available any more.")
             }
         }
     }
@@ -417,21 +418,6 @@ extension AppState {
         guard featuredProduct.id != product.id,
               !products.contains(where: { $0.id == product.id }) else { return }
         products.append(product)
-    }
-
-    private func productFromContext(_ context: WorldListingContext, id: UUID) -> Product {
-        Product(
-            id: id,
-            name: context.title,
-            price: context.subtitle ?? "—",
-            meta: "",
-            gradient: SocialStore.gradient(for: context.title),
-            imageURL: context.imageURL,
-            category: "Marketplace",
-            seller: "",
-            condition: "",
-            distance: "",
-            description: "")
     }
 
     /// Opens a thread parked while the caller finished My World setup.

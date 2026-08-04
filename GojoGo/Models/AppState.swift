@@ -103,6 +103,8 @@ final class AppState: ObservableObject {
     @Published var worldMediaViewerIndex: Int = 0
     /// Threads muted on this device (no local alert; server push is a global toggle).
     @Published var worldMutedConversations: Set<UUID> = WorldPreference.mutedConversations
+    /// Threads whose pinned reference card the reader has put away, on this device.
+    @Published var worldDismissedContextCards: Set<UUID> = WorldPreference.dismissedContextCards
 
     // MARK: My World settings (device preferences — see `WorldPreference`)
 
@@ -405,6 +407,16 @@ final class AppState: ObservableObject {
     /// tracking card reads as the one restaurant it always drew.
     @Published var deliveryKitchens: [SubOrderDTO] = []
     @Published var deliverySubOrderBusy: Bool = false
+    /// Whether the cart is being collected rather than delivered (Phase 4 M4).
+    /// A property of the checkout and not of a restaurant: an order is one kind
+    /// or the other, and a cart that was half collected would be two orders
+    /// wearing one receipt. Reset with the cart, because the next cart is a
+    /// fresh decision.
+    @Published var deliveryWantsPickup: Bool = false
+    /// The live order's own kind, which is the server's answer and not this
+    /// app's intention — they differ for the whole life of an order placed
+    /// before somebody last toggled the switch above.
+    @Published var deliveryOrderIsPickup: Bool = false
     @Published var deliveryRating: Int = 0
     @Published var deliveryPastOrders: [DeliveryPastOrder] = []
     /// Restaurant the active order was placed from (kept after cart clears).
@@ -646,6 +658,9 @@ final class AppState: ObservableObject {
     // restaurant, which is almost everybody.
     @Published var merchantOrders: [MerchantOrderDTO] = []
     @Published var merchantOrdersLoading: Bool = false
+    /// While a collection code is being checked (Phase 4 M4) — one at a time,
+    /// because the person it belongs to is standing at the counter.
+    @Published var merchantCollectBusy: Bool = false
 
     // Driver/courier onboarding against the real `partner` application.
     @Published var driverApplication: DriverApplicationDTO? = nil
@@ -1040,14 +1055,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    var worldPinnedConversations: [WorldConversation] {
-        worldFilteredConversations.filter(\.pinned)
-    }
-
-    var worldUnpinnedConversations: [WorldConversation] {
-        worldFilteredConversations.filter { !$0.pinned }
-    }
-
     // MARK: My World — conversation management
 
     func togglePinWorldConversation(_ id: UUID) {
@@ -1078,6 +1085,7 @@ final class AppState: ObservableObject {
         }
         worldMutedConversations.remove(id)
         WorldPreference.mutedConversations = worldMutedConversations
+        clearWorldContextCardPreference(id)
         // A live thread deleted only on-device reappears on the next refresh.
         guard wasLive else { return }
         Task { [weak self] in

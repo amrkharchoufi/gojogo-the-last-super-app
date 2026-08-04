@@ -92,8 +92,10 @@ extension AppState {
             await Task.yield()
         }
         defer {
-            worldConversationsLoading = false
-            worldConversationsLoaded = true
+            // @Published fires on every assignment, equal or not — a steady-state
+            // poll must not republish AppState just to confirm two flags.
+            if worldConversationsLoading { worldConversationsLoading = false }
+            if !worldConversationsLoaded { worldConversationsLoaded = true }
         }
         do {
             let live = try await MessagingStore.shared.fetchConversations()
@@ -187,11 +189,6 @@ extension AppState {
     /// nothing behind it either.
     var needsWorldSetup: Bool {
         backendConnected && worldSetupLoaded && !worldSetupComplete
-    }
-
-    /// Shimmer until the first conversation fetch finishes — never flash empty first.
-    var shouldShowWorldConversationShimmer: Bool {
-        worldFilteredConversations.isEmpty && !worldConversationsLoaded
     }
 
     func loadWorldProfile() async {
@@ -440,7 +437,29 @@ extension AppState {
         let liveIds = Set(live.map(\.id))
         merged.append(contentsOf: worldConversations.filter { !liveIds.contains($0.id) })
 
+        // The 30s safety-net poll usually confirms what's already on screen. A
+        // publish that changed nothing still re-renders every observer of
+        // AppState — skip it, and the idle list costs nothing.
+        guard !conversationRowsEqual(merged, worldConversations) else { return }
         withAnimation(.easeOut(duration: 0.22)) { worldConversations = merged }
+    }
+
+    /// Row-level identity check for `mergeLiveConversations` — compares every
+    /// field the list renders (messages are carried over from the existing rows,
+    /// so a count check is enough there).
+    private func conversationRowsEqual(_ lhs: [WorldConversation], _ rhs: [WorldConversation]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (a, b) in zip(lhs, rhs) {
+            if a.id != b.id || a.title != b.title || a.preview != b.preview
+                || a.unread != b.unread || a.pinned != b.pinned
+                || a.isGroup != b.isGroup
+                || a.lastActivityAt != b.lastActivityAt
+                || a.avatarURL != b.avatarURL
+                || a.messages.count != b.messages.count
+                || a.background != b.background
+                || a.listingContext != b.listingContext { return false }
+        }
+        return true
     }
 
     /// Fetches messages for a live thread the first time it's opened, then marks
@@ -751,11 +770,12 @@ extension AppState {
     }
 
     /// Sends a typing ping on a live thread, throttled to once per ~3s. Called
-    /// from the composer's onChange.
-    func worldTypingChanged() {
+    /// from the composer's onChange with the current draft — the draft lives in
+    /// the chat screen's local state now, not on AppState.
+    func worldTypingChanged(_ text: String) {
         guard worldTypingIndicatorsEnabled,
               let id = selectedWorldConversationID, MessagingStore.shared.isLive(id),
-              !worldDraft.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+              !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         let now = Date()
         if let last = worldLastTypingSentAt, now.timeIntervalSince(last) < 3 { return }
         worldLastTypingSentAt = now
@@ -856,6 +876,38 @@ extension AppState {
 
     func isWorldMuted(_ id: UUID) -> Bool { worldMutedConversations.contains(id) }
 
+    // MARK: The thread's reference card
+
+    /// Whether this thread's listing/trip/order card has been put away here.
+    func isWorldContextCardHidden(_ id: UUID) -> Bool {
+        worldDismissedContextCards.contains(id)
+    }
+
+    /// Puts the card away, or brings it back from the thread's info page.
+    ///
+    /// Device-local, like mute: the card is one row both participants read, so
+    /// hiding it is a decision about *this* screen and never about theirs.
+    /// Reversible on purpose — for a listing that is still up, the card is the
+    /// only way from the thread to the thing the thread is about, and a control
+    /// that quietly severs that with no way back is a trap rather than a tidy-up.
+    func toggleWorldContextCard(_ id: UUID) {
+        withAnimation(.ggNav) {
+            if worldDismissedContextCards.contains(id) {
+                worldDismissedContextCards.remove(id)
+            } else {
+                worldDismissedContextCards.insert(id)
+            }
+        }
+        WorldPreference.dismissedContextCards = worldDismissedContextCards
+    }
+
+    /// Forgets the dismissal when the thread goes, so a recycled id can't open
+    /// with a card already hidden.
+    func clearWorldContextCardPreference(_ id: UUID) {
+        guard worldDismissedContextCards.remove(id) != nil else { return }
+        WorldPreference.dismissedContextCards = worldDismissedContextCards
+    }
+
     // MARK: Contact page
 
     /// Assembles the other side of a thread: the live participant record, their
@@ -944,7 +996,9 @@ extension AppState {
             worldConversations[i].lastActivityAt = BackendDate.parse(dto.createdAt) ?? Date()
             worldConversations[i].timeAgo = "now"
         }
-        if worldTypingConversationID == dto.conversationId { worldTypingConversationID = nil }
+        if worldTypingConversationID == dto.conversationId {
+            withAnimation(.ggSnappy) { worldTypingConversationID = nil }
+        }
         if selectedWorldConversationID == dto.conversationId, !mine {
             Task { try? await MessagingStore.shared.markRead(dto.conversationId, lastMessageId: mapped.id) }
         }
@@ -993,10 +1047,14 @@ extension AppState {
 
     private func applyTyping(_ event: WorldSocketEvent) {
         guard let convoId = event.conversationId else { return }
-        worldTypingConversationID = convoId
+        // Animated so the typing bubble's transition actually plays — set
+        // outside a transaction it snapped in and out.
+        withAnimation(.ggSnappy) { worldTypingConversationID = convoId }
         Task {
             try? await Task.sleep(nanoseconds: 3_500_000_000)
-            if worldTypingConversationID == convoId { worldTypingConversationID = nil }
+            if worldTypingConversationID == convoId {
+                withAnimation(.ggSnappy) { worldTypingConversationID = nil }
+            }
         }
     }
 

@@ -604,6 +604,23 @@ struct GojoTravelView: View {
                                 .foregroundStyle(GGColor.textSecondary)
                         }
                     }
+
+                    // Sits on the driver, not down with Share/SOS: it is a way
+                    // to reach *this person*, and the safety bar is for the
+                    // moments when reaching them is not what you want.
+                    if app.canMessageRideDriver {
+                        Button {
+                            app.messageRideDriver()
+                        } label: {
+                            Image(systemName: "message.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(GGColor.textPrimary)
+                                .frame(width: 38, height: 38)
+                                .glass(cornerRadius: 19)
+                        }
+                        .buttonStyle(PressableStyle())
+                        .accessibilityLabel("Message \(driver.name)")
+                    }
                 }
                 .padding(14)
                 .glass(cornerRadius: 18)

@@ -34,6 +34,11 @@ struct MyWorldView: View {
             } else if let id = app.selectedWorldConversationID,
                       app.worldConversations.contains(where: { $0.id == id }) {
                 WorldChatView(conversationID: id)
+                    // Fresh identity per thread: jumping straight from one
+                    // conversation to another (a job thread opened over a chat)
+                    // must not carry over the previous thread's local state —
+                    // draft, scroll anchors, half-finished swipe offset.
+                    .id(id)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing)))
@@ -105,6 +110,12 @@ private struct WorldMessagesList: View {
     /// Drives the relative timestamps ("2m", "1h") without a per-row timer, and
     /// doubles as a safety-net poll behind the socket.
     @State private var clock = Date()
+    /// Search text, owned by this screen. Bound straight to `app.worldSearch`,
+    /// every keystroke republished the app-wide AppState *and* re-ran the
+    /// full-text filter over every message of every thread. The field edits
+    /// locally and pushes to AppState after a beat of quiet.
+    @State private var searchText = ""
+    @State private var searchDebounce: Task<Void, Never>?
 
     private let tick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -112,6 +123,20 @@ private struct WorldMessagesList: View {
         VStack(spacing: 0) {
             topBar
             listContent
+        }
+        .onAppear { searchText = app.worldSearch }
+        .onChange(of: searchText) { _, query in
+            searchDebounce?.cancel()
+            if query.isEmpty {
+                // Clearing should snap the full list back instantly.
+                app.worldSearch = ""
+            } else {
+                searchDebounce = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    guard !Task.isCancelled else { return }
+                    app.worldSearch = query
+                }
+            }
         }
         .task {
             if app.worldConversations.isEmpty && !app.worldConversationsLoaded {
@@ -315,14 +340,14 @@ private struct WorldMessagesList: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(IMColor.secondary)
-            TextField("Search", text: $app.worldSearch)
+            TextField("Search", text: $searchText)
                 .font(.system(size: 17))
                 .foregroundStyle(IMColor.label)
                 .tint(IMColor.blue)
                 .autocorrectionDisabled()
-            if !app.worldSearch.isEmpty {
+            if !searchText.isEmpty {
                 Button {
-                    withAnimation(.ggSnappy) { app.worldSearch = "" }
+                    withAnimation(.ggSnappy) { searchText = "" }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16))
@@ -342,7 +367,13 @@ private struct WorldMessagesList: View {
     }
 
     private var listContent: some View {
-        ScrollView(showsIndicators: false) {
+        // Filter + sort once per render. `worldFilteredConversations` scans and
+        // sorts the whole model each call, and this body used to ask for it
+        // three separate times (rows, pinned grid, shimmer check).
+        let convos = app.worldFilteredConversations
+        let pinned = convos.filter(\.pinned)
+
+        return ScrollView(showsIndicators: false) {
             LazyVStack(spacing: 0) {
                 titleRow
                 searchBar
@@ -353,13 +384,13 @@ private struct WorldMessagesList: View {
                 // something in it, so an empty account still opens on Messages.
                 WorldFeedSection()
 
-                if !app.worldPinnedConversations.isEmpty {
-                    pinnedGrid
+                if !pinned.isEmpty {
+                    pinnedGrid(pinned)
                         .padding(.bottom, 10)
                 }
 
                 // Full Messages list — group threads (from Circles) still appear here.
-                ForEach(app.worldFilteredConversations) { convo in
+                ForEach(convos) { convo in
                     conversationCell(convo)
 
                     Rectangle()
@@ -368,10 +399,12 @@ private struct WorldMessagesList: View {
                         .padding(.leading, 86)
                 }
 
-                if app.shouldShowWorldConversationShimmer {
-                    conversationShimmerList
-                } else if app.worldFilteredConversations.isEmpty {
-                    emptyState
+                if convos.isEmpty {
+                    if !app.worldConversationsLoaded {
+                        conversationShimmerList
+                    } else {
+                        emptyState
+                    }
                 }
 
                 Color.clear.frame(height: tabBarInset + 12)
@@ -463,10 +496,10 @@ private struct WorldMessagesList: View {
 
     // MARK: Pinned (iMessage big avatars)
 
-    private var pinnedGrid: some View {
+    private func pinnedGrid(_ pinned: [WorldConversation]) -> some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3),
                   spacing: 14) {
-            ForEach(app.worldPinnedConversations) { convo in
+            ForEach(pinned) { convo in
                 Button {
                     if app.worldIsEditing {
                         app.togglePinWorldConversation(convo.id)

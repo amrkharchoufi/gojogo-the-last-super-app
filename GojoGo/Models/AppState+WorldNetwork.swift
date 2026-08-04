@@ -58,13 +58,17 @@ extension AppState {
         guard backendConnected, worldSetupComplete else { return }
         if worldFeedPosts.isEmpty && !worldFeedLoaded { worldFeedLoading = true }
         defer {
-            worldFeedLoading = false
-            worldFeedLoaded = true
+            // Same rule as the conversation refresh: don't republish AppState
+            // to confirm flags that are already set.
+            if worldFeedLoading { worldFeedLoading = false }
+            if !worldFeedLoaded { worldFeedLoaded = true }
         }
         do {
             let (stories, posts) = try await WorldContentStore.shared.feed()
-            worldStories = stories
-            worldFeedPosts = posts
+            // The 30s poll usually returns the same feed — republishing an
+            // identical array re-renders every observer of AppState for nothing.
+            if worldStories != stories { worldStories = stories }
+            if worldFeedPosts != posts { worldFeedPosts = posts }
         } catch {
             #if DEBUG
             print("World feed failed: \(error.localizedDescription)")

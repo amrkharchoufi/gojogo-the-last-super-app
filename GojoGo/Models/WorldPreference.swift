@@ -15,6 +15,7 @@ enum WorldPreference {
         static let background = "world.defaultBackground"
         static let threadBackgrounds = "world.threadBackgrounds"
         static let muted = "world.mutedConversations"
+        static let dismissedContext = "world.dismissedContextCards"
     }
 
     private static let store = UserDefaults.standard
@@ -76,5 +77,16 @@ enum WorldPreference {
     static var mutedConversations: Set<UUID> {
         get { Set((store.stringArray(forKey: Key.muted) ?? []).compactMap(UUID.init(uuidString:))) }
         set { store.set(newValue.map(\.uuidString), forKey: Key.muted) }
+    }
+
+    /// Threads whose pinned reference card the reader has put away.
+    ///
+    /// Local and per-thread, for the same reason the wallpaper above is: the
+    /// card is one row both participants read, so hiding it on the conversation
+    /// would take it off the other person's screen too. What a buyer has
+    /// finished with is not a decision to make on the seller's behalf.
+    static var dismissedContextCards: Set<UUID> {
+        get { Set((store.stringArray(forKey: Key.dismissedContext) ?? []).compactMap(UUID.init(uuidString:))) }
+        set { store.set(newValue.map(\.uuidString), forKey: Key.dismissedContext) }
     }
 }
