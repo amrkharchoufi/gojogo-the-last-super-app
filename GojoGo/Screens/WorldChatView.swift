@@ -47,6 +47,9 @@ struct WorldChatView: View {
     /// Only the short-thread case reads this now — the safe-area inset reserves
     /// the room by itself, and doesn't need to be told how much.
     @State private var composerHeight: CGFloat = 56
+    /// Whether the end of the thread is what's on screen. Decides whether the
+    /// keyboard going away should take the messages back down with it.
+    @State private var tailNearBottom = true
 
     private var live: WorldConversation {
         app.worldConversations.first(where: { $0.id == conversationID })
@@ -910,6 +913,21 @@ struct WorldChatView: View {
                         typingRow
                             .id("typing")
                     }
+                    // Marks the end of the thread, and answers one question: is
+                    // the reader looking at the newest message right now? Being
+                    // inside the lazy stack is the point — scrolled back through
+                    // history this doesn't exist at all, and the preference falls
+                    // back to "no".
+                    Color.clear
+                        .frame(height: 0)
+                        .background(
+                            GeometryReader { tail in
+                                Color.clear.preference(
+                                    key: ChatTailNearBottomKey.self,
+                                    value: tail.frame(in: .named("worldChat")).minY
+                                        <= viewport.frame(in: .named("worldChat")).maxY + 40)
+                            }
+                        )
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, chromeHeight + 12)
@@ -961,6 +979,22 @@ struct WorldChatView: View {
                 for: UIResponder.keyboardWillShowNotification)) { _ in
                 scrollToEnd(proxy, animated: false)
             }
+            // …and the keyboard leaving shrinks that inset again. The scroll
+            // offset doesn't come back with it, so the thread settles a keyboard's
+            // worth too low and the last message's receipt ends up tucked behind
+            // the composer — most visibly after a drag-dismiss, which is a scroll
+            // and a dismissal at once.
+            //
+            // Only when the newest message was what you were looking at. Dragging
+            // the keyboard away in the middle of last week's messages is a way of
+            // getting a better look at them, not a request to be thrown back to
+            // the bottom.
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillHideNotification)) { _ in
+                guard tailNearBottom else { return }
+                scrollToEnd(proxy, animated: false)
+            }
+            .onPreferenceChange(ChatTailNearBottomKey.self) { tailNearBottom = $0 }
             .onAppear { scrollToEnd(proxy, animated: false) }
             }
         }
@@ -2273,6 +2307,16 @@ struct ChatComposerHeightKey: PreferenceKey {
     }
 }
 
+
+/// Whether the bottom of the thread is on screen. False by default, which is
+/// also what a lazy stack reports when the end of the thread hasn't been built
+/// — scrolled back through history, that is the right answer.
+struct ChatTailNearBottomKey: PreferenceKey {
+    static var defaultValue: Bool = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
 
 struct BubbleFrameKey: PreferenceKey {
     static var defaultValue: [UUID: CGRect] = [:]
