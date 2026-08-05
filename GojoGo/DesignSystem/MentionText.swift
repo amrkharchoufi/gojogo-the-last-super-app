@@ -115,9 +115,6 @@ enum MentionParser {
 struct MentionedText: View {
     let text: String
     var mentions: [Mention] = []
-    /// Rendered semibold ahead of the text, and tappable — the author handle
-    /// that prefixes a feed caption.
-    var prefixHandle: String?
     var font: Font = .system(size: 15)
     var color: Color = GGColor.textPrimary
     let onOpenProfile: (String, UUID?) -> Void
@@ -145,10 +142,6 @@ struct MentionedText: View {
 
     private var attributed: AttributedString {
         var out = AttributedString()
-        if let prefixHandle, !prefixHandle.isEmpty {
-            out.append(tag(prefixHandle, label: prefixHandle))
-            out.append(plain(" "))
-        }
         var cursor = text.startIndex
         for span in MentionParser.spans(in: text) {
             out.append(plain(String(text[cursor..<span.range.lowerBound])))
