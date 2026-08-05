@@ -5,12 +5,12 @@ import com.gojogo.search.SearchKind;
 import com.gojogo.search.SearchableContent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.EnumMap;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -18,6 +18,14 @@ import java.util.UUID;
  * The write side of the index. One verb: something of some kind changed, ask
  * its {@link SearchableContent} what it looks like now, and make the index say
  * that.
+ *
+ * <p>The sources are resolved <em>lazily</em>, not in the constructor, and that
+ * is load-bearing: every {@code SearchableContent} bean injects
+ * {@link SearchIndexApi} — this bean — to push its module's events, so eager
+ * injection here is a constructor cycle that refuses to boot. The module graph
+ * is acyclic (ModularityTests proves that much); the bean graph needs this one
+ * indirection on top. Found by the schema-check boot in CI, not by any unit
+ * test — the same lesson as every "a path nothing has executed" entry.
  *
  * <p>{@code REQUIRES_NEW}, without exception: this is called from AFTER_COMMIT
  * listeners, and a {@code @Transactional} method called from one joins the
@@ -31,20 +39,32 @@ class SearchIndexService implements SearchIndexApi {
     private static final Logger log = LoggerFactory.getLogger(SearchIndexService.class);
 
     private final SearchEntryRepository entries;
-    private final Map<SearchKind, SearchableContent> sources = new EnumMap<>(SearchKind.class);
+    private final ObjectProvider<SearchableContent> providers;
+    private volatile Map<SearchKind, SearchableContent> sources;
 
-    SearchIndexService(SearchEntryRepository entries, List<SearchableContent> providers) {
+    SearchIndexService(SearchEntryRepository entries,
+                       ObjectProvider<SearchableContent> providers) {
         this.entries = entries;
-        for (SearchableContent provider : providers) {
-            sources.put(provider.kind(), provider);
+        this.providers = providers;
+    }
+
+    private Map<SearchKind, SearchableContent> sources() {
+        Map<SearchKind, SearchableContent> resolved = sources;
+        if (resolved == null) {
+            resolved = new EnumMap<>(SearchKind.class);
+            for (SearchableContent provider : providers) {
+                resolved.put(provider.kind(), provider);
+            }
+            log.info("Search indexes {} kind(s): {}", resolved.size(), resolved.keySet());
+            sources = resolved;
         }
-        log.info("Search indexes {} kind(s): {}", sources.size(), sources.keySet());
+        return resolved;
     }
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void reindex(SearchKind kind, UUID refId) {
-        SearchableContent source = sources.get(kind);
+        SearchableContent source = sources().get(kind);
         if (source == null) return;
         try {
             source.render(refId).ifPresentOrElse(document -> {
