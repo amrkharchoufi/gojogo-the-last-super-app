@@ -354,6 +354,11 @@ struct InstagramPostCard: View {
             captionBlock
                 .padding(.horizontal, 14)
                 .padding(.bottom, 12)
+            if live.isAudio {
+                PostVoiceNote(post: live, height: 70)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 4)
+            }
             media
             // No timestamp under the actions: the header already carries it
             // next to the handle, and repeating it twice on one card just

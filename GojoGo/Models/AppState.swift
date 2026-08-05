@@ -2528,6 +2528,9 @@ final class AppState: ObservableObject {
         commentsByPost[id] = nil
         if viewingPostID == id { closePostViewer() }
         if commentingPostID == id { closeComments() }
+        // A voice post that keeps playing after its row is gone sounds like the
+        // delete didn't take.
+        if ChatAudioPlayer.shared.loadedID == id { ChatAudioPlayer.shared.stop() }
         user.postCount = max(0, user.postCount - 1)
         if profileUser?.isOwn == true {
             profileUser?.postCount = max(0, (profileUser?.postCount ?? 1) - 1)
@@ -2822,6 +2825,7 @@ final class AppState: ObservableObject {
     }
 
     func publishPost(text: String?, imageData: Data?, videoURL: String? = nil,
+                     audioURL: String? = nil,
                      mediaItems: [PostMediaItem] = []) {
         let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = (trimmed?.isEmpty == false) ? trimmed : nil
@@ -2829,7 +2833,8 @@ final class AppState: ObservableObject {
         let first = slides.first
         let resolvedImage = imageData ?? first?.imageData
         let resolvedVideo = videoURL ?? first?.videoURL
-        guard body != nil || resolvedImage != nil || resolvedVideo != nil || !slides.isEmpty else { return }
+        guard body != nil || resolvedImage != nil || resolvedVideo != nil
+                || audioURL != nil || !slides.isEmpty else { return }
 
         let post = Post(
             author: user.handle,
@@ -2838,6 +2843,7 @@ final class AppState: ObservableObject {
             avatarURL: user.avatarURL,
             imageData: resolvedImage,
             videoURL: resolvedVideo,
+            audioURL: audioURL,
             mediaItems: slides,
             imageAspect: resolvedImage != nil || resolvedVideo != nil || !slides.isEmpty ? 1.25 : 1.0,
             text: body,
@@ -2851,7 +2857,7 @@ final class AppState: ObservableObject {
         schedulePersist()
         if backendConnected {
             syncPublishPost(localID: post.id, text: body, imageData: resolvedImage,
-                            videoURL: resolvedVideo, slides: slides)
+                            videoURL: resolvedVideo, audioURL: audioURL, slides: slides)
         } else {
             simulateEngagement(on: post.id)
         }
@@ -2989,9 +2995,12 @@ final class AppState: ObservableObject {
                                                    videoURL: Self.persistedVideoURL(from: att.videoURL))])
         }
 
+        // A voice post keeps the recording, not the waveform picture the recorder
+        // drew for the composer chip: it renders as a player, and a poster would
+        // put it in the photo grid as a tile nobody can play.
         for att in audios {
-            publishPost(text: caption ?? "🎙 Voice note · \(att.durationLabel ?? "0:00")",
-                        imageData: att.imageData)
+            publishPost(text: caption, imageData: nil,
+                        audioURL: AudioLibrary.persist(att.audioURL))
         }
 
         for att in shorts {

@@ -50,7 +50,7 @@ private enum ProfileTab: Hashable {
         switch self {
         case .home:   return "Nothing here yet."
         case .posts:  return "No photos or videos yet."
-        case .text:   return "No written posts yet."
+        case .text:   return "Nothing written or recorded yet."
         case .videos: return "No videos yet."
         case .shorts: return "No shorts yet."
         case .saved:  return "Nothing saved yet."
@@ -98,12 +98,14 @@ struct ProfileView: View {
         }
     }
 
-    /// Written posts — text with nothing attached. These are the ones a square
-    /// thumbnail served worst, so they get a readable list of their own.
+    /// Written and spoken posts — the ones with no picture to put in a grid. A
+    /// square thumbnail served both worst, so they share a readable list: the
+    /// writing as text, the recordings as a player under the same byline.
     private var textPosts: [Post] {
         profilePosts.filter {
             $0.carouselSlides.isEmpty
-                && !($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (!($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || $0.isAudio)
         }
     }
 
@@ -935,14 +937,21 @@ struct ProfileView: View {
                     Spacer(minLength: 0)
                 }
 
-                MentionedText(text: post.text ?? "", mentions: post.mentions,
-                              font: .system(size: 15),
-                              color: GGColor.textPrimary) { handle, profileID in
-                    app.openTaggedProfile(handle: handle, profileID: profileID)
+                if !(post.text ?? "").isEmpty {
+                    MentionedText(text: post.text ?? "", mentions: post.mentions,
+                                  font: .system(size: 15),
+                                  color: GGColor.textPrimary) { handle, profileID in
+                        app.openTaggedProfile(handle: handle, profileID: profileID)
+                    }
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if post.isAudio {
+                    PostVoiceNote(post: post)
+                        .padding(.top, 2)
+                }
 
                 HStack(spacing: 20) {
                     textAction(post.liked ? "heart.fill" : "heart",

@@ -329,6 +329,10 @@ struct Post: Identifiable {
     var imageData: Data?
     /// Local file or remote HTTP URL for in-feed playback.
     var videoURL: String?
+    /// A voice post: a durable local ref (`gojoaudio:…`) until the upload lands,
+    /// the uploaded m4a afterwards. Voice posts carry no picture — they render
+    /// as a waveform wherever a written post renders as text.
+    var audioURL: String?
     /// Extra slides for a multi-photo / video carousel post (includes the first slide).
     var mediaItems: [PostMediaItem]
     var imageAspect: CGFloat   // height / width hint for layout
@@ -350,6 +354,12 @@ struct Post: Identifiable {
 
     var isCarousel: Bool { mediaItems.count > 1 }
 
+    var isAudio: Bool { !(audioURL ?? "").isEmpty }
+
+    /// What the player is handed — the durable local recording while the upload
+    /// is still in flight, the remote m4a once it has landed.
+    var playableAudioURL: URL? { AudioLibrary.playableURL(audioURL) }
+
     /// Slides to render — prefers explicit carousel items, else legacy single media.
     var carouselSlides: [PostMediaItem] {
         if !mediaItems.isEmpty { return mediaItems }
@@ -363,6 +373,7 @@ struct Post: Identifiable {
          avatarGradient: [Color], avatarURL: String? = nil,
          imageURL: String? = nil, imageData: Data? = nil,
          videoURL: String? = nil,
+         audioURL: String? = nil,
          mediaItems: [PostMediaItem] = [],
          imageAspect: CGFloat = 1.0, text: String? = nil,
          mentions: [Mention] = [],
@@ -374,6 +385,7 @@ struct Post: Identifiable {
         self.avatarGradient = avatarGradient; self.avatarURL = avatarURL
         self.imageURL = imageURL; self.imageData = imageData
         self.videoURL = videoURL
+        self.audioURL = audioURL
         self.mediaItems = mediaItems
         self.imageAspect = imageAspect; self.text = text
         self.mentions = mentions

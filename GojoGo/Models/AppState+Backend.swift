@@ -629,7 +629,8 @@ extension AppState {
     // MARK: Publishing
 
     func syncPublishPost(localID: UUID, text: String?, imageData: Data?,
-                         videoURL: String?, slides: [PostMediaItem]) {
+                         videoURL: String?, audioURL: String? = nil,
+                         slides: [PostMediaItem]) {
         Task {
             do {
                 var uploaded: [(imageUrl: String?, videoUrl: String?)] = []
@@ -645,9 +646,15 @@ extension AppState {
                         }
                     }
                 }
-                let hasMedia = !uploaded.isEmpty
+                // A voice post rides in the media item's file slot, the way an
+                // audio message does — the `.m4a` key is what tells the reader
+                // it's a sound and not a movie.
+                let hasVisual = !uploaded.isEmpty
+                if let uploadedAudio = try await uploadVoice(audioURL) {
+                    uploaded.append((imageUrl: nil, videoUrl: uploadedAudio))
+                }
                 let server = try await SocialStore.shared.createPost(
-                    text: text, slides: uploaded, imageAspect: hasMedia ? 1.25 : 1.0)
+                    text: text, slides: uploaded, imageAspect: hasVisual ? 1.25 : 1.0)
                 if let i = posts.firstIndex(where: { $0.id == localID }) {
                     // Keep local image bytes for instant rendering; identity moves to the server post.
                     var merged = server
@@ -669,6 +676,11 @@ extension AppState {
                        !local.isEmpty {
                         merged.videoURL = local
                     }
+                    // The upload can fail on its own while the post itself lands;
+                    // the durable local recording keeps the post playable here.
+                    if (merged.audioURL ?? "").isEmpty, let local = audioURL, !local.isEmpty {
+                        merged.audioURL = local
+                    }
                     posts[i] = merged
                 }
                 schedulePersist()
@@ -678,6 +690,17 @@ extension AppState {
                 #endif
             }
         }
+    }
+
+    /// Uploads a voice post's recording. A ref that is already remote is handed
+    /// back untouched, and a local file that has since vanished uploads nothing
+    /// rather than failing the whole publish.
+    private func uploadVoice(_ ref: String?) async throws -> String? {
+        guard let ref, !ref.isEmpty else { return nil }
+        if ref.hasPrefix("http://") || ref.hasPrefix("https://") { return ref }
+        guard let file = AudioLibrary.playableURL(ref), file.isFileURL,
+              let data = try? Data(contentsOf: file) else { return nil }
+        return try await APIClient.shared.uploadMedia(data, contentType: "audio/m4a")
     }
 
     /// Uploads a carousel slide. Video slides carry a poster (`imageData`) plus
