@@ -65,7 +65,7 @@ struct WorldSettingsView: View {
 
     private var header: some View {
         ZStack {
-            Text("GojoMessages Settings")
+            Text("Settings")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(IMColor.label)
             HStack {

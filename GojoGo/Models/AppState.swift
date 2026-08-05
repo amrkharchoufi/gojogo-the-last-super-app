@@ -197,6 +197,10 @@ final class AppState: ObservableObject {
     @Published var worldConversationsLoading: Bool = true
     /// Becomes true after the first connected fetch attempt finishes (success or fail).
     @Published var worldConversationsLoaded: Bool = false
+    /// Rows drawn from the launch cache that the server hasn't confirmed yet.
+    /// Cleared by the first page that comes back — which is also what removes
+    /// any of them that thread no longer exists.
+    var worldCachedOnlyConversationIDs: Set<UUID> = []
     @Published var worldSetupStep: WorldSetupStep = .intro
     @Published var worldSetupPhone: String = ""
     @Published var worldSetupCode: String = ""
@@ -1160,6 +1164,9 @@ final class AppState: ObservableObject {
         // payloads, which are that history in its wire form.
         WorldMessageArchive.shared.remove(id)
         WorldEnvelopeVault.shared.remove(id)
+        // …and so does its row, or the next launch draws it back from the cache
+        // for as long as it takes the first fetch to answer.
+        WorldConversationCache.shared.save(worldConversations)
         // A live thread deleted only on-device reappears on the next refresh.
         guard wasLive else { return }
         Task { [weak self] in
@@ -2242,6 +2249,9 @@ final class AppState: ObservableObject {
         // on this device would be told its keys were already published and
         // would never appear in the directory at all.
         WorldMessageArchive.shared.wipe()
+        // The thread list carries the last line of every conversation, which is
+        // the same plaintext in shorter form.
+        WorldConversationCache.shared.wipe()
         WorldEnvelopeVault.shared.wipe()
         WorldSignalStore.shared.wipe()
         // Phase D: these open the account's photos and voice notes.

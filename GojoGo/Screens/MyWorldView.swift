@@ -145,6 +145,10 @@ private struct WorldMessagesList: View {
             }
         }
         .task {
+            // The device's own copy first, so the list is readable before the
+            // network is asked anything. It no-ops once anything is on screen,
+            // which is every time but the first.
+            app.hydrateWorldConversationsFromCache()
             if app.worldConversations.isEmpty && !app.worldConversationsLoaded {
                 app.worldConversationsLoading = true
             }
@@ -200,7 +204,7 @@ private struct WorldMessagesList: View {
                 )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("GojoMessages settings")
+            .accessibilityLabel("settings")
 
             Button {
                 withAnimation(.ggSnappy) { app.worldIsEditing.toggle() }
@@ -292,7 +296,7 @@ private struct WorldMessagesList: View {
                 app.worldSheet = .profile
             }
             Divider().background(IMColor.label.opacity(0.1))
-            filterRow("GojoMessages Settings", "gearshape") {
+            filterRow("Settings", "gearshape") {
                 app.showWorldFilters = false
                 app.openWorldSettings()
             }

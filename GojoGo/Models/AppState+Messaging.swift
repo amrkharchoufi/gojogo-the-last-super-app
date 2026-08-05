@@ -105,6 +105,31 @@ extension AppState {
         }
     }
 
+    /// Paints the thread list from the device's last copy of it, before the
+    /// first fetch has anything to say.
+    ///
+    /// The list is server-owned, so the app treated an empty one as "not loaded
+    /// yet" and shimmered until `/v1/conversations` answered — on every cold
+    /// launch, including the ones where nothing had changed. The rows are on
+    /// disk and so are the threads behind them; this is what makes the app open
+    /// on the conversation you were reading rather than on a placeholder.
+    ///
+    /// Cheap to call more than once: it does nothing once anything is on screen.
+    func hydrateWorldConversationsFromCache() {
+        guard worldConversations.isEmpty, !worldConversationsLoaded else { return }
+        let cached = WorldConversationCache.shared.load()
+        guard !cached.isEmpty else { return }
+        // Which rows are standing in for a server answer that hasn't arrived.
+        // A thread deleted from another device is still in this file, and
+        // `mergeLiveConversations` keeps whatever the server page didn't
+        // mention — without this it would keep it forever.
+        worldCachedOnlyConversationIDs = Set(cached.map(\.id))
+        worldConversations = cached
+        // Not `worldConversationsLoaded`: the fetch below still has to run, and
+        // that flag is what tells it whether this was the first one.
+        worldConversationsLoading = false
+    }
+
     func refreshWorldConversations() async {
         guard backendConnected else {
             // Don't clear the shimmer here — connectBackend owns the first-load
@@ -503,7 +528,15 @@ extension AppState {
             merged.append(incoming)
         }
         let liveIds = Set(live.map(\.id))
-        merged.append(contentsOf: worldConversations.filter { !liveIds.contains($0.id) })
+        // Rows the server page didn't mention are kept — a locally created
+        // thread, a circle, anything not yet pushed. Except the ones that only
+        // exist because the launch cache put them there: for those, this page
+        // *is* the answer, and a thread deleted elsewhere has to go.
+        let staleCacheRows = worldCachedOnlyConversationIDs
+        merged.append(contentsOf: worldConversations.filter {
+            !liveIds.contains($0.id) && !staleCacheRows.contains($0.id)
+        })
+        if !worldCachedOnlyConversationIDs.isEmpty { worldCachedOnlyConversationIDs = [] }
 
         defer {
             // Only a screenful, most recent first — the list arrives in whatever
@@ -524,9 +557,12 @@ extension AppState {
 
         // The 30s safety-net poll usually confirms what's already on screen. A
         // publish that changed nothing still re-renders every observer of
-        // AppState — skip it, and the idle list costs nothing.
+        // AppState — skip it, and the idle list costs nothing. The cache is on
+        // the same side of this guard: a list that didn't change doesn't need
+        // rewriting either.
         guard !conversationRowsEqual(merged, worldConversations) else { return }
         withAnimation(.easeOut(duration: 0.22)) { worldConversations = merged }
+        WorldConversationCache.shared.save(merged)
     }
 
     /// Row-level identity check for `mergeLiveConversations` — compares every
@@ -665,6 +701,10 @@ extension AppState {
     func archiveWorldMessages(_ id: UUID) {
         guard let convo = worldConversations.first(where: { $0.id == id }) else { return }
         WorldMessageArchive.shared.save(id, messages: convo.messages)
+        // The row moved too — a send rewrites its preview and its activity time,
+        // and the launch cache is what the next launch draws before the server
+        // answers. Debounced on the far side, so a socket burst is one write.
+        WorldConversationCache.shared.save(worldConversations)
         // Phase F: the backup follows the history rather than a clock, so it is
         // never much staler than the device. Heavily coalesced — this is called
         // from every mutation site, and a socket burst must not become a burst
