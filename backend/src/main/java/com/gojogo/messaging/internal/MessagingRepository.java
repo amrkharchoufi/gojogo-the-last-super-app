@@ -583,11 +583,41 @@ class MessagingRepository {
             .key(Map.of("pk", s("USER#" + userId), "sk", s("CONV#" + convId))));
     }
 
+    /**
+     * Records that this user cleared the thread's history at {@code at}: every
+     * message stored at or before that instant is invisible to them from now on.
+     *
+     * <p>Its own item rather than a field on the membership row, and that is the
+     * whole point — the membership row does <em>not</em> survive deletion, and
+     * the first new message re-creates it ({@link #appendMessage}). A watermark
+     * that lived there would be wiped by the very event it has to outlive, and
+     * the thread would come back carrying every message the user deleted. Kept
+     * per-user: the other participant's copy is theirs and is untouched.
+     */
+    void clearHistory(UUID userId, UUID convId, Instant at) {
+        db().putItem(r -> r.tableName(table).item(Map.of(
+            "pk", s("USER#" + userId),
+            "sk", s("CLEARED#" + convId),
+            "convId", s(convId.toString()),
+            "clearedAt", s(at.toString()))));
+    }
+
+    /** When this user last cleared the thread, if they ever did. */
+    Optional<Instant> historyClearedAt(UUID userId, UUID convId) {
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("USER#" + userId), "sk", s("CLEARED#" + convId)))).item();
+        if (item == null || item.isEmpty() || !item.containsKey("clearedAt")) return Optional.empty();
+        return Optional.of(Instant.parse(item.get("clearedAt").s()));
+    }
+
     /** Re-creates the membership row of a participant who left, so the thread is
-     *  back in their list (read from the start, since their unread was dropped). */
-    Membership rejoin(UUID userId, ConversationMeta meta) {
+     *  back in their list (read from the start, since their unread was dropped).
+     *  Activity time and preview are passed in rather than read off the meta:
+     *  a thread re-opened after a delete has no history <em>for this user</em>,
+     *  and must not come back advertising the last message they deleted. */
+    Membership rejoin(UUID userId, ConversationMeta meta, Instant lastActivityAt, String preview) {
         Map<String, AttributeValue> item = membershipItem(
-            userId, meta.id(), 0, meta.lastActivityAt(), meta.preview(), meta.title(),
+            userId, meta.id(), 0, lastActivityAt, preview, meta.title(),
             !"DIRECT".equals(meta.type()), false, false, null);
         db().putItem(r -> r.tableName(table).item(item));
         return readMembership(item);
