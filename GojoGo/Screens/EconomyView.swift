@@ -869,6 +869,8 @@ struct SellListingSheet: View {
     @State private var category = "Home"
     @State private var notes = ""
     @State private var posted = false
+    @State private var publishing = false
+    @State private var publishError: String?
     @State private var photoItem: PhotosPickerItem?
     @State private var photoData: Data?
 
@@ -901,23 +903,47 @@ struct SellListingSheet: View {
 
                     field("Details", text: $notes, lines: true)
 
+                    if let publishError {
+                        Text(publishError)
+                            .font(.system(size: 13))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .transition(.opacity)
+                    }
+
+                    // "Listed ✓" waits for the server. It used to appear on the
+                    // tap itself, which said the listing was up whether or not
+                    // anything had been published — and the form is kept on a
+                    // failure so the seller can retry without retyping it.
                     Button {
-                        guard !title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                        app.createListing(title: title, price: price, category: category,
-                                          notes: notes, imageData: photoData)
-                        withAnimation { posted = true }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        guard !title.trimmingCharacters(in: .whitespaces).isEmpty,
+                              !publishing, !posted else { return }
+                        publishing = true
+                        withAnimation { publishError = nil }
+                        Task {
+                            let failure = await app.createListing(
+                                title: title, price: price, category: category,
+                                notes: notes, imageData: photoData)
+                            publishing = false
+                            guard failure == nil else {
+                                withAnimation { publishError = failure }
+                                return
+                            }
+                            withAnimation { posted = true }
+                            try? await Task.sleep(nanoseconds: 800_000_000)
                             app.showSellSheet = false
                         }
                     } label: {
-                        Text(posted ? "Listed ✓" : "Publish listing")
+                        Text(publishing ? "Publishing…" : (posted ? "Listed ✓" : "Publish listing"))
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(GGColor.onAccent)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .background(Capsule().fill(GGColor.white))
+                            .opacity(publishing ? 0.7 : 1)
                     }
                     .buttonStyle(PressableStyle())
+                    .disabled(publishing || posted)
                 }
                 .padding(20)
             }

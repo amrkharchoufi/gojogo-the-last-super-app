@@ -32,6 +32,28 @@ extension AppState {
         // Browse can't see the seller's paused or sold items, so the shelf is
         // fetched separately — and it's what puts the count on the chrome chip.
         await refreshSellerListings()
+        dropGhostListings()
+    }
+
+    /// Clears catalog cards that claim to be this user's but that the server has
+    /// never heard of. Publishing used to leave one behind whenever the POST
+    /// failed (or ran before the backend had connected), and the card persisted
+    /// with the rest of the cached session — so an interrupted publish left the
+    /// seller looking at a listing no buyer could see, on an account whose shelf
+    /// didn't list it. Publishing no longer invents them; this clears the ones
+    /// already sitting in caches out there.
+    ///
+    /// Deliberately after `refreshSellerListings()`: `mine()` tracks every
+    /// listing the user owns, paused and sold included, which browse can't see.
+    /// Anything still unaccounted for by then is genuinely not on the server.
+    private func dropGhostListings() {
+        guard backendConnected, !user.handle.isEmpty else { return }
+        func isGhost(_ product: Product) -> Bool {
+            product.seller == user.handle && !EconomyStore.shared.isRemote(product.id)
+        }
+        guard products.contains(where: isGhost) else { return }
+        withAnimation(.easeOut(duration: 0.2)) { products.removeAll(where: isGhost) }
+        schedulePersist()
     }
 
     /// Loads the next page of listings when the given product nears the bottom.
@@ -57,52 +79,52 @@ extension AppState {
         }
     }
 
-    /// Publishes a listing. When connected it hits the backend (uploading any
-    /// picked photo first) and prepends the server-backed product; offline it
-    /// prepends the local draft. Returns immediately with an optimistic product.
+    /// Publishes a listing: uploads any picked photo, then creates it on the
+    /// backend and prepends the server-backed product. Returns `nil` once the
+    /// listing exists, or the sentence to show the seller when it doesn't.
+    ///
+    /// Nothing is prepended on failure. This used to fall back to a local draft
+    /// "so the user still sees their listing" — but a listing only this device
+    /// knows about is one no buyer can see, that the seller's own shelf doesn't
+    /// list, and that no amount of refreshing explains. It is the same class of
+    /// lie as the stand-in listing `openListingContext` stopped building: the
+    /// seller asked to publish, and a card that looks published is a worse
+    /// answer than being told it didn't go up.
     func createListing(title: String, price: String, category: String, notes: String,
-                       imageData: Data? = nil) {
+                       imageData: Data? = nil) async -> String? {
         let trimmed = title.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return "Give the listing a title." }
 
+        // Also false for the length of the first connect, so this is "not yet"
+        // as often as it is "offline" — either way there's nowhere to publish to.
         guard backendConnected else {
-            products.insert(localListing(title: trimmed, price: price, category: category,
-                                         notes: notes), at: 0)
-            schedulePersist()
-            return
+            return "You're not connected — reconnect and publish again."
         }
 
-        Task {
-            do {
-                var imageUrls: [String] = []
-                if let imageData {
-                    let payload = UIImage(data: imageData)?.jpegData(compressionQuality: 0.9) ?? imageData
-                    let url = try await APIClient.shared.uploadMedia(payload, contentType: "image/jpeg")
-                    imageUrls = [url]
-                }
-                let body = ListingBody(
-                    title: trimmed,
-                    priceCents: EconomyStore.parseCents(price),
-                    currency: "USD",
-                    category: category,
-                    condition: "Good",
-                    locationLabel: "nearby",
-                    description: notes,
-                    imageUrls: imageUrls)
-                let product = try await EconomyStore.shared.create(body)
-                withAnimation { products.insert(product, at: 0) }
-                schedulePersist()
-                // Keep "Your listings" honest if it's the next thing they open.
-                await refreshSellerListings()
-            } catch {
-                #if DEBUG
-                print("Create listing failed: \(error.localizedDescription)")
-                #endif
-                // Optimistic local fallback so the user still sees their listing.
-                products.insert(localListing(title: trimmed, price: price, category: category,
-                                             notes: notes), at: 0)
-                schedulePersist()
+        do {
+            var imageUrls: [String] = []
+            if let imageData {
+                let payload = UIImage(data: imageData)?.jpegData(compressionQuality: 0.9) ?? imageData
+                let url = try await APIClient.shared.uploadMedia(payload, contentType: "image/jpeg")
+                imageUrls = [url]
             }
+            let body = ListingBody(
+                title: trimmed,
+                priceCents: EconomyStore.parseCents(price),
+                currency: "USD",
+                category: category,
+                condition: "Good",
+                locationLabel: "nearby",
+                description: notes,
+                imageUrls: imageUrls)
+            let product = try await EconomyStore.shared.create(body)
+            withAnimation { products.insert(product, at: 0) }
+            schedulePersist()
+            // Keep "Your listings" honest if it's the next thing they open.
+            await refreshSellerListings()
+            return nil
+        } catch {
+            return Self.listingMessage(from: error, fallback: "Couldn't publish that listing.")
         }
     }
 
@@ -428,16 +450,4 @@ extension AppState {
         worldDraft = pending.draft
     }
 
-    private func localListing(title: String, price: String, category: String, notes: String) -> Product {
-        Product(
-            name: title,
-            price: price.isEmpty ? "$—" : (price.hasPrefix("$") ? price : "$\(price)"),
-            meta: "you · just now",
-            gradient: user.avatarGradient,
-            category: category,
-            seller: user.handle,
-            condition: "Like new",
-            distance: "0 km",
-            description: notes.isEmpty ? "Listed by you on GojoGo Economy." : notes)
-    }
 }
