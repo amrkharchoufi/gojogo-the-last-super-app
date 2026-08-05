@@ -461,7 +461,13 @@ extension CachedSession {
         posts = app.posts.map(CachedPost.init)
         videos = app.videos.map(CachedVideo.init)
         shorts = app.shorts.map(CachedShort.init)
-        products = app.products.map(CachedProduct.init)
+        // Seeded cards (a thread's listing card, a paused item opened from the
+        // shelf) are borrowed for one session, not part of the browse catalog —
+        // caching them is what left listings on screen after their seller had
+        // deleted them, with no refresh able to explain where they came from.
+        products = app.products
+            .filter { !app.economySeededListingIDs.contains($0.id) }
+            .map(CachedProduct.init)
         featuredProduct = CachedProduct(from: app.featuredProduct)
         people = app.people.map(CachedPerson.init)
         profilePhotos = app.profilePhotos

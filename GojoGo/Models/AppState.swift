@@ -32,6 +32,12 @@ final class AppState: ObservableObject {
     /// Keyset cursor for the next economy listings page; nil = no more pages.
     var economyNextBefore: String? = nil
     var economyLoadingMore: Bool = false
+    /// Listings dropped into the catalog to be *looked at* rather than browsed —
+    /// a thread's listing card, "View in marketplace" on a paused item. They are
+    /// deliberately not cached to disk (`CachedSession` filters them out): the
+    /// catalog on disk is meant to be the last thing the marketplace served, and
+    /// a card you opened once out of a chat is not that. Session-scoped.
+    var economySeededListingIDs: Set<UUID> = []
     /// Set on fresh signups so the onboarding flow runs before entering the app.
     var pendingOnboarding: Bool = false
 
@@ -2263,6 +2269,8 @@ final class AppState: ObservableObject {
         sellerListings = []
         sellerStats = nil
         editingListing = nil
+        economySeededListingIDs = []
+        economyNextBefore = nil
         economyNoticeTask?.cancel()
         economyNotice = nil
         deliveryPollTask?.cancel()
