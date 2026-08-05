@@ -34,6 +34,30 @@ class SecurityConfig {
     private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
 
     /**
+     * The operator surfaces, which are {@code permitAll} <em>in the chain</em>
+     * and authorize themselves through {@code auth.PlatformAdminApi} — accepting
+     * either a caller in the {@code platform-admin} Cognito group or the
+     * break-glass {@code PARTNER_ADMIN_TOKEN}, and 404ing anyone who is neither.
+     * They have to be permitted here because the token path carries no JWT at
+     * all, so {@code authenticated()} would 401 before the controller ever ran.
+     *
+     * <p><b>A named list rather than four inline matchers, because leaving one
+     * out is silent.</b> Phase 4 M6 added the dispute queue — the only operator
+     * surface that moves money — and did not add it here, so the documented curl
+     * runbook 401'd and the queue was reachable only with a platform-admin JWT.
+     * Nothing failed, no test covered it, and it shipped. {@code
+     * OperatorSurfaceTests} now scans for every handler that declares the
+     * break-glass header — which is the exact signature of "this endpoint
+     * expects callers with no JWT" — and asserts its path is covered here, so
+     * the fifth one cannot repeat it.
+     */
+    static final List<String> OPERATOR_SURFACES = List.of(
+        "/v1/partner/admin/**",
+        "/v1/moderation/admin/**",
+        "/v1/travel/admin/**",
+        "/v1/delivery/admin/**");
+
+    /**
      * Browser origins allowed to call this API. Empty — the default, and what
      * production runs today — means no CORS headers at all, which is right
      * while the only client is an iOS app: native apps aren't subject to CORS,
@@ -73,24 +97,13 @@ class SecurityConfig {
                 // guard themselves with ECONOMY_ADMIN_TOKEN and, unset (the
                 // production default), 404 whatever is presented.
                 .requestMatchers("/v1/economy/admin/**").permitAll()
-                // Partner review (KYC approvals). Still permitAll in the chain
-                // because the break-glass token path has no JWT to present —
-                // the endpoints authorize themselves, accepting either a caller
-                // in the platform-admin Cognito group or PARTNER_ADMIN_TOKEN,
-                // and 404ing anyone who is neither (see PlatformAdmins). A
-                // bearer token that *is* presented is still validated here, so
-                // a forged one never reaches the group check.
-                .requestMatchers("/v1/partner/admin/**").permitAll()
-                // The moderation queue, on exactly the same terms and for
-                // exactly the same reason: the break-glass token path has no
-                // JWT to present, so the endpoints authorize themselves through
-                // PlatformAdminApi and 404 anyone who is neither an operator nor
-                // holding the token.
-                .requestMatchers("/v1/moderation/admin/**").permitAll()
-                // The SOS queue (Phase 3 M5), on exactly the same terms as the
-                // other two operator surfaces and authorizing itself the same
-                // way through PlatformAdminApi.
-                .requestMatchers("/v1/travel/admin/**").permitAll()
+                // Partner review, the moderation queue, the SOS queue and the
+                // dispute queue. All four are permitAll here and authorize
+                // themselves in the controller — see OPERATOR_SURFACES above for
+                // why they are one list. A bearer token that *is* presented is
+                // still validated by this chain, so a forged one never reaches
+                // the group check.
+                .requestMatchers(OPERATOR_SURFACES.toArray(String[]::new)).permitAll()
                 // Sumsub's verdict callback. The caller is a machine with no
                 // Cognito account, so its HMAC signature over the raw body is
                 // the authentication — checked in KycWebhookController before

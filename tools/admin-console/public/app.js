@@ -90,7 +90,8 @@ function confirmAction({ title, detail, confirmLabel, danger, noteLabel, noteReq
 const badgeClass = status => ({
   SUBMITTED: 'badge-pending', DRAFT: 'badge', APPROVED: 'badge-ok',
   REJECTED: 'badge-bad', SUSPENDED: 'badge-off',
-  OPEN: 'badge-pending', ACTIONED: 'badge-ok', DISMISSED: 'badge'
+  OPEN: 'badge-pending', ACTIONED: 'badge-ok', DISMISSED: 'badge',
+  RESOLVED_REFUND: 'badge-ok', RESOLVED_REJECTED: 'badge-off'
 }[status] || 'badge');
 
 const badge = (text, cls) => el('span', { className: `badge ${cls || ''}` }, text);
@@ -837,10 +838,219 @@ async function viewSos(main) {
         body)));
 }
 
+// ── View: disputes (Phase 4 M6) ─────────────────────────────────────────────
+//
+// The only screen in this console that moves money, and it is built around the
+// one fact that makes a dispute different from every other queue item here: by
+// the time anybody argues, the money is already split three ways and gone.
+// There is no pot to refund from, so the decision is not "how much" but **which
+// of the three pays** — and each is capped at what they actually received for
+// this order.
+//
+// So the caps are on the screen. The server enforces all three and refuses with
+// the number, which is the authority; putting them in front of the operator as
+// well is not a second copy of the rule but the reason a person can make this
+// decision at all. An amount and a payer typed into curl, against a ceiling
+// nobody can see, is how the wrong party ends up paying.
+//
+// What this screen deliberately does not do: suggest an amount, default the
+// payer to the reason's suggestion, or offer a "refund it all" button. The
+// claim is what the customer says is wrong; what comes back off whom is a
+// judgement, and a button that makes it for you is a refund nobody has to
+// justify.
+
+const disputeState = { filter: 'OPEN', rows: [] };
+
+async function viewDisputes(main) {
+  main.replaceChildren(
+    el('div', { className: 'main-head' },
+      el('div', {},
+        el('h1', {}, 'Disputes'),
+        el('p', {}, 'Problems reported on delivered orders. A refund here comes off '
+          + 'the restaurant, the courier or the platform — whichever you name — and '
+          + 'is capped at what that party was actually paid for this order.')),
+      disputeFilterBar(main)),
+    el('div', { id: 'disputes-body' }, skeleton(3)));
+
+  try {
+    disputeState.rows = await api('/v1/delivery/admin/disputes'
+      + (disputeState.filter ? `?state=${disputeState.filter}&limit=50` : '?limit=50'));
+  } catch (err) {
+    $('#disputes-body')?.replaceChildren(empty('Could not load disputes', err.message));
+    return;
+  }
+  await refreshDisputeCount();
+
+  if (!disputeState.rows.length) {
+    $('#disputes-body')?.replaceChildren(
+      empty('Nothing here', disputeState.filter === 'OPEN'
+        ? 'No open reports. Nothing in this queue escalates on its own, so an empty '
+          + 'queue really is an empty queue.'
+        : 'No reports in that state.'));
+    return;
+  }
+  $('#disputes-body')?.replaceChildren(
+    ...disputeState.rows.map(row => disputeCard(row, main)));
+}
+
+function disputeFilterBar(main) {
+  const bar = el('div', { className: 'filters' });
+  for (const [value, label] of [['OPEN', 'open'], ['RESOLVED_REFUND', 'refunded'],
+                                ['RESOLVED_REJECTED', 'rejected'], ['', 'all']]) {
+    const chip = el('button', { className: 'chip', textContent: label });
+    chip.setAttribute('aria-pressed', String(disputeState.filter === value));
+    chip.onclick = () => { disputeState.filter = value; viewDisputes(main); };
+    bar.append(chip);
+  }
+  return bar;
+}
+
+/** The count worth carrying in the sidebar: an unanswered report is money the
+ *  customer is waiting on and nothing anywhere chases it. */
+async function refreshDisputeCount() {
+  try {
+    const open = await api('/v1/delivery/admin/disputes?state=OPEN&limit=50');
+    $('#count-disputes').textContent = open.length || '';
+  } catch { /* the badge is a nicety */ }
+}
+
+function disputeCard(row, main) {
+  const d = row.dispute;
+  const ccy = row.currency;
+  const open = d.state === 'OPEN';
+  const left = row.orderTotalCents - row.alreadyRefundedCents;
+
+  // What each party can be asked for. The pickup case is not a special case
+  // drawn here — the server returns 0 for a courier who never existed, and a
+  // ceiling of zero is its own explanation.
+  const ceilings = [
+    ['MERCHANT', row.merchantReceivedMinor, row.merchantName],
+    ['COURIER', row.courierReceivedMinor, 'the courier'],
+    ['PLATFORM', row.platformReceivedMinor, 'the platform']
+  ];
+
+  const card = el('div', { className: 'card' },
+    el('h2', {}, `${d.reason.toLowerCase().replace(/_/g, ' ')} · ${row.merchantName}`),
+    el('div', { className: 'mono muted', style: 'margin-bottom:var(--md)' },
+      `order ${row.orderId.slice(0, 8)} · ${row.fulfilmentKind.toLowerCase()} · `
+      + `delivered ${when(row.deliveredAt)}`));
+
+  card.append(el('dl', { className: 'kv' },
+    el('dt', {}, 'state'), el('dd', {},
+      badge(d.state.toLowerCase().replace(/_/g, ' '), badgeClass(d.state))),
+    d.note ? el('dt', {}, 'customer said') : null,
+    d.note ? el('dd', { className: 'subtle' }, d.note) : null,
+    // The claim, priced server-side off the order's own lines. Labelled as a
+    // claim because it is not the refund and must not read like one.
+    el('dt', {}, 'claimed'), el('dd', {},
+      d.items?.length
+        ? d.items.map(i => `${i.qty} × ${i.name}`).join(', ')
+          + ` — ${money(d.claimedCents, ccy)}`
+        : el('span', { className: 'subtle' },
+            'no items named — the report is about the order')),
+    el('dt', {}, 'customer paid'), el('dd', { className: 'mono' },
+      money(row.orderTotalCents, ccy)
+      + (row.alreadyRefundedCents
+          ? ` · ${money(row.alreadyRefundedCents, ccy)} already refunded, `
+            + `${money(left, ccy)} left` : '')),
+    // The three ceilings, which are the decision. The pickup case is not drawn
+    // as a special case: the server returns 0 for a courier who never existed,
+    // and a ceiling of zero is its own explanation.
+    ...ceilings.flatMap(([, amount, who]) =>
+      [el('dt', {}, `${who} was paid`), el('dd', { className: 'mono' }, money(amount, ccy))]),
+    row.photoUrls?.length ? el('dt', {}, 'photos') : null,
+    row.photoUrls?.length ? el('dd', {}, ...row.photoUrls.map((u, i) =>
+      el('a', { href: u, target: '_blank', rel: 'noreferrer',
+                style: 'margin-right:var(--sm)' }, `what arrived ${i + 1}`))) : null,
+    row.proofPhotoUrl ? el('dt', {}, 'drop-off proof') : null,
+    row.proofPhotoUrl ? el('dd', {},
+      el('a', { href: row.proofPhotoUrl, target: '_blank', rel: 'noreferrer' },
+        'the courier’s photo')) : null,
+    !open ? el('dt', {}, 'decided') : null,
+    !open ? el('dd', { className: 'subtle' },
+      `${d.refundCents ? `refunded ${money(d.refundCents, ccy)} — ` : ''}`
+      + `${d.resolutionNote || 'no note'} · ${row.resolvedBy || 'unknown'} · `
+      + when(d.resolvedAt)) : null));
+
+  if (open) card.append(disputeActions(row, ceilings, left, main));
+  return card;
+}
+
+function disputeActions(row, ceilings, left, main) {
+  const ccy = row.currency;
+  const amount = el('input', {
+    type: 'number', min: '1', step: '1', placeholder: 'Amount in cents'
+  });
+  const payer = el('select', {},
+    // No preselection. The reason suggests a payer and the server carries that
+    // suggestion, but choosing it for the operator is the one thing this screen
+    // must not do — a refund a default made is a refund nobody justified.
+    el('option', { value: '', textContent: 'Who pays…' }),
+    ...ceilings.map(([kind, ceiling, who]) =>
+      el('option', {
+        value: kind,
+        // Disabled rather than hidden: "the courier can pay nothing here"
+        // is a fact worth reading, and on a collection it is the answer.
+        disabled: ceiling <= 0,
+        textContent: `${who} — up to ${money(ceiling, ccy)}`
+      })));
+
+  return el('div', { className: 'actions' },
+    amount, payer,
+    el('button', {
+      className: 'btn btn-primary', textContent: 'Refund',
+      onclick: async () => {
+        const cents = Number(amount.value);
+        if (!cents || cents < 1) { amount.focus(); return; }
+        if (!payer.value) { payer.focus(); return; }
+        const who = ceilings.find(([k]) => k === payer.value)[2];
+        const note = await confirmAction({
+          title: `Refund ${money(cents, ccy)}?`,
+          detail: `It comes off ${who} and lands in the customer's balance now. `
+            + `${money(left, ccy)} of this order has not been refunded yet. `
+            + 'This cannot be undone from here.',
+          confirmLabel: 'Refund it', danger: true,
+          noteLabel: 'What to tell the customer', noteRequired: true
+        });
+        if (note == null) return;
+        await resolveDispute(row.dispute.id, 'refund',
+          { refundCents: cents, payer: payer.value, note }, main);
+      }
+    }),
+    el('button', {
+      className: 'btn', textContent: 'Reject',
+      onclick: async () => {
+        const note = await confirmAction({
+          title: 'Reject this report?',
+          detail: 'No money moves. The customer sees your words on their order, '
+            + 'which is the whole of what separates a rejection from nobody looking.',
+          confirmLabel: 'Reject it',
+          noteLabel: 'What to tell the customer', noteRequired: true
+        });
+        if (note == null) return;
+        await resolveDispute(row.dispute.id, 'reject', { refundCents: 0, note }, main);
+      }
+    }));
+}
+
+async function resolveDispute(id, verb, body, main) {
+  try {
+    await api(`/v1/delivery/admin/disputes/${id}/${verb}`, { method: 'POST', body });
+    toast(verb === 'refund' ? 'Refunded.' : 'Rejected.');
+  } catch (err) {
+    // The server's refusals here are the caps, and each names its number —
+    // "the restaurant only has 3.00 left". They are the most useful sentence on
+    // this screen, so they are shown as-is and the form is left exactly as typed.
+    toast(err.message, true);
+    return;
+  }
+  viewDisputes(main);
+}
+
 // ── Routing ─────────────────────────────────────────────────────────────────
 
 const VIEWS = { partners: viewPartners, moderation: viewModeration, sos: viewSos,
-                create: viewCreate, help: viewHelp };
+                disputes: viewDisputes, create: viewCreate, help: viewHelp };
 
 function go(name) {
   for (const btn of document.querySelectorAll('.nav-row')) {
@@ -882,6 +1092,10 @@ async function boot() {
     const sos = await api('/v1/travel/admin/sos?limit=50');
     $('#count-sos').textContent = sos.length || '';
   } catch { /* the badge is a nicety */ }
+
+  // An open dispute is a customer waiting on money, and like every other queue
+  // here nothing escalates it. The count is the only thing that will say so.
+  await refreshDisputeCount();
 
   go('partners');
 }

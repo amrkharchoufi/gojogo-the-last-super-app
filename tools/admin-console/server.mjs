@@ -6,8 +6,9 @@
 // parallel data path": everything it does goes through the same public REST
 // surface the iOS app could call. This console holds to that exactly. It has no
 // database, no cache and no model of its own — it is a renderer for
-// `/v1/partner/admin/**` and `/v1/moderation/admin/**`. When the real GojoAdmin
-// arrives, nothing here has to be unwound; this directory is deleted.
+// `/v1/partner/admin/**`, `/v1/moderation/admin/**`, `/v1/travel/admin/sos` and
+// `/v1/delivery/admin/disputes`. When the real GojoAdmin arrives, nothing here
+// has to be unwound; this directory is deleted.
 //
 // ── Why a server at all, rather than an HTML file opened from disk ───────────
 //
@@ -85,6 +86,14 @@ const ALLOWED = [
   // changing in a queue. What the surface owes an operator is the trip, who
   // raised it, and who to call.
   ['GET', /^\/v1\/travel\/admin\/sos(\?.*)?$/],
+  // Disputes (Phase 4 M6). The one operator surface here that *moves money* —
+  // a refund comes off a restaurant's, a courier's or the platform's balance
+  // and lands in the customer's — which is why it is worth having a screen at
+  // all rather than leaving it to curl: an amount and a payer typed into a
+  // shell, against a cap nobody can see, is how the wrong party pays.
+  ['GET', /^\/v1\/delivery\/admin\/disputes(\?.*)?$/],
+  ['GET', /^\/v1\/delivery\/admin\/disputes\/[0-9a-f-]{36}$/],
+  ['POST', /^\/v1\/delivery\/admin\/disputes\/[0-9a-f-]{36}\/(refund|reject)$/],
   // Liveness, so the console can say whether the API is even up.
   ['GET', /^\/actuator\/health$/]
 ];
