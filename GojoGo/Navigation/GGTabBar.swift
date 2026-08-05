@@ -373,8 +373,36 @@ struct GGTabBar: View {
 struct ComposeChrome: View {
     @EnvironmentObject var app: AppState
     @FocusState private var focused: Bool
+    /// Tagging in the composer the app actually opens. `ComposePostView` has
+    /// its own — the picker belongs to whichever view owns the text.
+    @StateObject private var autocomplete = MentionAutocomplete()
 
     var body: some View {
+        // Spacing 0 and an explicit `if`: an always-present bar that renders to
+        // nothing still claims the stack's spacing, which would leave a gap
+        // over the pill whenever nobody is being tagged.
+        VStack(alignment: .leading, spacing: 0) {
+            if !autocomplete.candidates.isEmpty {
+                MentionSuggestionBar(autocomplete: autocomplete) { candidate in
+                    app.composeText = autocomplete.complete(app.composeText, with: candidate)
+                }
+                // Cancels the bar's own inset so the first chip lines up with
+                // the pill's leading edge rather than sitting 16pt inside it.
+                .padding(.horizontal, -16)
+            }
+
+            pill
+        }
+        .animation(.easeOut(duration: 0.15), value: autocomplete.candidates.count)
+        .onAppear {
+            autocomplete.localSource = { [weak app] in app?.mentionCandidates ?? [] }
+        }
+        .onChange(of: app.composeText) { _, text in
+            autocomplete.update(for: text, connected: app.backendConnected)
+        }
+    }
+
+    private var pill: some View {
         HStack(alignment: .center, spacing: 10) {
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -391,10 +419,11 @@ struct ComposeChrome: View {
 
             ZStack(alignment: .leading) {
                 if app.composeText.isEmpty {
-                    Text("Share something…")
+                    Text("Share something… tag with @")
                         .font(.system(size: 17))
                         .foregroundStyle(Msg.placeholder)
                         .allowsHitTesting(false)
+                        .lineLimit(1)
                 }
                 TextField("", text: $app.composeText, axis: .vertical)
                     .font(.system(size: 17))
@@ -402,6 +431,12 @@ struct ComposeChrome: View {
                     .lineLimit(1...5)
                     .focused($focused)
                     .tint(Msg.blue)
+                    // A half-typed handle is not a word: autocorrect would
+                    // "fix" it and the capitalised first letter would miss the
+                    // account, since handles are lowercase server-side.
+                    .autocorrectionDisabled(autocomplete.token != nil)
+                    .textInputAutocapitalization(
+                        autocomplete.token != nil ? .never : .sentences)
             }
             .frame(minHeight: 24)
 
@@ -409,6 +444,7 @@ struct ComposeChrome: View {
                 guard app.canSendCompose else { return }
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 focused = false
+                autocomplete.reset()
                 app.publishCompose()
             } label: {
                 Image(systemName: "arrow.up")

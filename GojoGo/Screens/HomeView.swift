@@ -623,8 +623,10 @@ struct InstagramPostCard: View {
     @ViewBuilder
     private var captionBlock: some View {
         if let text = live.text, !text.isEmpty {
+            // No handle ahead of the caption: the header two lines up already
+            // says whose post this is, and repeating it made every caption
+            // start with a word the reader had just read.
             MentionedText(text: text, mentions: live.mentions,
-                          prefixHandle: live.author,
                           font: .system(size: 15),
                           color: GGColor.textPrimary) { handle, profileID in
                 app.openTaggedProfile(handle: handle, profileID: profileID)

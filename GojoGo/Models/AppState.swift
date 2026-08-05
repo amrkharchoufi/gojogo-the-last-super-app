@@ -2890,6 +2890,10 @@ final class AppState: ObservableObject {
             mediaItems: slides,
             imageAspect: resolvedImage != nil || resolvedVideo != nil || !slides.isEmpty ? 1.25 : 1.0,
             text: body,
+            // Tags typed in the composer, resolved against handles this device
+            // already knows, so the optimistic copy carries them until the
+            // server's authoritative list arrives with the published post.
+            mentions: MentionParser.resolveLocally(in: body ?? ""),
             likeCount: 0,
             isHalfWidth: false
         )
