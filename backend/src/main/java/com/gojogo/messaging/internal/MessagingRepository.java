@@ -30,7 +30,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Single-table DynamoDB access for the messaging module. Key design:
@@ -584,6 +586,18 @@ class MessagingRepository {
     }
 
     /**
+     * Everything one user has hidden in one thread: the whole-thread watermark,
+     * and the individual messages they deleted after it.
+     *
+     * <p>One item, because both answer the same question on the same read path —
+     * "what is this user not served any more" — and the message list can afford
+     * exactly one point lookup to ask it.
+     */
+    record HiddenHistory(Instant clearedAt, Set<UUID> deletedMessageIds) {
+        static final HiddenHistory NONE = new HiddenHistory(null, Set.of());
+    }
+
+    /**
      * Records that this user cleared the thread's history at {@code at}: every
      * message stored at or before that instant is invisible to them from now on.
      *
@@ -593,6 +607,10 @@ class MessagingRepository {
      * that lived there would be wiped by the very event it has to outlive, and
      * the thread would come back carrying every message the user deleted. Kept
      * per-user: the other participant's copy is theirs and is untouched.
+     *
+     * <p>The whole item is replaced, which drops any per-message tombstones with
+     * it. That is the pruning: a message deleted before the watermark is already
+     * behind it, and naming it twice keeps a set growing that nothing reads.
      */
     void clearHistory(UUID userId, UUID convId, Instant at) {
         db().putItem(r -> r.tableName(table).item(Map.of(
@@ -602,12 +620,37 @@ class MessagingRepository {
             "clearedAt", s(at.toString()))));
     }
 
-    /** When this user last cleared the thread, if they ever did. */
-    Optional<Instant> historyClearedAt(UUID userId, UUID convId) {
+    /**
+     * Hides one message from one participant. The message itself is untouched —
+     * the other side keeps it, exactly as deleting a whole thread leaves theirs
+     * alone.
+     *
+     * <p>An {@code ADD} onto a string set: idempotent, so a client retrying a
+     * delete it never got an answer to costs nothing, and it creates the item
+     * when the thread was never cleared. {@code SET} on the plain attribute in
+     * the same expression keeps a row created this way readable like any other.
+     */
+    void deleteMessageForUser(UUID userId, UUID convId, UUID msgId) {
+        db().updateItem(r -> r.tableName(table)
+            .key(Map.of("pk", s("USER#" + userId), "sk", s("CLEARED#" + convId)))
+            .updateExpression("ADD deletedMsgIds :m SET convId = :c")
+            .expressionAttributeValues(Map.of(
+                ":m", AttributeValue.fromSs(List.of(msgId.toString())),
+                ":c", s(convId.toString()))));
+    }
+
+    /** What this user has hidden in this thread — never null. */
+    HiddenHistory hiddenHistory(UUID userId, UUID convId) {
         var item = db().getItem(r -> r.tableName(table).key(Map.of(
             "pk", s("USER#" + userId), "sk", s("CLEARED#" + convId)))).item();
-        if (item == null || item.isEmpty() || !item.containsKey("clearedAt")) return Optional.empty();
-        return Optional.of(Instant.parse(item.get("clearedAt").s()));
+        if (item == null || item.isEmpty()) return HiddenHistory.NONE;
+        Instant clearedAt = item.containsKey("clearedAt")
+            ? Instant.parse(item.get("clearedAt").s()) : null;
+        Set<UUID> deleted = item.containsKey("deletedMsgIds")
+            ? item.get("deletedMsgIds").ss().stream().map(UUID::fromString)
+                .collect(Collectors.toUnmodifiableSet())
+            : Set.of();
+        return new HiddenHistory(clearedAt, deleted);
     }
 
     /** Re-creates the membership row of a participant who left, so the thread is

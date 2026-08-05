@@ -623,6 +623,9 @@ extension AppState {
             if scrolledBack.isEmpty { worldOlderCursor[id] = page.nextBefore }
             let serverByID = Dictionary(
                 page.messages.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
+            // Messages deleted on this device that the backend hasn't confirmed
+            // hiding yet. Once it has, it stops serving them and this is empty.
+            let deleted = WorldPreference.deletedMessages(in: id)
             // Everything this device already has, in the order it already has
             // it — the archive, pages scrolled back to, system lines, and sends
             // still waiting for their echo. The page updates the ones it covers
@@ -631,6 +634,7 @@ extension AppState {
             var seen: Set<UUID> = []
             let known = scrolledBack + worldConversations[i].messages
             for local in known where local.kind != .timestamp {
+                guard !deleted.contains(local.id) else { continue }
                 guard seen.insert(local.id).inserted else { continue }
                 if let server = serverByID[local.id] {
                     next.append(merging(server: server, local: local))
@@ -640,8 +644,16 @@ extension AppState {
             }
             // Then whatever the page brought that this device has never seen.
             for server in page.messages where !seen.contains(server.id) {
+                guard !deleted.contains(server.id) else { continue }
                 seen.insert(server.id)
                 next.append(server)
+            }
+            // A page still carrying a message this device deleted is the tell
+            // that the delete never reached the backend — offline, or the app
+            // went away mid-request. Asking again is idempotent, and it is what
+            // stops a failed delete from being a bubble that returns forever.
+            for unconfirmed in page.messages.map(\.id) where deleted.contains(unconfirmed) {
+                confirmWorldMessageDeletion(unconfirmed, in: id)
             }
             // A message can arrive out of order — a push opened one before the
             // fetch that carries the ones behind it — so send order is restored
@@ -758,7 +770,10 @@ extension AppState {
             worldOlderCursor[id] = page.nextBefore
             guard let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
             let known = Set(worldConversations[i].messages.map(\.id))
-            let older = page.messages.filter { !known.contains($0.id) }
+            // Deletions the backend has confirmed are already filtered out of the
+            // page; this covers the ones it hasn't answered on yet.
+            let deleted = WorldPreference.deletedMessages(in: id)
+            let older = page.messages.filter { !known.contains($0.id) && !deleted.contains($0.id) }
             guard !older.isEmpty else { return }
             worldOlderPages[id] = older + (worldOlderPages[id] ?? [])
             worldConversations[i].messages.insert(contentsOf: older, at: 0)
@@ -1417,6 +1432,18 @@ extension AppState {
         }
         let mapped = MessagingStore.shared.map(dto)
         let mine = dto.senderId == SocialStore.shared.myProfileId
+        // A bubble deleted while its send was still in flight. This echo is the
+        // first time the id the server knows it by exists on this device, so it
+        // is also the only chance to carry the deletion onto that id — otherwise
+        // the message the user deleted arrives back a second later, wearing a
+        // different id and looking brand new.
+        if mine, let clientId = dto.clientId,
+           WorldPreference.deletedMessages(in: dto.conversationId).contains(clientId) {
+            WorldPreference.markMessageDeleted(mapped.id, in: dto.conversationId)
+            WorldPreference.clearMessageDeleted(clientId, in: dto.conversationId)
+            confirmWorldMessageDeletion(mapped.id, in: dto.conversationId)
+            return
+        }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.7)) {
             if mine, let clientId = dto.clientId,
                let j = worldConversations[i].messages.firstIndex(where: { $0.id == clientId }) {

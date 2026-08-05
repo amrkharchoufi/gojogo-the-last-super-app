@@ -109,6 +109,14 @@ class MessagingController {
         messaging.unreact(current.require(jwt).id(), convId, msgId);
     }
 
+    /** Deletes one message for the caller only — the other side keeps theirs. */
+    @DeleteMapping("/v1/conversations/{convId}/messages/{msgId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void deleteMessage(@AuthenticationPrincipal Jwt jwt,
+                       @PathVariable UUID convId, @PathVariable UUID msgId) {
+        messaging.deleteMessage(current.require(jwt).id(), convId, msgId);
+    }
+
     @PostMapping("/v1/conversations/{convId}/messages/{msgId}/poll/vote")
     MessageDto vote(@AuthenticationPrincipal Jwt jwt,
                     @PathVariable UUID convId, @PathVariable UUID msgId,

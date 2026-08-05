@@ -114,6 +114,13 @@ final class MessagingStore {
             body: ReactBody(tapback: tapback.rawValue))
     }
 
+    /// Deletes a message for this account only. The other participant keeps
+    /// their copy — this is the reader's own screen, not an unsend.
+    func deleteMessage(_ conversationId: UUID, message messageId: UUID) async throws {
+        try await APIClient.shared.delete(
+            "/v1/conversations/\(conversationId.uuidString.lowercased())/messages/\(messageId.uuidString.lowercased())")
+    }
+
     func unreact(_ conversationId: UUID, message messageId: UUID) async throws {
         try await APIClient.shared.delete(
             "/v1/conversations/\(conversationId.uuidString.lowercased())/messages/\(messageId.uuidString.lowercased())/reactions")
