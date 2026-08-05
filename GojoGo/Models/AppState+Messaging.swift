@@ -594,6 +594,18 @@ extension AppState {
     /// keeping optimistic bubbles and local media (recorded audio, staged photos)
     /// that the server copy can't carry.
     ///
+    /// **What's on screen is the history; the page only reconciles the tail of
+    /// it.** That is the whole shape of this method, and it used to be the other
+    /// way round: the newest page was rebuilt from scratch, and anything local
+    /// the page didn't mention was either dropped (their messages) or treated as
+    /// an un-echoed send and appended at the *end* (ours). On a thread longer
+    /// than one page — 30 messages — that scrambled it on every open: half the
+    /// conversation vanished and the user's own older bubbles piled up at the
+    /// bottom in the wrong order. Local-first history (E2EE Phase A) is exactly
+    /// what makes the old shape wrong: the archive holds messages the server
+    /// will never serve again, so "not in the newest page" says nothing at all
+    /// about a message.
+    ///
     /// `markRead` is false for the list's preview backfill: that fetch happens
     /// because the row needs a sentence under it, and the reader has not opened
     /// anything. Returns whether the page actually arrived, so a caller that
@@ -609,21 +621,32 @@ extension AppState {
             // older has been pulled — after that the loaded pages own everything
             // before it, and taking this cursor again would re-ask for them.
             if scrolledBack.isEmpty { worldOlderCursor[id] = page.nextBefore }
-            let localByID = Dictionary(
-                worldConversations[i].messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            let serverIds = Set(page.messages.map(\.id))
-            let reconciled = page.messages.map { server -> WorldMessage in
-                guard let local = localByID[server.id] else { return server }
-                return merging(server: server, local: local)
+            let serverByID = Dictionary(
+                page.messages.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
+            // Everything this device already has, in the order it already has
+            // it — the archive, pages scrolled back to, system lines, and sends
+            // still waiting for their echo. The page updates the ones it covers
+            // (reactions, receipts, an opened envelope) and touches nothing else.
+            var next: [WorldMessage] = []
+            var seen: Set<UUID> = []
+            let known = scrolledBack + worldConversations[i].messages
+            for local in known where local.kind != .timestamp {
+                guard seen.insert(local.id).inserted else { continue }
+                if let server = serverByID[local.id] {
+                    next.append(merging(server: server, local: local))
+                } else {
+                    next.append(local)
+                }
             }
-            // Optimistic sends the server hasn't echoed back yet stay at the end.
-            let pendingLocal = worldConversations[i].messages.filter {
-                !serverIds.contains($0.id) && $0.fromUser && $0.kind != .timestamp
+            // Then whatever the page brought that this device has never seen.
+            for server in page.messages where !seen.contains(server.id) {
+                seen.insert(server.id)
+                next.append(server)
             }
-            // History that was scrolled back to survives the refresh, minus
-            // anything the newest page now covers.
-            var next = scrolledBack.filter { !serverIds.contains($0.id) }
-                + reconciled + pendingLocal
+            // A message can arrive out of order — a push opened one before the
+            // fetch that carries the ones behind it — so send order is restored
+            // rather than assumed.
+            next = chronological(next)
             // Persisted "Read" high-water mark: the receipt survives a reload even
             // if we were offline when the peer read it (the live event only fires
             // for connected senders).
@@ -745,6 +768,26 @@ extension AppState {
             print("Older message load failed: \(error.localizedDescription)")
             #endif
         }
+    }
+
+    /// Puts a thread back in send order without disturbing what it can't date.
+    ///
+    /// Only messages the server has stamped carry a `sentAt`. A system line
+    /// ("Amr is using a new device") and a bubble that hasn't been echoed yet
+    /// have none, and sorting those to either end would move them away from the
+    /// message they belong next to — so they inherit the timestamp of whatever
+    /// they follow and stay exactly where they are. The index tiebreak is what
+    /// makes that hold: `sort(by:)` is not documented as stable, and equal keys
+    /// are the normal case here, not the edge one.
+    private func chronological(_ messages: [WorldMessage]) -> [WorldMessage] {
+        var carried = Date.distantPast
+        let keyed = messages.enumerated().map { (index, message) -> (WorldMessage, Date, Int) in
+            if let sentAt = message.sentAt { carried = sentAt }
+            return (message, carried, index)
+        }
+        return keyed
+            .sorted { $0.1 == $1.1 ? $0.2 < $1.2 : $0.1 < $1.1 }
+            .map { $0.0 }
     }
 
     /// Server copy wins on everything the server owns; on-device media the wire
