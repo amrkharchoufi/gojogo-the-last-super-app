@@ -37,6 +37,16 @@ struct WorldChatView: View {
     /// `app.worldDraft` stays the hand-off slot: it seeds this on appear (the
     /// "Message seller" prefill) and receives the text back only on send.
     @State private var draft: String = ""
+    /// Live height of the floating top chrome (header + whichever bars are up),
+    /// which is the headroom the messages have to leave for it. Seeded with the
+    /// header-only height so the first frame isn't laid out under the bar.
+    @State private var chromeHeight: CGFloat = 76
+    /// Same idea at the other end: the composer floats over the thread now, so
+    /// the messages have to leave its height clear underneath them. Seeded with
+    /// the bare field's height (42pt row + 6/8 padding).
+    /// Only the short-thread case reads this now — the safe-area inset reserves
+    /// the room by itself, and doesn't need to be told how much.
+    @State private var composerHeight: CGFloat = 56
 
     private var live: WorldConversation {
         app.worldConversations.first(where: { $0.id == conversationID })
@@ -68,22 +78,67 @@ struct WorldChatView: View {
         ZStack(alignment: .bottomLeading) {
             chatWallpaper
 
-            VStack(spacing: 0) {
-                messageScroll
-                composer
-            }
+            // The composer is the scroll view's own bottom safe-area inset, not
+            // a sibling floating over it. That is the difference between the
+            // scroll view *knowing* about the bar and merely being covered by
+            // it: SwiftUI reserves exactly the bar's height at the bottom of the
+            // content, keeps the bar above the keyboard, and grows the reserved
+            // space by the keyboard's height while it is up. Messages still pass
+            // behind the glass, because a safe-area inset changes where content
+            // comes to rest, not where it is allowed to draw.
+            //
+            // Hand-rolling this — a bottom-pinned sibling plus a measured
+            // padding on the stack — is what put the newest messages behind the
+            // keyboard: the bar rode up with the keyboard and the scroll view
+            // did not, so nothing about the content changed and the bottom
+            // anchor had no reason to re-pin.
+            messageScroll
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    composer
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(key: ChatComposerHeightKey.self,
+                                                       value: geo.size.height)
+                            }
+                        )
+                }
+                .onPreferenceChange(ChatComposerHeightKey.self) { height in
+                    guard height > 0, abs(height - composerHeight) > 0.5 else { return }
+                    withAnimation(.ggNav) { composerHeight = height }
+                }
 
             // Floats over the thread so messages scroll underneath the glass bar.
             VStack(spacing: 0) {
-                chatHeader
-                if let ctx = visibleListingContext {
-                    listingContextBar(ctx)
+                // Measured rather than assumed: the headroom the messages leave
+                // is whatever this stack actually occupies. It used to be two
+                // hardcoded numbers covering header-alone and header-plus-card,
+                // which silently left the add-to-contacts bar out of the budget
+                // — so that bar sat on top of the first messages. The banner is
+                // also two lines wide on narrow screens, which no constant can
+                // predict.
+                VStack(spacing: 0) {
+                    chatHeader
+                    if let ctx = visibleListingContext {
+                        listingContextBar(ctx)
+                    }
+                    addToContactsBar
                 }
-                addToContactsBar
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: ChatChromeHeightKey.self,
+                                               value: geo.size.height)
+                    }
+                )
                 Spacer(minLength: 0)
                     .allowsHitTesting(false)
             }
             .animation(.ggNav, value: visibleListingContext == nil)
+            .onPreferenceChange(ChatChromeHeightKey.self) { height in
+                guard height > 0, abs(height - chromeHeight) > 0.5 else { return }
+                // Moves with the bar that caused it, not a frame behind it.
+                withAnimation(.ggNav) { chromeHeight = height }
+            }
 
             reactionOverlay
             pollComposerOverlay
@@ -333,6 +388,11 @@ struct WorldChatView: View {
     /// Legibility for text sitting directly on a wallpaper. Zero radius without
     /// one, so the plain page is untouched.
     private var chromeShadowRadius: CGFloat { live.background.isDecorated ? 4 : 0 }
+
+    /// Whether the composer's recording state is painting the mic itself, in
+    /// which case it keeps a solid fill — a red "about to cancel" disc is a
+    /// status light, and glass would let the thread through it.
+    private var micIsStatusLit: Bool { hold.isRecording }
 
     // MARK: Tapback / action overlay
 
@@ -797,10 +857,39 @@ struct WorldChatView: View {
 
     // MARK: Messages
 
+    /// "GojoMessages · Encrypted" tag at the top of the thread's content —
+    /// inside the scroll view, so it rides with the messages instead of
+    /// hanging fixed under the header. Sits on the wallpaper like a receipt
+    /// does, so it borrows the same contrast treatment.
+    private var encryptionHeader: some View {
+        VStack(spacing: 3) {
+            Text("GojoMessages")
+                .font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 3) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Encrypted")
+                    .font(.system(size: 12, weight: .medium))
+            }
+        }
+        .foregroundStyle(live.background.isDecorated
+                         ? Color.white.opacity(0.85) : IMColor.secondary)
+        .shadow(color: .black.opacity(live.background.isDecorated ? 0.5 : 0),
+                radius: 2, y: 0.5)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 6)
+        .padding(.bottom, 14)
+    }
+
     private var messageScroll: some View {
         ScrollViewReader { proxy in
+            // The viewport height is a layout input here, not decoration: it is
+            // what lets a short thread stay top-aligned (below) while a long one
+            // is pinned to its newest message.
+            GeometryReader { viewport in
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 2) {
+                    encryptionHeader
                     // Reaching the top of a thread asks for the page before it.
                     // Inside the lazy stack on purpose: it only appears — and so
                     // only fires — once the reader has actually scrolled back
@@ -823,8 +912,17 @@ struct WorldChatView: View {
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.top, visibleListingContext == nil ? 88 : 150)
-                .padding(.bottom, 12)
+                .padding(.top, chromeHeight + 12)
+                // Breathing room over the composer. The composer's own height is
+                // reserved by the safe-area inset — this is just the gap.
+                .padding(.bottom, 10)
+                // Short threads stay where they always were — at the top, under
+                // the header — instead of being shoved down onto the composer by
+                // the bottom anchor. Long ones overflow this and the anchor takes
+                // over. The composer's height comes off the top because the inset
+                // has already claimed that much of the box.
+                .frame(minHeight: max(0, viewport.size.height - composerHeight),
+                       alignment: .top)
                 // No stack-level `.animation(value: count)` here: the sites that
                 // append a single bubble already wrap the mutation in
                 // `withAnimation`, which is what plays the pop-in transition. The
@@ -853,7 +951,18 @@ struct WorldChatView: View {
                     }
                 }
             }
+            // The keyboard arriving grows the composer's safe-area inset, which
+            // reserves the room but does not move what is already scrolled — so
+            // without this the newest messages stay where they are and the keys
+            // come up over them. Ride the system's own notification rather than
+            // `focused`: this one carries the final frame, so the scroll happens
+            // once the room actually exists.
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillShowNotification)) { _ in
+                scrollToEnd(proxy, animated: false)
+            }
             .onAppear { scrollToEnd(proxy, animated: false) }
+            }
         }
     }
 
@@ -874,15 +983,30 @@ struct WorldChatView: View {
         }
     }
 
+    /// Puts the newest message at the bottom of the thread.
+    ///
+    /// Goes more than once, deliberately. The stack is lazy, so the row being
+    /// scrolled to usually does not exist yet at the moment it is asked for —
+    /// when a thread is opened none of the tail does, and on a send the new
+    /// bubble is one render behind. `scrollTo` then resolves against estimated
+    /// heights and lands short: the thread opens in the middle of the
+    /// conversation, and a sent message parks itself behind the composer. Each
+    /// pass builds more of the tail and measures it for real; the later ones are
+    /// no-ops once the scroll has actually arrived.
     private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
         guard let last = live.messages.last else { return }
-        DispatchQueue.main.async {
-            if animated {
-                withAnimation(.ggNav) {
+
+        for delay in [0.0, 0.05, 0.15, 0.35, 0.7] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                // The thread may have moved on — a page prepended above, another
+                // conversation opened, a newer message arrived. Only chase the
+                // message we were asked for, and only while it is still the last.
+                guard live.messages.last?.id == last.id else { return }
+                if animated {
+                    withAnimation(.ggNav) { proxy.scrollTo(last.id, anchor: .bottom) }
+                } else {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
-            } else {
-                proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
     }
@@ -1342,7 +1466,14 @@ struct WorldChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background(chromeFill.ignoresSafeArea(edges: .bottom))
+        // No bar. Not an opaque one, not a frosted one — the thread runs to the
+        // bottom edge of the screen and the controls float on it as three pieces
+        // of glass. A strip of *any* fill is still a shelf, and the shelf is what
+        // made the last bubble look cut off; the glass is on the buttons, where
+        // it has something to be legible against.
+        //
+        // Invisible, and the reason Send no longer closes the keyboard.
+        .keepsKeyboardOnTap()
         .safeAreaPadding(.bottom, 0)
         .animation(.ggNav, value: app.worldReplyingTo)
         .animation(.ggNav, value: app.worldSendLaterLabel)
@@ -1459,7 +1590,9 @@ struct WorldChatView: View {
                         .font(.system(size: 21, weight: .regular))
                         .foregroundStyle(IMColor.label)
                         .frame(width: 42, height: 42)
-                        .background(Circle().fill(IMColor.chrome))
+                        // A capsule around a square is a circle, and it is the
+                        // app's own glass rather than a second recipe for it.
+                        .glassCapsule(interactive: true)
                         .rotationEffect(.degrees(app.showWorldAppsMenu ? 45 : 0))
                 }
                 .buttonStyle(.plain)
@@ -1501,6 +1634,12 @@ struct WorldChatView: View {
                                 // "" → text → "" inside one render pass, which
                                 // onChange coalesces into no change at all.
                                 draft = ""
+                                // No refocusing here. The keyboard never has to
+                                // leave: `keepsKeyboardOnTap()` on the composer
+                                // stops the window-wide tap-to-dismiss from
+                                // firing on this button. Taking first responder
+                                // *back* afterwards was the version that made it
+                                // drop and spring up again.
                             } label: {
                                 Image(systemName: "arrow.up")
                                     .font(.system(size: 17, weight: .bold))
@@ -1519,16 +1658,13 @@ struct WorldChatView: View {
                     .transition(.opacity)
                 }
             }
-            .background(
+            .glass(cornerRadius: composerCornerRadius, interactive: true)
+            // The recording ring is the one border that means something, so it
+            // goes back on over the glass's own hairline.
+            .overlay(
                 RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
-                    .fill(IMColor.inputFill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
-                            .strokeBorder(hold.isRecording
-                                          ? IMColor.blue.opacity(0.5)
-                                          : IMColor.label.opacity(0.09),
-                                          lineWidth: hold.isRecording ? 1 : 0.66)
-                    )
+                    .strokeBorder(IMColor.blue.opacity(hold.isRecording ? 0.5 : 0),
+                                  lineWidth: 1)
             )
             .animation(.ggSnappy, value: canSend)
             .animation(.ggNav, value: app.worldPendingAttachments.count)
@@ -1550,13 +1686,17 @@ struct WorldChatView: View {
                              ? Color.white
                              : IMColor.label.opacity(0.75))
             .frame(width: 42, height: 42)
-            .background(
-                Circle().fill(hold.isRecording
-                              ? (hold.cancelling
-                                 ? Color(red: 1, green: 0.27, blue: 0.23)
-                                 : IMColor.blue)
-                              : IMColor.chrome)
-            )
+            // Glass at rest; a solid disc the moment it is recording, because
+            // blue-means-live and red-means-releasing-cancels are status, and a
+            // status light you can see the conversation through isn't one.
+            .background {
+                if micIsStatusLit {
+                    Circle().fill(hold.cancelling
+                                  ? Color(red: 1, green: 0.27, blue: 0.23)
+                                  : IMColor.blue)
+                }
+            }
+            .glassCapsule(interactive: !micIsStatusLit)
             .scaleEffect(hold.isRecording ? 1.18 : 1)
             .overlay {
                 if hold.isRecording {
@@ -2114,6 +2254,25 @@ struct WorldOverlaySheet<Content: View>: View {
 }
 
 // MARK: - Bubble frame reporting (for the tapback overlay)
+
+/// Height of the chat's floating top chrome, reported up to the message scroll
+/// so it can reserve exactly that much headroom.
+struct ChatChromeHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Height of the floating composer, reported up to the message scroll so the
+/// newest bubble comes to rest above it instead of behind it.
+struct ChatComposerHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 
 struct BubbleFrameKey: PreferenceKey {
     static var defaultValue: [UUID: CGRect] = [:]

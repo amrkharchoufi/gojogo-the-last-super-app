@@ -82,6 +82,16 @@ final class WorldMessageArchive {
     private var pending: [UUID: [ArchivedMessage]] = [:]
     private var flushScheduled = false
     private let lock = NSLock()
+    /// Decoded threads, kept for the life of the process.
+    ///
+    /// The disk file is the durable copy; this is what makes re-reading it free.
+    /// Two callers made that matter. Re-opening a thread decoded its whole
+    /// history on the main actor before it could draw — which is the "the chat
+    /// loads all over again" every time you go back in. And the list's merge
+    /// calls `lastPreview` for every encrypted row it can't preview itself, so
+    /// the 30-second poll was reading and decoding *every* thread on the phone,
+    /// on the main actor, to re-derive sentences that hadn't changed.
+    private var memory: [UUID: [WorldMessage]] = [:]
 
     private init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
@@ -96,12 +106,31 @@ final class WorldMessageArchive {
 
     /// The archived thread, oldest first. Empty when nothing was ever stored —
     /// indistinguishable from a brand-new thread on purpose.
+    ///
+    /// Served from memory after the first read. A thread nobody has opened this
+    /// run still costs one disk read and one decode; every read after that is a
+    /// dictionary lookup.
     func load(_ conversationId: UUID) -> [WorldMessage] {
+        lock.lock()
+        if let cached = memory[conversationId] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
         let url = fileURL(conversationId)
         guard let data = try? Data(contentsOf: url),
               let archived = try? decoder.decode([ArchivedMessage].self, from: data)
-        else { return [] }
-        return archived.map(Self.toMessage)
+        else {
+            // Cache the miss too. Otherwise a thread with no file on disk — a
+            // brand-new one, or every row on a fresh install — pays a failed
+            // file read on every poll, forever.
+            lock.lock(); memory[conversationId] = []; lock.unlock()
+            return []
+        }
+        let messages = archived.map(Self.toMessage)
+        lock.lock(); memory[conversationId] = messages; lock.unlock()
+        return messages
     }
 
     /// The list-row preview this device can derive without the server —
@@ -122,6 +151,10 @@ final class WorldMessageArchive {
         let archived = messages.compactMap(Self.toArchived)
         lock.lock()
         pending[conversationId] = archived
+        // In memory it's the snapshot that was handed in, not a round trip
+        // through `ArchivedMessage` — the caller's copy is the newer one, and
+        // it carries the staged bytes the archived form deliberately drops.
+        memory[conversationId] = messages
         let schedule = !flushScheduled
         flushScheduled = true
         lock.unlock()
@@ -132,6 +165,7 @@ final class WorldMessageArchive {
     func remove(_ conversationId: UUID) {
         lock.lock()
         pending[conversationId] = nil
+        memory[conversationId] = nil
         lock.unlock()
         let url = fileURL(conversationId)
         io.async { try? FileManager.default.removeItem(at: url) }
@@ -141,6 +175,7 @@ final class WorldMessageArchive {
     func wipe() {
         lock.lock()
         pending = [:]
+        memory = [:]
         lock.unlock()
         let dir = directory
         io.async {
@@ -169,7 +204,9 @@ final class WorldMessageArchive {
     }
 
     func importFiles(_ files: [String: Data]) {
-        lock.lock(); pending = [:]; lock.unlock()
+        // The memory tier describes the files that were just replaced, so it is
+        // now wrong about every thread in the backup.
+        lock.lock(); pending = [:]; memory = [:]; lock.unlock()
         for (id, data) in files {
             try? data.write(to: directory.appendingPathComponent("\(id).json"),
                             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
