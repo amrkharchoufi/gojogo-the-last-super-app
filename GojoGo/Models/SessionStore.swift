@@ -212,6 +212,83 @@ enum VideoLibrary {
     }
 }
 
+// MARK: - Durable local voice posts
+
+/// The same trick as `VideoLibrary`, for the recordings behind voice posts: a
+/// fresh recording lives in the temporary directory, which is exactly where a
+/// published post must not keep its audio. Copied under Application Support and
+/// referenced as `gojoaudio:<name>`, it survives both a rebuild and the sandbox
+/// container renaming itself.
+enum AudioLibrary {
+    static let prefix = "gojoaudio:"
+
+    /// Extensions the app treats as audio. This is also how a voice post is told
+    /// apart from a video one on the way back down: the wire has one media slot
+    /// for a file, and the object key carries the recorder's `m4a`.
+    private static let audioExtensions: Set<String> = ["m4a", "mp3", "aac", "wav", "caf", "aiff"]
+
+    static var directory: URL {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = root.appendingPathComponent("GojoGo/Audio", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Is this ref a sound rather than a movie? Judged on the path extension, so
+    /// it answers the same for a local ref and for the uploaded URL.
+    static func isAudioRef(_ ref: String?) -> Bool {
+        guard let ref, !ref.isEmpty else { return false }
+        if ref.hasPrefix(prefix) { return true }
+        let path = URL(string: ref)?.path ?? ref
+        return audioExtensions.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// Copy a just-finished recording into durable storage. Returns a stable
+    /// `gojoaudio:` ref; a remote URL passes straight through.
+    static func persist(_ source: URL?) -> String? {
+        guard let source else { return nil }
+        guard source.isFileURL else { return source.absoluteString }
+
+        let ext = source.pathExtension.isEmpty ? "m4a" : source.pathExtension
+        let name = "voice-\(UUID().uuidString).\(ext)"
+        let dest = directory.appendingPathComponent(name)
+        do {
+            try FileManager.default.copyItem(at: source, to: dest)
+            return prefix + name
+        } catch {
+            return source.absoluteString
+        }
+    }
+
+    /// Resolve a stored ref to something `ChatAudioPlayer` can play — nil once
+    /// the local file is gone, so a dead ref draws nothing rather than a player
+    /// that never starts.
+    static func playableURL(_ stored: String?) -> URL? {
+        guard let stored, !stored.isEmpty else { return nil }
+        if stored.hasPrefix("http://") || stored.hasPrefix("https://") {
+            return URL(string: stored)
+        }
+        if stored.hasPrefix(prefix) {
+            let url = directory.appendingPathComponent(String(stored.dropFirst(prefix.count)))
+            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
+        // Absolute file path from an older build — playable while it survives.
+        if let url = URL(string: stored), url.isFileURL,
+           FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        return nil
+    }
+
+    /// Delete a durable recording. Only touches files this library owns.
+    static func remove(_ stored: String?) {
+        guard let stored, stored.hasPrefix(prefix) else { return }
+        let url = directory.appendingPathComponent(String(stored.dropFirst(prefix.count)))
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
 // MARK: - Snapshot
 
 struct CachedSession: Codable {
@@ -315,6 +392,8 @@ struct CachedPost: Codable {
     var imageURL: String?
     var imageData: Data?
     var videoURL: String?
+    /// Optional so a session written before voice posts still decodes.
+    var audioURL: String?
     var imageAspect: Double
     var text: String?
     var showFollow: Bool
@@ -598,6 +677,7 @@ extension CachedPost {
         avatarGradient = p.avatarGradient.map(SessionColor.hex)
         avatarURL = p.avatarURL; imageURL = p.imageURL; imageData = p.imageData
         videoURL = p.videoURL
+        audioURL = p.audioURL
         imageAspect = Double(p.imageAspect); text = p.text
         showFollow = p.showFollow; liked = p.liked; bookmarked = p.bookmarked
         following = p.following; likeCount = p.likeCount; commentCount = p.commentCount
@@ -617,6 +697,7 @@ extension CachedPost {
              avatarGradient: SessionColor.colors(from: avatarGradient),
              avatarURL: avatarURL, imageURL: imageURL, imageData: imageData,
              videoURL: videoURL,
+             audioURL: audioURL,
              mediaItems: slides,
              imageAspect: CGFloat(imageAspect), text: text,
              showFollow: showFollow, liked: liked, bookmarked: bookmarked,

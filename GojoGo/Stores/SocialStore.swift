@@ -159,9 +159,14 @@ final class SocialStore {
         register(dto.author)
         remotePostIds.insert(dto.id)
         authorIdByPost[dto.id] = dto.author.id
-        let slides = dto.mediaItems.map {
+        let items = dto.mediaItems.map {
             PostMediaItem(id: $0.id, imageURL: $0.imageUrl, videoURL: $0.videoUrl)
         }
+        // A voice post's m4a arrives in the file slot a video would use. Pulling
+        // it out here is what keeps it from being played as a video, counted as
+        // a carousel slide, or drawn as a black tile in the photo grid.
+        let audioURL = items.first(where: { AudioLibrary.isAudioRef($0.videoURL) })?.videoURL
+        let slides = items.filter { !AudioLibrary.isAudioRef($0.videoURL) }
         let handle = dto.author.handle ?? "user"
         // Yours, or one of your business profiles' — a Follow chip on your own
         // shop's post is the tell that the app forgot which identities are you.
@@ -174,6 +179,7 @@ final class SocialStore {
             avatarURL: dto.author.avatarUrl,
             imageURL: slides.first(where: { !$0.isVideo })?.imageURL,
             videoURL: slides.first(where: \.isVideo)?.videoURL,
+            audioURL: audioURL,
             mediaItems: slides,
             imageAspect: CGFloat(dto.imageAspect),
             text: dto.text,
