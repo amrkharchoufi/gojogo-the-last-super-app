@@ -67,7 +67,10 @@ class PartnerSubmissionGateTests {
         when(stakes.isStakeRequired(any())).thenReturn(false);
         service = new PartnerService(accounts, documents,
             mock(MerchantProvisioningApi.class), mock(DriverProvisioningApi.class),
-            mock(CourierProvisioningApi.class), mock(MediaDocumentApi.class),
+            mock(CourierProvisioningApi.class),
+            mock(com.gojogo.economy.SellerProvisioningApi.class),
+            mock(com.gojogo.services.ProviderProvisioningApi.class),
+            mock(MediaDocumentApi.class),
             mock(MediaApi.class), mock(ProfileApi.class), identity, vehicles, stakes,
             mock(ApplicationEventPublisher.class));
         account = new PartnerAccount(OWNER, PartnerKind.DRIVER, "Amina");

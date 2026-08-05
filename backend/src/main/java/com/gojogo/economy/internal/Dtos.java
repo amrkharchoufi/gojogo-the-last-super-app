@@ -15,6 +15,7 @@ record ListingResponse(UUID id, SellerSummary seller, String title, Long priceCe
                        String category, String condition, String locationLabel, String description,
                        List<String> imageUrls, boolean saved, boolean isOwn,
                        String status, int saveCount, int viewCount,
+                       String kind, String vinSerial,
                        OffsetDateTime createdAt, OffsetDateTime updatedAt) {
 }
 
@@ -33,7 +34,9 @@ record CreateListingRequest(@NotBlank @Size(max = 140) String title,
                             @Size(max = 40) String condition,
                             @Size(max = 80) String locationLabel,
                             @Size(max = 5000) String description,
-                            @Size(max = 10) List<@Size(max = 500) String> imageUrls) {
+                            @Size(max = 10) List<@Size(max = 500) String> imageUrls,
+                            @Size(max = 24) String kind,
+                            @Size(max = 80) String vinSerial) {
 }
 
 /** A full replacement of the seller's own listing — the edit form posts every

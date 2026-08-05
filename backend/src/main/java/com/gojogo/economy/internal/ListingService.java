@@ -62,6 +62,7 @@ class ListingService {
             blankTo(request.condition(), "Good"),
             blankTo(request.locationLabel(), "nearby"),
             request.description());
+        listing.transferDetails(ListingKind.parse(request.kind()), request.vinSerial());
         List<String> images = request.imageUrls() == null ? List.of() : request.imageUrls().stream()
             .filter(u -> u != null && !u.isBlank())
             .toList();
@@ -319,6 +320,8 @@ class ListingService {
                 l.getStatus().name(),
                 l.getSaveCount(),
                 l.getViewCount(),
+                l.getKind().name(),
+                l.getVinSerial(),
                 l.getCreatedAt(),
                 l.getUpdatedAt());
         }).toList();

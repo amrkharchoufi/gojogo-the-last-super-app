@@ -55,7 +55,12 @@ class SecurityConfig {
         "/v1/partner/admin/**",
         "/v1/moderation/admin/**",
         "/v1/travel/admin/**",
-        "/v1/delivery/admin/**");
+        "/v1/delivery/admin/**",
+        // The ownership-transfer document checkpoint (Phase 5 M2). Nested under
+        // the dev-cleanup prefix that is already permitAll above, but named
+        // here anyway: membership in this list is what OperatorSurfaceTests
+        // checks, and an accident of prefix overlap is not a policy.
+        "/v1/economy/admin/transfers/**");
 
     /**
      * Browser origins allowed to call this API. Empty — the default, and what

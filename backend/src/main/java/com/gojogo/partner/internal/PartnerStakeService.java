@@ -55,8 +55,8 @@ class PartnerStakeService {
             case COURIER -> Math.max(0, config.number("partner.stake.courier.minor", 3000));
             // A restaurant's commitment is a licence and a kitchen; there is
             // nothing a stake would add, and charging one would be a tax on
-            // applying.
-            case RESTAURANT -> 0;
+            // applying. The same holds for the Phase 5 business kinds.
+            case RESTAURANT, SELLER, SERVICE_PROVIDER -> 0;
         };
     }
 

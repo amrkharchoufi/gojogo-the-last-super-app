@@ -6,6 +6,10 @@ import com.gojogo.dispatch.CourierProvisioningApi;
 import com.gojogo.dispatch.DriverProvisioningApi;
 import com.gojogo.dispatch.VehicleRef;
 import com.gojogo.dispatch.WorkerRegistration;
+import com.gojogo.economy.SellerProvisioningApi;
+import com.gojogo.economy.SellerRegistration;
+import com.gojogo.services.ProviderProvisioningApi;
+import com.gojogo.services.ProviderRegistration;
 import com.gojogo.kyc.IdentityStatus;
 import com.gojogo.kyc.IdentityVerificationApi;
 import com.gojogo.media.MediaApi;
@@ -59,6 +63,8 @@ class PartnerService {
     private final MerchantProvisioningApi merchants;
     private final DriverProvisioningApi drivers;
     private final CourierProvisioningApi couriers;
+    private final SellerProvisioningApi sellers;
+    private final ProviderProvisioningApi providers;
     private final MediaDocumentApi privateMedia;
     private final MediaApi media;
     private final ProfileApi profiles;
@@ -69,7 +75,8 @@ class PartnerService {
 
     PartnerService(PartnerAccountRepository accounts, PartnerDocumentRepository documents,
                    MerchantProvisioningApi merchants, DriverProvisioningApi drivers,
-                   CourierProvisioningApi couriers, MediaDocumentApi privateMedia,
+                   CourierProvisioningApi couriers, SellerProvisioningApi sellers,
+                   ProviderProvisioningApi providers, MediaDocumentApi privateMedia,
                    MediaApi media, ProfileApi profiles, IdentityVerificationApi identity,
                    VehicleService vehicles, PartnerStakeService stakes,
                    ApplicationEventPublisher events) {
@@ -78,6 +85,8 @@ class PartnerService {
         this.merchants = merchants;
         this.drivers = drivers;
         this.couriers = couriers;
+        this.sellers = sellers;
+        this.providers = providers;
         this.privateMedia = privateMedia;
         this.media = media;
         this.profiles = profiles;
@@ -597,6 +606,10 @@ class PartnerService {
                 account.getLogoUrl(), account.getLatitude(), account.getLongitude()));
             case DRIVER -> drivers.provisionDriver(workerRegistration(account));
             case COURIER -> couriers.provisionCourier(workerRegistration(account));
+            case SELLER -> sellers.provisionSeller(new SellerRegistration(
+                account.getUserId(), account.getBusinessName(), account.getLogoUrl()));
+            case SERVICE_PROVIDER -> providers.provisionProvider(new ProviderRegistration(
+                account.getUserId(), account.getBusinessName(), account.getLogoUrl()));
         };
     }
 
@@ -629,7 +642,7 @@ class PartnerService {
         switch (account.getKind()) {
             case DRIVER -> drivers.setDriverVehicle(refId, active);
             case COURIER -> couriers.setCourierVehicle(refId, active);
-            case RESTAURANT -> { }
+            case RESTAURANT, SELLER, SERVICE_PROVIDER -> { }
         }
     }
 
@@ -642,6 +655,8 @@ class PartnerService {
             case RESTAURANT -> merchants.setMerchantSuspended(refId, suspended);
             case DRIVER -> drivers.setDriverSuspended(refId, suspended);
             case COURIER -> couriers.setCourierSuspended(refId, suspended);
+            case SELLER -> sellers.setSellerSuspended(refId, suspended);
+            case SERVICE_PROVIDER -> providers.setProviderSuspended(refId, suspended);
         }
     }
 

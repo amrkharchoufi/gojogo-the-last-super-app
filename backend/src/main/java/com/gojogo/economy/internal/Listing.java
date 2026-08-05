@@ -72,6 +72,15 @@ class Listing {
     @Column(name = "hidden_at")
     private OffsetDateTime hiddenAt;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "kind", nullable = false, length = 24)
+    private ListingKind kind = ListingKind.STANDARD;
+
+    /** The serial that names the thing on an ownership transfer — a VIN, an
+     *  instrument number. Null on a standard listing. */
+    @Column(name = "vin_serial")
+    private String vinSerial;
+
     @OneToMany(mappedBy = "listing", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("sortOrder")
     private List<ListingMedia> media = new ArrayList<>();
@@ -122,6 +131,21 @@ class Listing {
     void setStatus(ListingStatus status) {
         this.status = status;
         this.updatedAt = OffsetDateTime.now();
+    }
+
+    /** Stamps the ownership-transfer half (Phase 5 M2). A kind is set at
+     *  creation and never edited — a sofa cannot become a car. */
+    void transferDetails(ListingKind kind, String vinSerial) {
+        this.kind = kind;
+        this.vinSerial = vinSerial == null || vinSerial.isBlank() ? null : vinSerial.trim();
+    }
+
+    ListingKind getKind() {
+        return kind;
+    }
+
+    String getVinSerial() {
+        return vinSerial;
     }
 
     UUID getId() {

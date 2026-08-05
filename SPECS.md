@@ -207,7 +207,18 @@ Refinements the Phase 4 M1 build made to §3's courier trigger and to this secti
 
 ---
 
-## 6. Commerce gaps (`economy`)
+## 6. Commerce gaps (`economy`) — **BUILT 2026-08-05 (Phase 5 M1 + M2)**
+
+Refinements the build made to this spec (§11.4):
+
+- **One checkout is one seller.** "One cart per seller context" is read literally: a mixed basket is refused at the item that doesn't belong, by name, and the multi-seller parent/sub-order reuse is deliberately not built until somebody wants it.
+- **Settlement waits for the buyer and no longer than CONFIG `economy.order.autocomplete.days` (14).** The buyer's "it arrived" moves the money; the sweep presumes receipt after two weeks so escrow cannot strand behind a button nobody taps. Four order words — `PLACED → SHIPPED → COMPLETED | CANCELLED` — because what happens between posted and arrived belongs to a carrier this system cannot observe.
+- **A variant missing from an edit is retired, never deleted** — order lines reference variant ids forever. Commission is on the discounted goods value only, never shipping or tax. `FREE_SHIPPING` on a basket that already ships free is refused by name (delivery M4's rule).
+- **One review per buyer per product** — a second purchase edits the review rather than stacking a duplicate; the order id on the row is provenance, not part of the key. The seller's one reply is a column.
+- **`SUBSCRIPTION` entitlements are deliberately absent**: a Stripe subscription mirrored to an expiry needs a Stripe-subscription path that does not exist, and an enum constant nothing can issue is a word that lies. `DOWNLOAD` and `LICENSE` are built; keys are generated (`GOJO-XXXX-…`), not pooled. A digital order settles and grants at checkout — "granted at capture" literally — and a mixed digital/physical basket is two baskets.
+- **Ownership transfer: the escrow comes before the document check**, so a reviewer's time is only spent on deals that are real; the check is a named human act (`docs_confirmed_by`) on `/v1/economy/admin/transfers/**` under `PlatformAdminApi`. One listing holds at most one live escrow (a partial unique index) while any number of buyers sit at INQUIRY. Above the CONFIG cap (`economy.transfer.wallet.cap.cents`, 1,000,000) the hold is refused and the row flagged for manual settlement — not half-held. Documents attach to the *transfer*, not the listing. The buyer's single "received" stamps `TRANSFERRED` and `RELEASED` in one act.
+
+### Original spec
 
 - **Product model (merchant catalogs, Phase 5 M1):** `economy.product` (seller merchant, name, description, category, brand, media gallery, specs JSON) + `product_variant` (SKU, option values e.g. size/color, price, stock) + per-variant inventory. **Inventory:** decrement inside the order transaction with a conditional `stock >= qty` update (oversell-proof); restore on cancel/refund. C2C `listing` stays as-is — a listing is not a product.
 - **Cart:** stays client-side (the delivery decision, kept): checkout posts item ids + quantities; server prices everything. One cart per seller context; multi-seller product checkout = the multi-merchant parent/sub-order pattern (§5) reused.
@@ -219,7 +230,17 @@ Refinements the Phase 4 M1 build made to §3's courier trigger and to this secti
 
 ---
 
-## 7. Services booking (`services`, Phase 5 M3)
+## 7. Services booking (`services`, Phase 5 M3) — **BUILT 2026-08-05**
+
+Refinements the build made to this spec (§11.4):
+
+- **Accepting a quote pays and confirms in one act.** This section's "provider quotes → customer accepts → hold" implied a fourth step (a provider confirm after the hold); the provider already said yes by naming the number, so the acceptance is the confirmation. A priced service still holds at request and waits for the provider's confirm.
+- **The provider has a timezone column from day one** — the delivery opening-hours lesson (a wall-clock rule without a zone is a lie twice a year). The availability template computes in it; slots leave the API as instants.
+- **A no-show settles immediately at 100%** rather than waiting the capture window: there is no work to argue about, only an empty chair that was paid for. Completed work settles after CONFIG `services.booking.capture.hours` (48).
+- **The completion dispute is not built** — the capture window is support's manual lever until §5's dispute shape reaches this vertical. Also not built: the messaging-derived response-time stat, and provider-cancel metrics ("counts against provider metrics" has no metric to land on yet).
+- CONFIG keys as built: `services.booking.confirm.hours` 24, `services.booking.capture.hours` 48, `services.booking.cancel.free.hours` 24, `services.booking.cancel.fee.bps` 5000, `services.booking.buffer.minutes` 15, `services.booking.horizon.days` 60.
+
+### Original spec
 
 - **Provider profile:** provisioned via `partner` (`kind=SERVICE_PROVIDER` → `services.ProviderProvisioningApi`); qualifications/certifications docs private, portfolio public, service areas (regions), languages, response-time stat (computed from messaging first-reply times).
 - **Catalog:** `service` (name, description, category, duration, price | `PRICE_ON_QUOTE`, location kind `AT_PROVIDER | AT_CUSTOMER | REMOTE`, requirements/preparation text, cancellation policy ref).
@@ -316,7 +337,15 @@ Required before social scale (and App Store UGC guideline 1.2: report + block + 
 
 ---
 
-## 13. Search & discovery contract (Phase 5 M4)
+## 13. Search & discovery contract (Phase 5 M4) — **BUILT 2026-08-05, on Postgres rather than OpenSearch**
+
+Refinements the build made to this spec (§11.4):
+
+- **The store is a Postgres tsvector table, not an OpenSearch domain** — none exists in the deployed infra, and a search that works unconfigured beats one waiting on a cluster (the KYC posture). The `search` module's API hides the store; its repository is the seam an OpenSearch client replaces when that infra decision is taken.
+- **The seam runs vertical → platform on both sides**, the plugin shape's fifth instance: a vertical listens to *its own* events and calls `SearchIndexApi.reindex`, and search calls back into that kind's `SearchableContent` to render the document fresh — so edits, hides and deletions never go stale in the index, and search imports nothing from any vertical (module graph stays acyclic).
+- **Kinds built: POST, LISTING, PRODUCT, SERVICE.** Merchants, menu items, videos and business profiles wait on their modules publishing an upsert signal — each is an event plus a `SearchableContent` bean when wanted. No geo facets or distance decay yet (only businesses have geo, and they aren't indexed); no personalization. Trending = popularity order per kind, cached for CONFIG `search.trending.refresh.minutes` (15).
+
+### Original spec
 
 - **Index sources (consumers for events already publishing into the void):** `PostCreated`, `ListingCreated` + to-add `ProductUpserted`, `MerchantUpserted`, `VideoPublished`, `ServiceUpserted`, `BusinessProfileUpserted`. Each module owns its document shape; the `search` module owns only the pipeline + query API (index-per-domain, one alias).
 - **Query surface:** `GET /v1/search?q=&kind=&near=&filters=` — kinds: people, businesses, products, menu items, services, videos, posts. Location filter from business geo. Ranking: text relevance × popularity (engagement counts) × distance decay for local kinds; personalization (follow graph boost) later.

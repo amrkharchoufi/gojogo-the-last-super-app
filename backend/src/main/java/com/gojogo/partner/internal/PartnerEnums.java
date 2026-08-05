@@ -15,17 +15,22 @@ enum PartnerKind {
     /** Ride-hailing, provisioned into {@code dispatch}'s driver registry (Phase 3 M1). */
     DRIVER,
     /** Delivery courier — the same registry, the other kind. */
-    COURIER;
+    COURIER,
+    /** A merchant seller with a product catalog, provisioned into {@code economy}
+     *  (Phase 5 M1). */
+    SELLER,
+    /** A bookable service provider, provisioned into {@code services} (Phase 5 M3). */
+    SERVICE_PROVIDER;
 
     /**
      * Whether an approval has somewhere to put this partner yet.
      *
-     * <p>All three do, as of Phase 3 M1: {@code DRIVER} and {@code COURIER} spent
-     * a milestone and a half refusing here because {@code dispatch} did not
-     * exist. The method stays because the next two kinds — a seller and a service
-     * provider, Phase 5 — will need it again, and an approval that provisions
-     * nothing is worse than a refusal: the applicant reads "approved" and finds
-     * no way to work.
+     * <p>All five do, as of Phase 5: {@code DRIVER} and {@code COURIER} spent a
+     * milestone and a half refusing here because {@code dispatch} did not exist,
+     * and the two Phase 5 kinds landed with their verticals. The method stays
+     * for whatever kind comes next, because an approval that provisions nothing
+     * is worse than a refusal: the applicant reads "approved" and finds no way
+     * to work.
      */
     boolean isProvisionable() {
         return true;
@@ -41,6 +46,13 @@ enum PartnerKind {
             case RESTAURANT -> EnumSet.of(DocumentKind.ID_FRONT, DocumentKind.BUSINESS_LICENSE);
             case DRIVER -> EnumSet.of(DocumentKind.ID_FRONT, DocumentKind.SELFIE);
             case COURIER -> EnumSet.of(DocumentKind.ID_FRONT, DocumentKind.SELFIE);
+            // Both Phase 5 kinds are businesses: the licence is the claim a
+            // vendor can't check. Professional qualifications live on the
+            // provider's own profile in `services`, where customers read them —
+            // a reviewer gating trade on them would be pretending to be a
+            // licensing board.
+            case SELLER -> EnumSet.of(DocumentKind.ID_FRONT, DocumentKind.BUSINESS_LICENSE);
+            case SERVICE_PROVIDER -> EnumSet.of(DocumentKind.ID_FRONT, DocumentKind.BUSINESS_LICENSE);
         };
     }
 
