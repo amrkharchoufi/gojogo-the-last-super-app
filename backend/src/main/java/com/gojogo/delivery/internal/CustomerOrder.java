@@ -125,6 +125,24 @@ class CustomerOrder {
     @Column(name = "note", nullable = false)
     private String note = "";
 
+    /**
+     * Who is actually receiving it, when that is not the person paying
+     * (Phase 4 M6, SPECS §5). Blank means the booker is the recipient, which is
+     * every order before this milestone and most orders after it.
+     *
+     * <p>The name is what the courier's screen says and what the door is
+     * answered by. The phone is <b>never</b> given to the courier and never
+     * rendered on a share link — it exists so the person who placed the order
+     * has somewhere to have put it, and so a future SMS can reach a recipient
+     * who has no account. Disclosing it would hand a stranger's number to
+     * whoever happened to accept the job.
+     */
+    @Column(name = "recipient_name", nullable = false)
+    private String recipientName = "";
+
+    @Column(name = "recipient_phone", nullable = false)
+    private String recipientPhone = "";
+
     @Column(name = "courier_name")
     private String courierName;
 
@@ -212,6 +230,20 @@ class CustomerOrder {
 
     @Column(name = "rating")
     private Integer rating;
+
+    /**
+     * What the customer thought of whoever brought it (Phase 4 M6) — kept apart
+     * from {@link #rating}, which is about the food.
+     *
+     * <p>Deferred for five milestones on exactly that reasoning: M1 refused to
+     * pass the order rating to {@code dispatch.complete} because a two-star for
+     * a cold burger is a judgement on a kitchen, and landing it on the record of
+     * whoever cycled it across town would make a courier's score a function of
+     * restaurants they do not choose. The answer was never "couriers should not
+     * be rated" — it was that this needs its own question, and this is it.
+     */
+    @Column(name = "courier_rating_given")
+    private Integer courierRatingGiven;
 
     @Column(name = "placed_at", nullable = false)
     private OffsetDateTime placedAt;
@@ -310,6 +342,14 @@ class CustomerOrder {
     /** A change landed. Only ever called while {@link #queuedAt} is null. */
     void revised() {
         this.revision++;
+    }
+
+    /** Somebody else is at the door (Phase 4 M6). Set at checkout and by a
+     *  change, and cleared by passing blanks — a gift that turned back into
+     *  dinner for yourself. */
+    void forRecipient(String name, String phone) {
+        this.recipientName = name == null ? "" : name.trim();
+        this.recipientPhone = phone == null ? "" : phone.trim();
     }
 
     /** The note, rewritten by a change (Phase 4 M5). */
@@ -477,6 +517,10 @@ class CustomerOrder {
         this.rating = stars;
     }
 
+    void rateCourier(int stars) {
+        this.courierRatingGiven = stars;
+    }
+
     UUID getId() {
         return id;
     }
@@ -571,6 +615,26 @@ class CustomerOrder {
         return note;
     }
 
+    String getRecipientName() {
+        return recipientName;
+    }
+
+    String getRecipientPhone() {
+        return recipientPhone;
+    }
+
+    /** Somebody other than the payer is at the door. */
+    boolean isForSomebodyElse() {
+        return !recipientName.isBlank();
+    }
+
+    /** Whose name goes on the courier's screen and on a share link — the
+     *  recipient when there is one, and otherwise nobody's, because the courier
+     *  is finding a door rather than a person. */
+    String doorName() {
+        return recipientName;
+    }
+
     String getCourierName() {
         return courierName;
     }
@@ -635,8 +699,19 @@ class CustomerOrder {
         return rating;
     }
 
+    Integer getCourierRatingGiven() {
+        return courierRatingGiven;
+    }
+
     OffsetDateTime getPlacedAt() {
         return placedAt;
+    }
+
+    /** When it reached its terminal state — delivered or cancelled. What the
+     *  dispute window is counted from (Phase 4 M6), which has to be delivery
+     *  rather than placement now that the two can be days apart. */
+    OffsetDateTime getClosedAt() {
+        return closedAt;
     }
 
     OffsetDateTime getScheduledFor() {

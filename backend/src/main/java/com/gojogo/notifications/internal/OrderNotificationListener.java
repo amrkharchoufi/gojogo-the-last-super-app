@@ -80,6 +80,21 @@ class OrderNotificationListener {
                 title = merchant + " couldn't take part of your order";
                 body = "That part went straight back to your wallet — the rest is still coming.";
             }
+            // The third push-only word, and not a seventh status for the same
+            // reason as the two above: the order has not moved — it was
+            // delivered days ago, and somebody has answered the problem the
+            // customer reported (Phase 4 M6).
+            //
+            // Deliberately no amount. Putting the refund in the banner would
+            // mean carrying money in `etaMinutes`, and a field that means
+            // minutes everywhere and cents in one arm is a bug waiting for
+            // whoever renders it next. The number is on the order screen, which
+            // is where this push is trying to get them anyway — and a rejection
+            // has no number at all, so one sentence covers both.
+            case "DISPUTE_RESOLVED" -> {
+                title = "We've looked at your report";
+                body = "Open your order to see what we found.";
+            }
             default -> {
                 return;
             }

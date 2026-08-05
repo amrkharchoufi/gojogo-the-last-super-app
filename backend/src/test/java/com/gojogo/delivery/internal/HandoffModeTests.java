@@ -55,7 +55,8 @@ class HandoffModeTests {
             mock(AddressRepository.class), mock(ApplicationEventPublisher.class), payments,
             mock(PromotionService.class), mock(MerchantStorefrontService.class),
             mock(OrderFulfilmentService.class), mock(DispatchApi.class),
-            new DeliveryPolicy(new StubConfig()), privateMedia, 99);
+            new DeliveryPolicy(new StubConfig()), privateMedia,
+            mock(com.gojogo.share.ShareApi.class), 99);
 
         Merchant merchant = new Merchant(UUID.randomUUID(), "Forno Nero", "Pizza", null,
             33.57, -7.58);

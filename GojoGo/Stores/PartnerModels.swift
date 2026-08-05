@@ -68,9 +68,16 @@ struct MyMerchantDTO: Decodable, Equatable {
     let pickupEnabled: Bool?
     let pickupPrepMinutes: Int?
     let pickupAddress: String?
+    /// Opening hours (Phase 4 M6). Blank is always open, which is what every
+    /// restaurant was before this. `openNow` is the server's own reading of the
+    /// schedule in the restaurant's timezone.
+    let openingHours: String?
+    let timezone: String?
+    let openNow: Bool?
     let menu: [MyMenuSectionDTO]
 
     var offersPickup: Bool { pickupEnabled == true }
+    var isOpenNow: Bool { openNow ?? true }
 }
 
 struct UpdateMerchantBody: Encodable {
@@ -90,6 +97,10 @@ struct UpdateMerchantBody: Encodable {
     var pickupEnabled: Bool?
     var pickupPrepMinutes: Int?
     var pickupAddress: String?
+    /// The weekly schedule and the restaurant's timezone (Phase 4 M6). Nil is
+    /// "leave it as it is", for the same reason as the pickup fields above.
+    var openingHours: String?
+    var timezone: String?
 }
 
 struct MenuSectionBody: Encodable {
@@ -183,6 +194,10 @@ struct MerchantStorefront: Equatable {
     var offersPickup: Bool
     var pickupPrepMinutes: Int?
     var pickupAddress: String
+    /// The weekly schedule in its stored form, and whether it says they are
+    /// open right now (Phase 4 M6).
+    var openingHours: String
+    var openNow: Bool
     var menu: [MerchantMenuSection]
 
     var dishCount: Int { menu.reduce(0) { $0 + $1.items.count } }

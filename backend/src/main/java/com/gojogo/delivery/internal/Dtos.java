@@ -39,7 +39,15 @@ record MerchantDto(UUID id, String name, String cuisine, double rating, int revi
                     * when they have not set one. A client that predates these
                     * fields simply never offers collection, which is the right
                     * behaviour for a build that could not price it. */
-                   boolean pickupEnabled, int pickupEtaMinutes, String pickupAddress) {
+                   boolean pickupEnabled, int pickupEtaMinutes, String pickupAddress,
+                   /* Opening hours (Phase 4 M6). {@code openNow} is the server's
+                    * own answer, read in the restaurant's timezone — the app
+                    * must not re-derive it, because it does not know their zone
+                    * and a card that says "open" over a kitchen that will refuse
+                    * the checkout is worse than one that says "closed".
+                    * {@code openingHours} is the raw schedule, for a page that
+                    * wants to draw the week. */
+                   boolean openNow, String openingHours) {
 }
 
 // MARK: The owner's view of their own restaurant (MerchantManagementService)
@@ -68,6 +76,11 @@ record MyMerchantDto(UUID id, String name, String cuisine, String imageUrl, Stri
                       * null for "the same as delivery" — the owner's editor
                       * shows a placeholder rather than a number nobody chose. */
                      boolean pickupEnabled, Integer pickupPrepMinutes, String pickupAddress,
+                     /* Their own schedule and zone (Phase 4 M6). Blank hours is
+                      * always-open, which is what every restaurant was before
+                      * this — an owner who never opens the editor keeps trading
+                      * exactly as they did. */
+                     String openingHours, String timezone, boolean openNow,
                      List<MyMenuSectionDto> menu) {
 }
 
@@ -86,7 +99,13 @@ record UpdateMerchantRequest(@NotBlank @Size(max = 120) String name,
                              @Size(max = 8) List<@Size(max = 40) String> tags,
                              Boolean pickupEnabled,
                              @Min(1) @Max(1440) Integer pickupPrepMinutes,
-                             @Size(max = 200) String pickupAddress) {
+                             @Size(max = 200) String pickupAddress,
+                             /* Absent means unchanged, like the pickup fields
+                              * above and for the same reason: a save from a
+                              * client that predates Phase 4 M6 must not wipe a
+                              * schedule somebody set. */
+                             @Size(max = 400) String openingHours,
+                             @Size(max = 64) String timezone) {
 }
 
 record MenuSectionRequest(@NotBlank @Size(max = 80) String name) {
@@ -222,7 +241,19 @@ record OrderDto(UUID id, OrderMerchantDto merchant, String status, int etaMinute
                 int discountCents, int tipCents, String promotionCode,
                 String paymentStatus,
                 String currency, String addressLabel, OrderAddressDto address, String note,
+                /* Who is at the door, when that is not the person paying
+                 * (Phase 4 M6). Blank on the overwhelming majority of orders.
+                 * The phone is returned here — to the customer who typed it,
+                 * on their own order — and nowhere else: not on the courier's
+                 * job, not on a share link. */
+                String recipientName, String recipientPhone,
                 Integer rating,
+                /* What they thought of the courier (Phase 4 M6), or null while
+                 * they haven't said. Beside the order rating rather than
+                 * replacing it, because the two are answers to different
+                 * questions — that separation is why this took five milestones
+                 * rather than being folded into `rating` on day one. */
+                Integer courierRating,
                 String handoffMode, String deliveryPin, String proofPhotoUrl,
                 UUID conversationId,
                 /* Scheduling (Phase 4 M5). {@code scheduledFor} is null on an
@@ -366,6 +397,12 @@ record CourierJobDto(UUID id, String status, String merchantName,
                      Double merchantLatitude, Double merchantLongitude,
                      String addressLabel, String addressLine, String addressNote,
                      Double addressLatitude, Double addressLongitude,
+                     /* Who is at the door, when the person paying is not
+                      * (Phase 4 M6). Blank otherwise. The name and nothing
+                      * else — the recipient's phone number is on the order and
+                      * never leaves it, because a courier needs to know who to
+                      * hand a bag to, not how to reach a stranger later. */
+                     String recipientName,
                      int itemCount, String note, String handoffMode,
                      long payMinor, String currency, UUID conversationId,
                      /* One per merchant since Phase 4 M3, in collection order.
@@ -568,6 +605,62 @@ record PayoutDto(UUID id, long amountMinor, String currency, String status,
 record ActiveOrderResponse(OrderDto order, List<OrderDto> orders, List<OrderDto> scheduled) {
 }
 
+// MARK: Disputes (Phase 4 M6, SPECS §5)
+
+/**
+ * A reported problem, as the customer who reported it sees it.
+ *
+ * <p>Carries no photo URLs and no payer: the pictures are theirs and they know
+ * what they sent, and which of three parties funded a refund is an operator's
+ * business rather than an invitation to argue with a restaurant about it.
+ */
+record DisputeDto(UUID id, UUID subOrderId, String reason, String note, String state,
+                  int claimedCents, int refundCents, String resolutionNote,
+                  int photoCount, List<DisputedItemDto> items,
+                  OffsetDateTime createdAt, OffsetDateTime resolvedAt) {
+}
+
+record DisputedItemDto(UUID menuItemId, String name, int unitPriceCents, int qty) {
+}
+
+/**
+ * The same dispute on the operator's screen, with the thing they cannot
+ * otherwise know: what each of the three parties was actually paid for this
+ * order, and what has already been refunded on it.
+ *
+ * <p>That is the whole point of this DTO. Deciding a refund means knowing
+ * whether the restaurant can even afford it, and an operator doing that
+ * arithmetic off a receipt in another tab is an operator who will eventually get
+ * it wrong in somebody's favour.
+ */
+record AdminDisputeDto(DisputeDto dispute, UUID orderId, UUID userId, String merchantName,
+                       int orderTotalCents, String currency, String fulfilmentKind,
+                       String suggestedPayer,
+                       long merchantReceivedMinor, long courierReceivedMinor,
+                       long platformReceivedMinor, int alreadyRefundedCents,
+                       List<String> photoUrls, String proofPhotoUrl,
+                       String resolvedBy, OffsetDateTime deliveredAt) {
+}
+
+/** What went wrong. {@code items} is ids and quantities only — never amounts,
+ *  the same rule checkout follows, because a claim the client priced is a claim
+ *  the client can inflate. */
+record FileDisputeRequest(UUID subOrderId,
+                          @NotBlank @Size(max = 32) String reason,
+                          @Size(max = 600) String note,
+                          @Size(max = 40) List<@Valid DisputedItemRequest> items) {
+}
+
+record DisputedItemRequest(@NotNull UUID menuItemId, @Min(1) @Max(50) int qty) {
+}
+
+/** An operator's decision. {@code payer} is required on a refund and is the
+ *  decision itself — the reason only ever suggests one. */
+record ResolveDisputeRequest(@Min(0) @Max(10_000_000) int refundCents,
+                             @Size(max = 16) String payer,
+                             @Size(max = 600) String note) {
+}
+
 record OrderLineRequest(@NotNull UUID menuItemId, @Min(1) @Max(50) int qty) {
 }
 
@@ -599,6 +692,13 @@ record PlaceOrderRequest(UUID merchantId,
                           * refusal somebody can act on, unlike being silently
                           * given the other kind. */
                          @Size(max = 16) String fulfilmentKind,
+                         /* Ordering for somebody else (Phase 4 M6). A name is
+                          * what makes it one — the phone is optional and is
+                          * never disclosed to the courier, existing so that a
+                          * recipient with no account has somewhere to be
+                          * reached from later. Both ignored on a collection. */
+                         @Size(max = 80) String recipientName,
+                         @Size(max = 32) String recipientPhone,
                          /* When the customer wants it (Phase 4 M5), or null
                           * for "now" — which is what every client that
                           * predates this field sends, and what the great
@@ -611,4 +711,14 @@ record PlaceOrderRequest(UUID merchantId,
 }
 
 record RateOrderRequest(@Min(1) @Max(5) int rating) {
+}
+
+/**
+ * A public link to follow a delivery (Phase 4 M6).
+ *
+ * @param message wording the app can hand straight to the share sheet, so the
+ *                sentence somebody sends is written here rather than in three
+ *                clients that will each phrase it differently
+ */
+record ShareOrderDto(String url, OffsetDateTime expiresAt, int viewCount, String message) {
 }

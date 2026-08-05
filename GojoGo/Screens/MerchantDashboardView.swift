@@ -909,6 +909,14 @@ private struct MerchantStorefrontForm: View {
     @State private var pickupEnabled = false
     @State private var pickupPrep = ""
     @State private var pickupAddress = ""
+    /// Opening hours (Phase 4 M6). Per-day, because that is how a person thinks
+    /// about them; the wire form is one compact string and this is what builds
+    /// it. Empty everywhere means always open, which is what every restaurant
+    /// was before this — an owner who never opens this section keeps trading
+    /// exactly as they did.
+    @State private var openDays: Set<Int> = []
+    @State private var openFrom: [Int: String] = [:]
+    @State private var openTo: [Int: String] = [:]
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -925,6 +933,8 @@ private struct MerchantStorefrontForm: View {
                 field("Name", text: $name, placeholder: "Dar Zellij")
                 field("Cuisine", text: $cuisine, placeholder: "Moroccan · Tagine")
                 field("Promo badge", text: $promo, placeholder: "20% off — optional")
+
+                hoursSection
 
                 HStack(spacing: 10) {
                     field("Prep + delivery (min)", text: $eta, placeholder: "25", keyboard: .numberPad)
@@ -1055,6 +1065,7 @@ private struct MerchantStorefrontForm: View {
         pickupEnabled = storefront.offersPickup
         pickupPrep = storefront.pickupPrepMinutes.map(String.init) ?? ""
         pickupAddress = storefront.pickupAddress
+        loadHours(storefront.openingHours)
         loaded = true
     }
 
@@ -1075,7 +1086,12 @@ private struct MerchantStorefrontForm: View {
             // server reads as "unchanged" — so it is sent as the current value
             // rather than as nothing, or clearing the field would never take.
             pickupPrepMinutes: Int(pickupPrep.trimmed) ?? storefront.pickupPrepMinutes,
-            pickupAddress: pickupAddress.trimmed))
+            pickupAddress: pickupAddress.trimmed,
+            openingHours: hoursOnTheWire(),
+            // Their own zone, taken from the phone. A restaurant's hours are
+            // read in it server-side, and the device standing in the restaurant
+            // is the best answer anybody has without asking.
+            timezone: TimeZone.current.identifier))
     }
 
     private func splitList(_ text: String) -> [String] {
@@ -1263,6 +1279,119 @@ private struct MerchantDishForm: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .glass(cornerRadius: 14, tint: GGColor.ink(0.05))
+        }
+    }
+}
+
+
+// MARK: - Opening hours (Phase 4 M6)
+
+private extension MerchantStorefrontForm {
+
+    static let dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    static let wireDays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+    /// A day per row, because that is how somebody thinks about opening hours —
+    /// and off by default for every day, which reads as "always open" and is
+    /// exactly what the server does with an empty schedule.
+    ///
+    /// A close at or before its open runs past midnight, which the hint says
+    /// out loud: a kitchen open until 2am is ordinary, and an owner who typed
+    /// 18:00–02:00 should not have to wonder whether it worked.
+    var hoursSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Opening hours")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+            Text(openDays.isEmpty
+                 ? "Open whenever you're switched on. Set days below if you'd rather."
+                 : "Customers can't order outside these, and a booking for a closed "
+                   + "hour is refunded before it reaches you.")
+                .font(.system(size: 11))
+                .foregroundStyle(GGColor.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ForEach(0..<7, id: \.self) { day in
+                HStack(spacing: 10) {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        if openDays.contains(day) {
+                            openDays.remove(day)
+                        } else {
+                            openDays.insert(day)
+                            if openFrom[day] == nil { openFrom[day] = "11:00" }
+                            if openTo[day] == nil { openTo[day] = "23:00" }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: openDays.contains(day)
+                                  ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 15))
+                            Text(Self.dayNames[day])
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(width: 34, alignment: .leading)
+                        }
+                        .foregroundStyle(openDays.contains(day)
+                                         ? GGColor.textPrimary : GGColor.textTertiary)
+                    }
+                    .buttonStyle(PressableStyle())
+
+                    if openDays.contains(day) {
+                        TextField("11:00", text: fromBinding(day))
+                            .frame(width: 66)
+                        Text("–").foregroundStyle(GGColor.textTertiary)
+                        TextField("23:00", text: toBinding(day))
+                            .frame(width: 66)
+                    } else {
+                        Text("Closed")
+                            .font(.system(size: 12))
+                            .foregroundStyle(GGColor.textTertiary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .font(.ggMono(13))
+                .foregroundStyle(GGColor.textPrimary)
+            }
+
+            Text("A closing time earlier than the opening one runs past midnight — "
+                 + "18:00–02:00 is a normal evening.")
+                .font(.system(size: 11))
+                .foregroundStyle(GGColor.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .glass(cornerRadius: 16, fillOpacity: 0.04, borderOpacity: 0.08)
+    }
+
+    func fromBinding(_ day: Int) -> Binding<String> {
+        Binding(get: { openFrom[day] ?? "" }, set: { openFrom[day] = $0 })
+    }
+
+    func toBinding(_ day: Int) -> Binding<String> {
+        Binding(get: { openTo[day] ?? "" }, set: { openTo[day] = $0 })
+    }
+
+    /// `MON=11:00-23:00;...`, or empty for always-open.
+    func hoursOnTheWire() -> String {
+        openDays.sorted().compactMap { day -> String? in
+            guard let from = openFrom[day]?.trimmed, let to = openTo[day]?.trimmed,
+                  !from.isEmpty, !to.isEmpty else { return nil }
+            return "\(Self.wireDays[day])=\(from)-\(to)"
+        }.joined(separator: ";")
+    }
+
+    func loadHours(_ raw: String) {
+        openDays = []
+        for entry in raw.split(separator: ";") {
+            let parts = entry.split(separator: "=")
+            guard parts.count == 2,
+                  let day = Self.wireDays.firstIndex(of: String(parts[0]).uppercased())
+            else { continue }
+            let span = parts[1].split(separator: "-")
+            guard span.count == 2 else { continue }
+            openDays.insert(day)
+            openFrom[day] = String(span[0])
+            openTo[day] = String(span[1])
         }
     }
 }

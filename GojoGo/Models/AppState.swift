@@ -466,6 +466,25 @@ final class AppState: ObservableObject {
     /// The booking whose sheet is open, if any.
     @Published var deliveryBookingBeingEdited: OrderDTO? = nil
     @Published var deliveryBookingBusy: Bool = false
+    // Ordering for somebody else (Phase 4 M6). Properties of *this* checkout,
+    // like the pickup switch and the booked time, and cleared with the cart.
+    @Published var deliveryRecipientName: String = ""
+    @Published var deliveryRecipientPhone: String = ""
+    /// The report on the order being looked at, once there is one. Nil means
+    /// either nothing reported or nothing loaded — the sheet asks.
+    @Published var deliveryDispute: DisputeDTO? = nil
+    @Published var showDeliveryDispute: Bool = false
+    @Published var deliveryDisputeBusy: Bool = false
+    /// A public tracking link, once minted. Held so the share sheet has
+    /// something to present and so a second tap doesn't re-mint.
+    @Published var deliveryShareLink: ShareOrderDTO? = nil
+    /// What they thought of the courier, kept apart from `deliveryRating` for
+    /// the reason the two endpoints are apart: one is about the food.
+    @Published var deliveryCourierRating: Int = 0
+    /// The live order as the server last described it. Kept whole (rather than
+    /// only unpacked into the fields above) so a sheet that needs the order's
+    /// lines — reporting a problem — has them without a second fetch.
+    @Published var deliveryLiveOrder: OrderDTO? = nil
     /// The promotion code typed at checkout, and the tip chosen with it. A code,
     /// never an amount: what it is worth is the server's answer.
     @Published var deliveryPromotionCode: String = ""
@@ -4152,6 +4171,8 @@ final class AppState: ObservableObject {
             // to get it.
             deliveryWantsPickup = false
             deliveryScheduledFor = nil
+            deliveryRecipientName = ""
+            deliveryRecipientPhone = ""
         }
     }
 

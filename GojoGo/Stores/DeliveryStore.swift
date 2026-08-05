@@ -72,11 +72,15 @@ final class DeliveryStore {
     func placeOrder(baskets: [UUID: [DeliveryCartLine]],
                     addressId: UUID?, note: String,
                     promotionCode: String? = nil, tipCents: Int = 0,
-                    pickup: Bool = false, scheduledFor: Date? = nil) async throws -> OrderDTO {
+                    pickup: Bool = false, recipientName: String? = nil,
+                    recipientPhone: String? = nil,
+                    scheduledFor: Date? = nil) async throws -> OrderDTO {
         try await APIClient.shared.post("/v1/delivery/orders",
                                         body: orderBody(baskets: baskets, addressId: addressId,
                                                         note: note, promotionCode: promotionCode,
                                                         tipCents: tipCents, pickup: pickup,
+                                                        recipientName: recipientName,
+                                                        recipientPhone: recipientPhone,
                                                         scheduledFor: scheduledFor))
     }
 
@@ -89,16 +93,21 @@ final class DeliveryStore {
     func changeOrder(_ orderId: UUID, baskets: [UUID: [DeliveryCartLine]],
                      addressId: UUID?, note: String,
                      promotionCode: String? = nil, tipCents: Int = 0,
-                     pickup: Bool = false, scheduledFor: Date?) async throws -> OrderDTO {
+                     pickup: Bool = false, recipientName: String? = nil,
+                     recipientPhone: String? = nil,
+                     scheduledFor: Date?) async throws -> OrderDTO {
         try await APIClient.shared.put("/v1/delivery/orders/\(orderId)",
                                        body: orderBody(baskets: baskets, addressId: addressId,
                                                        note: note, promotionCode: promotionCode,
                                                        tipCents: tipCents, pickup: pickup,
+                                                       recipientName: recipientName,
+                                                       recipientPhone: recipientPhone,
                                                        scheduledFor: scheduledFor))
     }
 
     private func orderBody(baskets: [UUID: [DeliveryCartLine]], addressId: UUID?, note: String,
                            promotionCode: String?, tipCents: Int, pickup: Bool,
+                           recipientName: String?, recipientPhone: String?,
                            scheduledFor: Date?) -> PlaceOrderBody {
         PlaceOrderBody(
             merchantId: nil,
@@ -112,6 +121,10 @@ final class DeliveryStore {
             promotionCode: promotionCode?.isEmpty == false ? promotionCode : nil,
             tipCents: pickup ? 0 : tipCents,
             fulfilmentKind: pickup ? "PICKUP" : nil,
+            // A collection has no doorstep, so there is nobody else to be at
+            // it — the person walking to the counter holds the code.
+            recipientName: pickup ? nil : recipientName,
+            recipientPhone: pickup ? nil : recipientPhone,
             // Nil for "now", which keeps the body for the common case
             // byte-identical to the one the deployed build sends.
             scheduledFor: scheduledFor.map(BackendDate.wire))
@@ -129,6 +142,37 @@ final class DeliveryStore {
                                                                  qty: $0.qty) },
                            promotionCode: nil)
             }
+    }
+
+    /// Rates the courier (Phase 4 M6) — a different question from rating the
+    /// order, which is about the food. **409** on a collection.
+    func rateCourier(_ orderId: UUID, stars: Int) async throws -> OrderDTO {
+        try await APIClient.shared.post("/v1/delivery/orders/\(orderId)/courier-rating",
+                                        body: RateOrderBody(rating: stars))
+    }
+
+    /// A public link to follow this delivery (Phase 4 M6). Idempotent: two taps
+    /// hand out the same link rather than two secrets for one order.
+    func shareOrder(_ orderId: UUID) async throws -> ShareOrderDTO {
+        try await APIClient.shared.post("/v1/delivery/orders/\(orderId)/share")
+    }
+
+    // MARK: Reporting a problem (Phase 4 M6)
+
+    func fileDispute(_ orderId: UUID, body: FileDisputeBody) async throws -> DisputeDTO {
+        try await APIClient.shared.post("/v1/delivery/orders/\(orderId)/dispute", body: body)
+    }
+
+    /// The report on this order, or nil. A 404 is not an error here — most
+    /// orders have no report and never will.
+    func dispute(_ orderId: UUID) async throws -> DisputeDTO? {
+        try await APIClient.shared.get("/v1/delivery/orders/\(orderId)/dispute")
+    }
+
+    /// A presigned PUT for a photo of what arrived. The server minted the key
+    /// and has already stamped it on the report — nothing is sent back.
+    func disputePhotoUpload(_ orderId: UUID) async throws -> ProofUploadDTO {
+        try await APIClient.shared.post("/v1/delivery/orders/\(orderId)/dispute/photo")
     }
 
     /// Cancels one kitchen's slice (Phase 4 M3). Refused with a 409 once that
@@ -355,7 +399,8 @@ final class DeliveryStore {
             longitude: dto.longitude,
             offersPickup: dto.offersPickup,
             pickupEtaMinutes: dto.pickupEtaMinutes ?? dto.etaMinutes,
-            pickupAddress: dto.pickupAddress ?? "")
+            pickupAddress: dto.pickupAddress ?? "",
+            openNow: dto.isOpenNow)
     }
 
     /// The server's fulfilment state → the enum the tracking screen renders.

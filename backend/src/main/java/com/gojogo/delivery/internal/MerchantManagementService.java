@@ -41,13 +41,15 @@ class MerchantManagementService implements MerchantProvisioningApi {
     private final MenuSectionRepository sections;
     private final MenuItemRepository items;
     private final MediaApi media;
+    private final DeliveryPolicy policy;
 
     MerchantManagementService(MerchantRepository merchants, MenuSectionRepository sections,
-                              MenuItemRepository items, MediaApi media) {
+                              MenuItemRepository items, MediaApi media, DeliveryPolicy policy) {
         this.merchants = merchants;
         this.sections = sections;
         this.items = items;
         this.media = media;
+        this.policy = policy;
     }
 
     // MARK: Provisioning (called by the partner module through the public API)
@@ -104,7 +106,11 @@ class MerchantManagementService implements MerchantProvisioningApi {
             request.pickupPrepMinutes() == null
                 ? merchant.getPickupPrepMinutes() : request.pickupPrepMinutes(),
             request.pickupAddress() == null
-                ? merchant.getPickupAddress() : request.pickupAddress());
+                ? merchant.getPickupAddress() : request.pickupAddress(),
+            request.openingHours() == null
+                ? merchant.getOpeningHours() : request.openingHours(),
+            request.timezone() == null
+                ? merchant.getTimezone() : request.timezone());
         media.markReferenced(Collections.singletonList(request.imageUrl()));
         return toDto(merchant);
     }
@@ -263,6 +269,8 @@ class MerchantManagementService implements MerchantProvisioningApi {
             merchant.isActive(), merchant.isSuspended(),
             merchant.isPickupEnabled(), merchant.getPickupPrepMinutes(),
             merchant.getPickupAddress(),
+            merchant.getOpeningHours(), merchant.getTimezone(),
+            merchant.isOpenAt(java.time.OffsetDateTime.now(), policy.zone()),
             menu);
     }
 }

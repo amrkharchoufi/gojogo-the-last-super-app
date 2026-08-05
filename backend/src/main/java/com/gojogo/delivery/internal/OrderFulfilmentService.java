@@ -866,9 +866,14 @@ class OrderFulfilmentService {
         for (SubOrder sub : slices) {
             if (sub.getStatus() != SubOrderStatus.CONFIRMED) continue;
             Merchant merchant = byId.get(sub.getMerchantId());
-            if (merchant == null || !merchant.isOpenForOrders()) {
+            // Closed since, or closed *at this hour* (Phase 4 M6) — which is the
+            // check a booking actually needs. A kitchen that is shut at
+            // lunchtime may be open at eight, so the clock is read here rather
+            // than at checkout, and a booking for three in the morning is
+            // refunded now instead of timing out at three in the morning.
+            if (merchant == null || !merchant.isOpenAt(OffsetDateTime.now(), policy.zone())) {
                 cancelSubOrder(order, sub, (merchant == null ? "That restaurant" : merchant.getName())
-                    + " isn't taking orders — you haven't been charged for it");
+                    + " isn't open then — you haven't been charged for it");
             }
         }
         if (!order.getStatus().isTerminal()) {
@@ -1147,6 +1152,11 @@ class OrderFulfilmentService {
             target == null ? null : target.longitude(),
             order.getAddressLabel(), order.getAddressLine(), order.getAddressNote(),
             order.getAddressLatitude(), order.getAddressLongitude(),
+            // Who is actually at the door (Phase 4 M6), and the name only. The
+            // recipient's phone number is on the order and reaches nobody: a
+            // courier needs to know who to hand it to, not how to contact a
+            // stranger afterwards.
+            order.doorName(),
             items, order.getNote(),
             // How they want it handed over — an instruction the customer gave,
             // not one of the secrets. Withholding it would have the app

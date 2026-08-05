@@ -1,8 +1,10 @@
 package com.gojogo.delivery.internal;
 
 import com.gojogo.dispatch.DispatchApi;
+import com.gojogo.dispatch.JobKind;
 import com.gojogo.dispatch.WorkerPosition;
 import com.gojogo.media.MediaDocumentApi;
+import com.gojogo.share.ShareApi;
 import com.gojogo.storefront.StorefrontDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +53,7 @@ class DeliveryService {
     private final DispatchApi dispatch;
     private final DeliveryPolicy policy;
     private final MediaDocumentApi privateMedia;
+    private final ShareApi share;
     private final int serviceFeeCents;
 
     DeliveryService(MerchantRepository merchants, MenuItemRepository menuItems,
@@ -59,7 +62,7 @@ class DeliveryService {
                     OrderPayments payments, PromotionService promotions,
                     MerchantStorefrontService storefronts,
                     OrderFulfilmentService fulfilment, DispatchApi dispatch,
-                    DeliveryPolicy policy, MediaDocumentApi privateMedia,
+                    DeliveryPolicy policy, MediaDocumentApi privateMedia, ShareApi share,
                     @Value("${gojogo.delivery.service-fee-cents:99}") int serviceFeeCents) {
         this.merchants = merchants;
         this.menuItems = menuItems;
@@ -73,6 +76,7 @@ class DeliveryService {
         this.dispatch = dispatch;
         this.policy = policy;
         this.privateMedia = privateMedia;
+        this.share = share;
         this.serviceFeeCents = serviceFeeCents;
     }
 
@@ -251,7 +255,11 @@ class DeliveryService {
         }
         FulfilmentKind kind = FulfilmentKind.parse(request.fulfilmentKind());
         List<PricedBasket> priced = price(me, kind, basketsOf(request.baskets(),
-            request.merchantId(), request.lines(), request.promotionCode()));
+            request.merchantId(), request.lines(), request.promotionCode()),
+            // Only an order placed for *now* is refused by the clock. A booking
+            // is checked at promotion instead, when the answer is the one that
+            // matters — a kitchen closed at lunchtime may be open by eight.
+            scheduledFor == null);
 
         // The slowest restaurant's advertised ETA is the best guess anybody has
         // until the kitchens accept and say how long they actually need — which
@@ -284,6 +292,12 @@ class DeliveryService {
         order.chooseHandoffMode(HandoffMode.parse(request.handoffMode(),
             policy.defaultHandoffMode()));
         applyAddress(me, request, order, kind);
+        // Somebody else at the door (Phase 4 M6). Ignored on a collection: the
+        // person walking to the counter is the person holding the code, and a
+        // recipient on one would be a name nobody ever reads.
+        if (!kind.isPickup()) {
+            order.forRecipient(request.recipientName(), request.recipientPhone());
+        }
         for (PricedBasket basket : priced) {
             SubOrder subOrder = order.addSubOrder(basket.merchant().getId(),
                 basket.slice().subtotalCents(), basket.slice().deliveryFeeCents(),
@@ -385,6 +399,8 @@ class DeliveryService {
         // version's street on an order nobody is driving to.
         order.deliverTo(null, "", "", "", null, null);
         applyAddress(me, request, order, kind);
+        order.forRecipient(kind.isPickup() ? null : request.recipientName(),
+            kind.isPickup() ? null : request.recipientPhone());
         for (PricedBasket basket : priced) {
             SubOrder subOrder = order.addSubOrder(basket.merchant().getId(),
                 basket.slice().subtotalCents(), basket.slice().deliveryFeeCents(),
@@ -519,6 +535,13 @@ class DeliveryService {
      * got nothing deserves to be told why, exactly as before.
      */
     private List<PricedBasket> price(UUID me, FulfilmentKind kind, List<BasketRequest> baskets) {
+        return price(me, kind, baskets, false);
+    }
+
+    /** @param checkHours whether a kitchen that is shut right now is a refusal.
+     *                    False when quoting: a quote is somebody reading a menu. */
+    private List<PricedBasket> price(UUID me, FulfilmentKind kind, List<BasketRequest> baskets,
+                                     boolean checkHours) {
         List<PricedBasket> priced = new ArrayList<>(baskets.size());
         ResponseStatusException firstRefusal = null;
         boolean codeAskedAnywhere = false;
@@ -531,6 +554,27 @@ class DeliveryService {
             // out loud rather than quietly turned into a delivery: the second
             // would charge somebody a delivery fee for a journey they were
             // planning to make themselves.
+            // Two refusals, and they are deliberately different sentences to
+            // somebody holding a basket: "not taking orders" means this
+            // restaurant is not trading at all, and "closed right now" means
+            // come back later. Both only at placement — a quote is somebody
+            // reading a menu, and refusing to price food at midnight would make
+            // the whole page useless.
+            //
+            // The first check also closes something older than this milestone:
+            // checkout never verified `active` or `suspended` at all. The
+            // catalog filtered on them, so the only way in was an id somebody
+            // already had — a customer whose cart outlived a restaurant's
+            // suspension, mostly, which then timed out ten minutes later
+            // instead of saying so.
+            if (checkHours && !merchant.isOpenForOrders()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    merchant.getName() + " isn't taking orders at the moment");
+            }
+            if (checkHours && !merchant.isOpenAt(OffsetDateTime.now(), policy.zone())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    merchant.getName() + " is closed right now");
+            }
             if (kind.isPickup() && !merchant.isPickupEnabled()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     merchant.getName() + " doesn't do collection — order it for delivery instead");
@@ -795,6 +839,104 @@ class DeliveryService {
     }
 
     /**
+     * Rates the courier (Phase 4 M6) — a separate question from rating the
+     * order, which is the whole reason this took five milestones.
+     *
+     * <p>M1 refused to pass the order rating to {@code dispatch.complete}
+     * because a two-star for a cold burger is a judgement on a kitchen, and
+     * landing it on the record of whoever cycled it across town would make a
+     * courier's score a function of restaurants they did not choose. That
+     * reasoning never said couriers should go unrated; it said this needed its
+     * own question. Asking it separately is the smallest thing that could
+     * possibly be honest.
+     *
+     * <p>Goes to {@code DispatchApi.rate} rather than {@code complete}: the job
+     * finished at the doorstep, and re-completing it would count the delivery
+     * twice in the worker's record. That verb has existed since Phase 3 for the
+     * ride ratings that arrive after a trip ends — this is its second caller and
+     * it needed nothing new.
+     *
+     * <p>Re-rating is allowed and replaces nothing in dispatch: each submission
+     * folds into the running mean, so the honest thing is to accept the first
+     * answer only. A second tap changes the order's own record and is not sent
+     * on.
+     */
+    @Transactional
+    OrderDto rateCourier(UUID me, UUID orderId, int stars) {
+        CustomerOrder order = require(me, orderId);
+        if (order.getStatus() != OrderStatus.DELIVERED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "You can rate your courier once your order has arrived");
+        }
+        if (order.isPickup() || order.getCourierWorkerId() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                order.isPickup()
+                    ? "You collected this one — there's nobody to rate"
+                    : "Nobody delivered this order");
+        }
+        boolean first = order.getCourierRatingGiven() == null;
+        order.rateCourier(stars);
+        if (first) {
+            // Never allowed to fail the request: the rating is recorded on the
+            // order either way, and a dispatch that is having a moment must not
+            // make a customer think their tap did nothing.
+            try {
+                dispatch.rate(JobKind.DELIVERY, order.getId(), stars);
+            } catch (RuntimeException dispatchIsHavingAMoment) {
+                log.warn("Couldn't pass the courier rating for order {}: {}",
+                    order.getId(), dispatchIsHavingAMoment.toString());
+            }
+        }
+        return toOrderDto(order);
+    }
+
+    /**
+     * A public link to follow this delivery (Phase 4 M6).
+     *
+     * <p>Two things want it and the second is the one that made it a milestone
+     * item rather than a nicety: sending a friend a link to watch dinner
+     * arrive, and — since an order can now be placed <em>for</em> somebody —
+     * giving a recipient with no GojoGo account any way at all to see where
+     * their food is.
+     *
+     * <p>Idempotent through {@code share}, so tapping it twice hands out the
+     * same link rather than scattering two secrets for the same order. The
+     * lifetime is the delivery's own remaining time plus a grace, floored: a
+     * link that outlives a short delivery is harmless and one that dies mid-way
+     * is the feature not working.
+     */
+    @Transactional
+    ShareOrderDto share(UUID me, UUID orderId) {
+        CustomerOrder order = require(me, orderId);
+        if (order.getStatus().isTerminal()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                order.getStatus() == OrderStatus.DELIVERED
+                    ? "That order has already arrived"
+                    : "That order was cancelled");
+        }
+        ShareApi.SharedLink link = share.mint(OrderShareableResource.KIND, order.getId(), me,
+            ShareApi.ShareReason.SHARE, shareTtl(order));
+        String who = order.isForSomebodyElse() ? order.getRecipientName() + "'s order" : "My order";
+        return new ShareOrderDto(link.url(), link.expiresAt(), link.viewCount(),
+            who + " from GoJoGo is on its way. You can follow it here: " + link.url());
+    }
+
+    /** Stop sharing — dead from the next request, which is all that can ever
+     *  mean once a URL has been sent to somebody. */
+    @Transactional
+    void stopSharing(UUID me, UUID orderId) {
+        require(me, orderId);
+        share.revoke(OrderShareableResource.KIND, orderId, me);
+    }
+
+    private java.time.Duration shareTtl(CustomerOrder order) {
+        long left = Math.max(0, java.time.Duration.between(
+            OffsetDateTime.now(), order.getEtaAt()).toMinutes());
+        return java.time.Duration.ofMinutes(Math.max(policy.shareFloorMinutes(),
+            left + policy.shareGraceMinutes()));
+    }
+
+    /**
      * A tip after the food arrived — 100% the courier's (SPECS §1), paid
      * straight through rather than through escrow, since there is nothing left
      * to hold it against and the work is already done.
@@ -911,7 +1053,10 @@ class DeliveryService {
                 order.getAddressLine(), order.getAddressNote(),
                 order.getAddressLatitude(), order.getAddressLongitude()),
             order.getNote(),
+            order.getRecipientName(),
+            order.getRecipientPhone(),
             order.getRating(),
+            order.getCourierRatingGiven(),
             order.getHandoffMode().name(),
             visiblePin(order),
             proofPhotoUrl(order),
@@ -1018,8 +1163,8 @@ class DeliveryService {
         return merchants.findById(merchantId).map(Merchant::getName).orElse("Restaurant");
     }
 
-    private static MerchantDto toMerchantDto(Merchant merchant, boolean withMenu,
-                                             StorefrontDocument storefront) {
+    private MerchantDto toMerchantDto(Merchant merchant, boolean withMenu,
+                                      StorefrontDocument storefront) {
         List<MenuSectionDto> menu = withMenu
             ? merchant.getMenu().stream()
                 .sorted(Comparator.comparingInt(MenuSection::getSortOrder))
@@ -1050,6 +1195,12 @@ class DeliveryService {
             merchant.isPickupEnabled(),
             merchant.getPickupPrepMinutes() == null
                 ? merchant.getEtaMinutes() : merchant.getPickupPrepMinutes(),
-            merchant.getPickupAddress());
+            merchant.getPickupAddress(),
+            // The server's answer, read in the restaurant's own timezone. The
+            // app must not compute it: it does not know their zone, and a card
+            // that says "open" over a kitchen that will refuse the checkout is
+            // worse than one that says "closed".
+            merchant.isOpenAt(OffsetDateTime.now(), policy.zone()),
+            merchant.getOpeningHours());
     }
 }

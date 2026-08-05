@@ -163,10 +163,40 @@ class DeliveryController {
             request == null ? null : request.mode());
     }
 
+    /**
+     * A public link to follow this delivery (Phase 4 M6) — for sending a friend,
+     * and for a recipient with no GojoGo account, who otherwise has no way at
+     * all to see where their food is. Idempotent: tapping it twice returns the
+     * same link rather than scattering two secrets for one order.
+     */
+    @PostMapping("/v1/delivery/orders/{orderId}/share")
+    ShareOrderDto share(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
+        return delivery.share(current.require(jwt).id(), orderId);
+    }
+
+    @DeleteMapping("/v1/delivery/orders/{orderId}/share")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void stopSharing(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
+        delivery.stopSharing(current.require(jwt).id(), orderId);
+    }
+
     @PostMapping("/v1/delivery/orders/{orderId}/rate")
     OrderDto rate(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
                   @Valid @RequestBody RateOrderRequest request) {
         return delivery.rate(current.require(jwt).id(), orderId, request.rating());
+    }
+
+    /**
+     * Rates the courier (Phase 4 M6) — a separate question from rating the
+     * order, and separate for the reason M1 gave when it refused to conflate
+     * them: a two-star for a cold burger is about the kitchen, and must not land
+     * on the record of whoever carried it. <b>409</b> on a collection, where
+     * there is nobody to rate.
+     */
+    @PostMapping("/v1/delivery/orders/{orderId}/courier-rating")
+    OrderDto rateCourier(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId,
+                         @Valid @RequestBody RateOrderRequest request) {
+        return delivery.rateCourier(current.require(jwt).id(), orderId, request.rating());
     }
 
     /** Tips after the food arrived. 100% goes to whoever delivered it. */

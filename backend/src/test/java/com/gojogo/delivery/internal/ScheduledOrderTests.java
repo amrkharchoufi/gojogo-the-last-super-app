@@ -73,7 +73,7 @@ class ScheduledOrderTests {
         delivery = new DeliveryService(merchants, menuItems, orders, addresses, events,
             payments, promotions, mock(MerchantStorefrontService.class),
             fulfilment, mock(DispatchApi.class),
-            new DeliveryPolicy(new StubConfig()), mock(MediaDocumentApi.class), 99);
+            new DeliveryPolicy(new StubConfig()), mock(MediaDocumentApi.class), mock(com.gojogo.share.ShareApi.class), 99);
 
         Merchant forno = merchant(FORNO, "Forno Nero", 300, 25);
         Merchant sushi = merchant(SUSHI, "Kaido Sushi", 400, 50);
@@ -227,6 +227,59 @@ class ScheduledOrderTests {
             .hasMessageContaining("cancel one");
     }
 
+    // MARK: Opening hours (Phase 4 M6)
+
+    /**
+     * A kitchen that is shut is refused at checkout rather than ten minutes
+     * later by the accept timeout — which is what used to happen, and what made
+     * "closed" indistinguishable from "ignoring you".
+     */
+    @Test
+    @DisplayName("an order for now is refused by a kitchen that is closed at this hour")
+    void aClosedKitchenRefusesAnImmediateOrder() {
+        closeForno();
+
+        assertThatThrownBy(() -> delivery.place(ME, immediate(basket(FORNO, PIZZA_ITEM, 1))))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("closed right now");
+    }
+
+    /**
+     * But a <em>booking</em> is not: a kitchen shut at lunchtime may be open at
+     * eight, and refusing at checkout would make it impossible to book anything
+     * outside opening hours — which is most of when people book. The clock is
+     * read at promotion instead.
+     */
+    @Test
+    @DisplayName("a booking is not refused by the hours at the moment it is made")
+    void aClosedKitchenStillTakesABooking() {
+        closeForno();
+
+        assertThat(delivery.place(ME,
+            scheduled(OffsetDateTime.now().plusHours(6), basket(FORNO, PIZZA_ITEM, 1))))
+            .isNotNull();
+    }
+
+    /** A quote is somebody reading a menu. Refusing to price food at midnight
+     *  would make the restaurant page useless rather than honest. */
+    @Test
+    void aQuoteStillPricesAClosedKitchen() {
+        closeForno();
+
+        assertThat(delivery.quote(ME, new QuoteRequest(null, null,
+            List.of(basket(FORNO, PIZZA_ITEM, 1)), null, 0, null)).totalCents())
+            .isEqualTo(2_000 + 300 + 99);
+    }
+
+    /** Open only in a one-minute window on a Monday morning, which no test run
+     *  will ever fall inside. */
+    private void closeForno() {
+        Merchant closed = merchant(FORNO, "Forno Nero", 300, 25);
+        closed.apply("Forno Nero", "Kitchen", null, null, 25, 300, 33.57, -7.58,
+            Set.of(), Set.of(), false, null, "", "MON=03:00-03:01", "Africa/Casablanca");
+        when(merchants.findById(FORNO)).thenReturn(Optional.of(closed));
+    }
+
     // MARK: The quote's window
 
     /**
@@ -358,7 +411,7 @@ class ScheduledOrderTests {
 
     private static PlaceOrderRequest scheduled(OffsetDateTime when, BasketRequest... baskets) {
         return new PlaceOrderRequest(null, null, List.of(baskets), null, "Home", "",
-            null, 0, null, null, when);
+            null, 0, null, null, null, null, when);
     }
 
     private static PlaceOrderRequest sameTime(CustomerOrder order, BasketRequest... baskets) {
@@ -367,7 +420,7 @@ class ScheduledOrderTests {
 
     private static PlaceOrderRequest immediate(BasketRequest... baskets) {
         return new PlaceOrderRequest(null, null, List.of(baskets), null, "Home", "",
-            null, 0, null, null, null);
+            null, 0, null, null, null, null, null);
     }
 
     private static BasketRequest basket(UUID merchantId, UUID itemId, int qty) {
@@ -385,6 +438,9 @@ class ScheduledOrderTests {
     private static Merchant merchant(UUID id, String name, int deliveryFeeCents, int etaMinutes) {
         Merchant merchant = new Merchant(UUID.randomUUID(), name, "Kitchen", null, 33.57, -7.58);
         set(merchant, "id", id);
+        // A restaurant is created closed and published by its owner. Checkout
+        // reads that flag since Phase 4 M6, so an orderable one has to be open.
+        merchant.setActive(true);
         set(merchant, "deliveryFeeCents", deliveryFeeCents);
         set(merchant, "etaMinutes", etaMinutes);
         return merchant;

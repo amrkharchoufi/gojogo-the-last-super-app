@@ -49,8 +49,19 @@ struct MerchantDTO: Decodable {
     let pickupEtaMinutes: Int?
     /// Where to walk to, when that isn't just the restaurant's address.
     let pickupAddress: String?
+    /// Whether they are open *right now* (Phase 4 M6) — the server's answer,
+    /// read in the restaurant's own timezone. Never re-derived here: this app
+    /// doesn't know their zone, and a card that says "open" over a kitchen that
+    /// will refuse the checkout is worse than one that says "closed".
+    let openNow: Bool?
+    /// The raw weekly schedule, for a page that wants to draw the week.
+    let openingHours: String?
 
     var offersPickup: Bool { pickupEnabled == true }
+
+    /// Absent means open. A backend that predates opening hours never closed
+    /// anybody, and a build that read `nil` as shut would empty the catalog.
+    var isOpenNow: Bool { openNow ?? true }
 }
 
 struct OrderMerchantDTO: Decodable {
@@ -262,6 +273,13 @@ struct OrderDTO: Decodable, Identifiable {
     /// When the customer asked for it (Phase 4 M5), or nil for an ordinary
     /// order. What the screen shows *instead of* the countdown: "in 4320 min"
     /// is arithmetic, not information.
+    /// Who is at the door when that is not the person paying (Phase 4 M6).
+    /// Blank on the overwhelming majority of orders.
+    let recipientName: String?
+    let recipientPhone: String?
+    /// What they thought of the courier — beside the order rating, never
+    /// replacing it, because the two answer different questions.
+    let courierRating: Int?
     let scheduledFor: String?
     /// Whether this can still be rewritten — the server's own answer, not a
     /// rule re-derived here. True exactly while no kitchen has been told, which
@@ -349,6 +367,10 @@ struct PlaceOrderBody: Encodable {
     /// the body a pre-M4 build sends and the body this one sends for the common
     /// case are byte-identical.
     let fulfilmentKind: String?
+    /// Ordering for somebody else (Phase 4 M6). A name is what makes it one;
+    /// the phone is optional and is never disclosed to the courier.
+    let recipientName: String?
+    let recipientPhone: String?
     /// When the customer wants it (Phase 4 M5), ISO-8601, or nil for "now" —
     /// which is what the great majority of orders are and what keeps this body
     /// identical to the one the deployed build sends.
@@ -364,7 +386,7 @@ struct PlaceOrderBody: Encodable {
         PlaceOrderBody(merchantId: merchantId, lines: lines, baskets: baskets,
                        addressId: addressId, note: note, promotionCode: promotionCode,
                        tipCents: tipCents, fulfilmentKind: fulfilmentKind,
-                       scheduledFor: nil)
+                       recipientName: nil, recipientPhone: nil, scheduledFor: nil)
     }
 }
 
@@ -765,4 +787,115 @@ struct SavePromotionBody: Encodable {
     let minBasketCents: Int
     let maxDiscountCents: Int
     let perUserLimit: Int
+}
+
+
+// MARK: - Disputes (Phase 4 M6)
+
+/// A reported problem with a delivered order.
+///
+/// Carries no photo URLs and no payer: the pictures are the customer's own and
+/// they know what they sent, and which of three parties funded a refund is an
+/// operator's business rather than an invitation to argue with a restaurant.
+struct DisputeDTO: Decodable {
+    let id: UUID
+    let subOrderId: UUID?
+    /// MISSING_ITEMS / WRONG_ITEMS / DAMAGED / NEVER_ARRIVED / OTHER.
+    let reason: String
+    let note: String
+    /// OPEN / RESOLVED_REFUND / RESOLVED_REJECTED.
+    let state: String
+    let claimedCents: Int
+    let refundCents: Int
+    let resolutionNote: String
+    let photoCount: Int
+    let items: [DisputedItemDTO]
+    let createdAt: String
+    let resolvedAt: String?
+
+    var isOpen: Bool { state == "OPEN" }
+    var wasRefunded: Bool { state == "RESOLVED_REFUND" }
+
+    /// What the customer is told, in one line. Written here rather than in the
+    /// view because "resolved" needs to read differently depending on which way
+    /// it went, and a view that branched on the raw state would eventually
+    /// branch differently somewhere else.
+    var summary: String {
+        switch state {
+        case "OPEN": return "We're looking into it."
+        case "RESOLVED_REFUND":
+            // Formatted here rather than through WalletStore, which is
+            // main-actor isolated and this type is not. One currency, integer
+            // minor units — the same arithmetic, without dragging an actor
+            // boundary into a DTO.
+            return "Refunded \(refundCents / 100).\(String(format: "%02d", abs(refundCents % 100)))"
+                + " to your wallet."
+        default:
+            return resolutionNote.isEmpty ? "We couldn't refund this one." : resolutionNote
+        }
+    }
+}
+
+struct DisputedItemDTO: Decodable, Identifiable {
+    let menuItemId: UUID
+    let name: String
+    let unitPriceCents: Int
+    let qty: Int
+
+    var id: UUID { menuItemId }
+}
+
+/// Ids and quantities only — never amounts. The server prices the claim off the
+/// order's own lines, the same rule checkout follows.
+struct FileDisputeBody: Encodable {
+    let subOrderId: UUID?
+    let reason: String
+    let note: String
+    let items: [DisputedItemBody]
+}
+
+struct DisputedItemBody: Encodable {
+    let menuItemId: UUID
+    let qty: Int
+}
+
+/// Why an order went wrong, as the sheet offers it. A closed list because the
+/// reason is what suggests who pays — see the backend's `DisputeReason`.
+enum DisputeReasonChoice: String, CaseIterable, Identifiable {
+    case missingItems = "MISSING_ITEMS"
+    case wrongItems = "WRONG_ITEMS"
+    case damaged = "DAMAGED"
+    case neverArrived = "NEVER_ARRIVED"
+    case other = "OTHER"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .missingItems: return "Something was missing"
+        case .wrongItems:   return "Wrong items"
+        case .damaged:      return "It arrived damaged"
+        case .neverArrived: return "It never arrived"
+        case .other:        return "Something else"
+        }
+    }
+
+    /// Whether picking items makes sense for this reason. "It never arrived" is
+    /// about the whole order, and asking which items are missing from a bag that
+    /// was never delivered is the app not listening.
+    var wantsItems: Bool {
+        self == .missingItems || self == .wrongItems || self == .damaged
+    }
+}
+
+// MARK: - Share links (Phase 4 M6)
+
+/// A public link to follow a delivery. `message` is wording the server wrote, so
+/// the sentence somebody sends is not phrased three different ways by three
+/// clients.
+struct ShareOrderDTO: Decodable {
+    let url: String
+    let expiresAt: String?
+    let viewCount: Int
+    let message: String
 }

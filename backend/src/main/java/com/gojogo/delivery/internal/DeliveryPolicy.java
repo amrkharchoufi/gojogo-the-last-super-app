@@ -118,6 +118,61 @@ class DeliveryPolicy {
         return (int) Math.clamp(config.number("delivery.order.max.scheduled", 5), 1, 50);
     }
 
+    /**
+     * The timezone a restaurant's hours are read in when they have not set
+     * their own (Phase 4 M6).
+     *
+     * <p>A configured local zone rather than UTC, because the wrong local guess
+     * is closer to right than a definitely-wrong global one: every restaurant
+     * in this catalog is in one city today, and a kitchen whose hours were read
+     * in UTC would close at four in the afternoon.
+     */
+    java.time.ZoneId zone() {
+        try {
+            return java.time.ZoneId.of(config.string("delivery.timezone", "Africa/Casablanca"));
+        } catch (java.time.DateTimeException notAZone) {
+            return java.time.ZoneOffset.UTC;
+        }
+    }
+
+    // MARK: Share links (Phase 4 M6)
+
+    /**
+     * The shortest a delivery's share link may live, and the grace added to
+     * whatever is left of its ETA.
+     *
+     * <p>Both err long, and the asymmetry is the reason: a link that outlives a
+     * short delivery is harmless, and one that dies while somebody is watching
+     * is the feature not working. The same call {@code travel} made for a trip.
+     */
+    long shareFloorMinutes() {
+        return Math.max(5, config.number("delivery.share.ttl.minutes", 60));
+    }
+
+    long shareGraceMinutes() {
+        return Math.max(0, config.number("delivery.share.grace.minutes", 30));
+    }
+
+    // MARK: Disputes (Phase 4 M6)
+
+    /**
+     * How long after delivery a problem can be reported. Short on purpose:
+     * a complaint about food is only argued from evidence that still exists,
+     * and the photo somebody takes a week later is a photo of a bin.
+     *
+     * <p>Counted from delivery rather than from placement, which matters now
+     * that an order can be placed days before it arrives.
+     */
+    long disputeWindowHours() {
+        return Math.clamp(config.number("delivery.dispute.window.hours", 24), 1, 720);
+    }
+
+    /** Photos on one report. A cap because the upload is free to the client and
+     *  the bucket is not, and nothing is proved by the ninth picture. */
+    int disputeMaxPhotos() {
+        return (int) Math.clamp(config.number("delivery.dispute.max.photos", 4), 1, 10);
+    }
+
     // MARK: Handoff integrity (Phase 4 M2)
 
     /**

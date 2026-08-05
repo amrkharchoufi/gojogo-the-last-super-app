@@ -78,6 +78,24 @@ class Merchant {
     private boolean suspended;
 
     /**
+     * Seven days of open/close in one column — see {@link OpeningHours} for the
+     * format and for why it is a string rather than seven rows (Phase 4 M6).
+     *
+     * <p>Blank means always open, which is what every restaurant in the catalog
+     * before this was: {@link #active} is the only thing that has ever closed
+     * one, and it is a switch somebody has to remember to flip twice a day.
+     * The two are not alternatives — {@code active} is "we are trading at all",
+     * and this is "and right now".
+     */
+    @Column(name = "opening_hours", nullable = false)
+    private String openingHours = "";
+
+    /** Their local time, because hours without a zone are hours in the
+     *  server's, and the server's is UTC, which is nobody's lunchtime. */
+    @Column(name = "timezone", nullable = false)
+    private String timezone = "";
+
+    /**
      * Whether customers may collect in store (Phase 4 M4, SPECS §5).
      *
      * <p>Off until an owner turns it on: collection needs a counter and
@@ -160,7 +178,10 @@ class Merchant {
                int etaMinutes, int deliveryFeeCents,
                Double latitude, Double longitude,
                Set<String> categories, Set<String> tags,
-               boolean pickupEnabled, Integer pickupPrepMinutes, String pickupAddress) {
+               boolean pickupEnabled, Integer pickupPrepMinutes, String pickupAddress,
+               String openingHours, String timezone) {
+        this.openingHours = openingHours == null ? "" : openingHours.trim();
+        this.timezone = timezone == null ? "" : timezone.trim();
         this.pickupEnabled = pickupEnabled;
         this.pickupPrepMinutes = pickupPrepMinutes;
         this.pickupAddress = pickupAddress == null ? "" : pickupAddress.trim();
@@ -215,6 +236,47 @@ class Merchant {
      */
     boolean isOpenForOrders() {
         return active && !suspended;
+    }
+
+    /**
+     * Trading, and open at that moment (Phase 4 M6).
+     *
+     * <p>Two questions rather than one because they fail differently: a
+     * suspended or unpublished restaurant is not in the catalog at all, and a
+     * closed one is there and shut. The caller says which sentence to write.
+     */
+    boolean isOpenAt(OffsetDateTime instant, java.time.ZoneId platformZone) {
+        return isOpenForOrders() && hours(platformZone).openAt(instant);
+    }
+
+    /**
+     * When they are actually open (Phase 4 M6), in their own local time.
+     *
+     * <p>Empty is always-open, which is every restaurant that existed before
+     * this — a schedule nobody has written must not close a kitchen that has
+     * been trading fine. See {@link OpeningHours} for the format and for why it
+     * is a string rather than seven rows.
+     */
+    OpeningHours hours(java.time.ZoneId platformZone) {
+        java.time.ZoneId zone = platformZone;
+        if (timezone != null && !timezone.isBlank()) {
+            try {
+                zone = java.time.ZoneId.of(timezone);
+            } catch (java.time.DateTimeException notAZone) {
+                // Falls back rather than throwing: a typo in a timezone must
+                // not take a restaurant's whole page down.
+                zone = platformZone;
+            }
+        }
+        return OpeningHours.parse(openingHours, zone);
+    }
+
+    String getOpeningHours() {
+        return openingHours;
+    }
+
+    String getTimezone() {
+        return timezone;
     }
 
     boolean isPickupEnabled() {

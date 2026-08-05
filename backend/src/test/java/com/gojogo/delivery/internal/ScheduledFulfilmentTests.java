@@ -140,6 +140,30 @@ class ScheduledFulfilmentTests {
         assertThat(placedEvents()).extracting(OrderPlaced::merchantId).containsExactly(SUSHI);
     }
 
+    /**
+     * The check a booking actually needs (Phase 4 M6). A kitchen that is
+     * trading but shut at this hour is exactly the case M5 left open: an order
+     * booked for three in the morning was accepted and then timed out at three
+     * in the morning, when nobody can do anything with the refund. Now it is
+     * refunded at promotion, hours earlier.
+     */
+    @Test
+    @DisplayName("a kitchen that is open for business but shut at this hour is cancelled too")
+    void closedAtThisHourIsCancelledAtPromotion() {
+        book(OffsetDateTime.now().plusHours(4), false);
+        // Trading, and open only on a day this test will never run on: the
+        // point is that `active` says yes and the clock says no.
+        forno.apply("Forno Nero", "Pizza", null, null, 25, 300, 33.57, -7.58,
+            java.util.Set.of(), java.util.Set.of(), false, null, "",
+            "MON=03:00-03:01", "Africa/Casablanca");
+
+        service.promote(ORDER);
+
+        assertThat(fornoSlice.getStatus()).isEqualTo(SubOrderStatus.CANCELLED);
+        assertThat(fornoSlice.getCancelReason()).contains("isn't open then");
+        assertThat(placedEvents()).extracting(OrderPlaced::merchantId).containsExactly(SUSHI);
+    }
+
     @Test
     @DisplayName("every kitchen closed ends the order rather than announcing it to nobody")
     void allClosedEndsTheOrder() {

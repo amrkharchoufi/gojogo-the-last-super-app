@@ -1465,6 +1465,12 @@ struct DeliveryRestaurant: Identifiable {
     var pickupEtaMinutes: Int
     /// Where to walk to, when that is not simply the restaurant's address.
     var pickupAddress: String
+    /// Whether they're open right now (Phase 4 M6). The server's answer, read
+    /// in the restaurant's own timezone — this app doesn't know their zone, and
+    /// a card that says "open" over a kitchen that will refuse the checkout is
+    /// worse than one that says "closed". Defaults true, which is what every
+    /// restaurant was before hours existed and what SampleData still is.
+    var openNow: Bool
 
     init(id: UUID = UUID(), name: String, cuisine: String, rating: Double,
          reviews: String, etaMinutes: Int, feeLabel: String, feeCents: Int = 149,
@@ -1473,7 +1479,7 @@ struct DeliveryRestaurant: Identifiable {
          menu: [DeliveryMenuSection] = [], storefront: [StorefrontBlock] = [],
          latitude: Double = 33.5731, longitude: Double = -7.5898,
          offersPickup: Bool = false, pickupEtaMinutes: Int? = nil,
-         pickupAddress: String = "") {
+         pickupAddress: String = "", openNow: Bool = true) {
         self.id = id; self.name = name; self.cuisine = cuisine
         self.rating = rating; self.reviews = reviews; self.etaMinutes = etaMinutes
         self.feeLabel = feeLabel; self.feeCents = feeCents
@@ -1484,6 +1490,7 @@ struct DeliveryRestaurant: Identifiable {
         self.offersPickup = offersPickup
         self.pickupEtaMinutes = pickupEtaMinutes ?? etaMinutes
         self.pickupAddress = pickupAddress
+        self.openNow = openNow
     }
 }
 

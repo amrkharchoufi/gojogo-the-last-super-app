@@ -114,6 +114,8 @@ final class PartnerStore {
             offersPickup: dto.offersPickup,
             pickupPrepMinutes: dto.pickupPrepMinutes,
             pickupAddress: dto.pickupAddress ?? "",
+            openingHours: dto.openingHours ?? "",
+            openNow: dto.isOpenNow,
             menu: dto.menu.map { section in
                 MerchantMenuSection(id: section.id, name: section.name,
                     items: section.items.map {

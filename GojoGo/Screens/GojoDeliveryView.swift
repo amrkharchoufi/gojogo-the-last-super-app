@@ -573,7 +573,20 @@ private struct DeliveryBrowseView: View {
             ZStack(alignment: .topLeading) {
                 MediaImage(url: r.imageURL, cornerRadius: 18)
                     .frame(height: 160)
-                if let promo = r.promo {
+                    // Closed right now (Phase 4 M6). Dimmed rather than hidden:
+                    // people look up a restaurant to find out when it opens as
+                    // often as to order from it, and a catalog that vanishes at
+                    // 11pm is a catalog that looks broken.
+                    .opacity(r.openNow ? 1 : 0.45)
+                if !r.openNow {
+                    Text("Closed")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(GGColor.white))
+                        .padding(10)
+                } else if let promo = r.promo {
                     promoChip(promo)
                         .padding(10)
                 }
@@ -1169,6 +1182,8 @@ private struct DeliveryCheckoutSheet: View {
     /// What's typed in the code field. The applied one lives in AppState —
     /// this is only what the keyboard has produced so far.
     @State private var promoCode = ""
+    /// Whether the "who's it for" fields are showing (Phase 4 M6).
+    @State private var showRecipient = false
 
     private var restaurant: DeliveryRestaurant? {
         guard let id = app.deliveryCartRestaurantID else { return nil }
@@ -1221,6 +1236,7 @@ private struct DeliveryCheckoutSheet: View {
                                       value: app.deliveryAddressLabel)
                         }
                         .buttonStyle(PressableStyle())
+                        recipientRow
                     }
                     if app.deliveryCartIsLive {
                         Button {
@@ -1483,6 +1499,57 @@ private struct DeliveryCheckoutSheet: View {
             fulfilmentOption(title: "Collect", detail: collectOptionDetail,
                              icon: "bag.fill", selected: app.deliveryWantsPickup) {
                 app.setDeliveryWantsPickup(true)
+            }
+        }
+    }
+
+    // MARK: Ordering for somebody else (Phase 4 M6)
+
+    /// Folded away until asked for, because almost every order is for the
+    /// person placing it and two more fields on every checkout is two more
+    /// things to read past.
+    ///
+    /// The phone is optional and says so: it never reaches the courier, and
+    /// telling somebody that is the difference between a field they fill in and
+    /// a field they wonder about.
+    private var recipientRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                withAnimation(.ggSnappy) {
+                    if app.deliveryRecipientName.isEmpty && !showRecipient {
+                        showRecipient = true
+                    } else {
+                        showRecipient = false
+                        app.deliveryRecipientName = ""
+                        app.deliveryRecipientPhone = ""
+                    }
+                }
+            } label: {
+                detailRow(icon: "person.fill", title: "Who's it for",
+                          value: app.deliveryRecipientName.isEmpty
+                              ? "Me" : app.deliveryRecipientName)
+            }
+            .buttonStyle(PressableStyle())
+
+            if showRecipient || !app.deliveryRecipientName.isEmpty {
+                VStack(spacing: 8) {
+                    TextField("Their name", text: $app.deliveryRecipientName)
+                        .textContentType(.name)
+                    TextField("Their phone (optional)", text: $app.deliveryRecipientPhone)
+                        .textContentType(.telephoneNumber)
+                        .keyboardType(.phonePad)
+                }
+                .font(.system(size: 14))
+                .foregroundStyle(GGColor.textPrimary)
+                .padding(12)
+                .glass(cornerRadius: 14, fillOpacity: 0.04, borderOpacity: 0.08)
+
+                Text("Your courier sees their name so they know who to hand it to. "
+                     + "The number stays with us.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -2005,6 +2072,38 @@ private struct DeliveryTrackingView: View {
                 }
             }
 
+            // A link somebody with no account can open (Phase 4 M6). Two
+            // things want it: sending a friend a link to watch dinner arrive,
+            // and — since an order can now be placed *for* somebody — giving a
+            // recipient who has no GojoGo account any way at all to see where
+            // their food is. Never on a collection: there is nothing moving to
+            // watch, and the person collecting is the person holding the code.
+            if !app.deliveryOrderIsPickup, let orderID = app.deliveryLiveOrderID {
+                if let link = app.deliveryShareLink, let url = URL(string: link.url) {
+                    ShareLink(item: url, message: Text(link.message)) {
+                        Text("Share this delivery")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(GGColor.textPrimary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .glass(cornerRadius: 16)
+                    }
+                } else {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        app.shareDeliveryOrder(orderID)
+                    } label: {
+                        Text("Share this delivery")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .glass(cornerRadius: 16)
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+            }
+
             if app.canCancelDeliveryOrder {
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -2248,6 +2347,66 @@ private struct DeliveryTrackingView: View {
                 }
             }
             .padding(.vertical, 4)
+
+            // A second question, and deliberately a second one (Phase 4 M6).
+            // The stars above are about the food; these are about whoever
+            // brought it. M1 refused to send the first to dispatch precisely
+            // because a two-star for a cold burger would otherwise land on the
+            // record of somebody who cycled it across town — so the app asks
+            // twice rather than pretending one answer covers both. Never on a
+            // collection: there is nobody to rate.
+            if !app.deliveryOrderIsPickup, let courier = app.deliveryCourier {
+                Divider().overlay(GGColor.white.opacity(0.12))
+                Text("And \(courier.name)?")
+                    .font(.system(size: 13))
+                    .foregroundStyle(GGColor.textTertiary)
+                HStack(spacing: 10) {
+                    ForEach(1...5, id: \.self) { star in
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            app.deliveryCourierRating = star
+                            if let id = app.deliveryLiveOrderID {
+                                app.rateCourier(id, stars: star)
+                            }
+                        } label: {
+                            Image(systemName: star <= app.deliveryCourierRating
+                                  ? "star.fill" : "star")
+                                .font(.system(size: 22))
+                                .foregroundStyle(GGColor.white
+                                    .opacity(star <= app.deliveryCourierRating ? 1 : 0.28))
+                        }
+                        .buttonStyle(PressableStyle())
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            // The only way money comes back after an order is settled
+            // (Phase 4 M6). Quiet, because most orders are fine and a loud
+            // "something wrong?" on every delivered screen invites a complaint
+            // rather than catching one.
+            if let id = app.deliveryLiveOrderID {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    app.showDeliveryDispute = true
+                } label: {
+                    Text("Something was wrong with this order")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .underline()
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $app.showDeliveryDispute) {
+                    if let order = app.deliveryLiveOrder {
+                        DeliveryProblemSheet(order: order)
+                            .environmentObject(app)
+                            .presentationDetents([.large])
+                            .presentationDragIndicator(.visible)
+                            .presentationBackground(GGColor.sheetBG)
+                    }
+                }
+                .id(id)
+            }
 
             Button {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()

@@ -171,6 +171,32 @@ interface OrderRepository extends JpaRepository<CustomerOrder, UUID> {
         UUID courierUserId, OrderStatus status, Pageable page);
 }
 
+interface DisputeRepository extends JpaRepository<Dispute, UUID> {
+
+    Optional<Dispute> findByOrderId(UUID orderId);
+
+    boolean existsByOrderId(UUID orderId);
+
+    /** The queue: open ones first, oldest first within that — a complaint
+     *  nobody has answered is the one worth reaching next, and the longest
+     *  unanswered is the one worth reaching first. */
+    @Query("select d from Dispute d order by "
+        + "case when d.state = com.gojogo.delivery.internal.DisputeState.OPEN then 0 else 1 end, "
+        + "d.createdAt asc")
+    List<Dispute> openFirst(Pageable page);
+
+    @Query("select d from Dispute d where d.state = :state order by d.createdAt asc")
+    List<Dispute> byState(@Param("state") DisputeState state, Pageable page);
+
+    /** What has already gone back on this order. Kept as a query rather than a
+     *  column, because one order has one dispute today and the sum is what
+     *  stays correct if that ever stops being true. */
+    @Query("select coalesce(sum(d.refundCents), 0) from Dispute d "
+        + "where d.order.id = :orderId "
+        + "and d.state = com.gojogo.delivery.internal.DisputeState.RESOLVED_REFUND")
+    int refundedOnOrder(@Param("orderId") UUID orderId);
+}
+
 interface SubOrderRepository extends JpaRepository<SubOrder, UUID> {
 
     /**

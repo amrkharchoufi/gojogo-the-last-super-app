@@ -247,6 +247,93 @@ class OrderPayments {
             : AccountRef.user(order.getCourierUserId(), Bucket.AVAILABLE);
     }
 
+    // MARK: Disputes (Phase 4 M6)
+
+    /**
+     * What one party actually received for this order — the ceiling on what a
+     * dispute may take back off them.
+     *
+     * <p>Computed from the order's own numbers rather than read out of the
+     * ledger, and the two agree by construction because settlement built its
+     * splits from exactly these. Reading the ledger instead would be the more
+     * "correct-sounding" version and is worse: it would need to know which
+     * entries belonged to which payee across an order that may already carry a
+     * partial release and an earlier refund, and getting that wrong is a number
+     * an operator would refund against.
+     *
+     * @param slice the kitchen a MERCHANT refund names; ignored for the others
+     */
+    long receivedOnOrder(CustomerOrder order, DisputePayer payer, SubOrder slice) {
+        return switch (payer) {
+            case MERCHANT -> slice == null || slice.getStatus() == SubOrderStatus.CANCELLED
+                ? 0 : merchantEarningsOn(slice);
+            // The courier's whole take on the order: every surviving slice's
+            // delivery fee plus the tip, which is the same sum settlement paid
+            // them. Zero on a collection, where there was no courier at all.
+            case COURIER -> order.isPickup() ? 0 : order.getSubOrders().stream()
+                .filter(sub -> sub.getStatus() != SubOrderStatus.CANCELLED)
+                .mapToLong(SubOrder::getDeliveryFeeCents)
+                .sum() + order.getTipCents();
+            // Commission on every surviving slice, plus the service fee the
+            // platform charges per checkout.
+            case PLATFORM -> order.getServiceFeeCents() + order.getSubOrders().stream()
+                .filter(sub -> sub.getStatus() != SubOrderStatus.CANCELLED)
+                .mapToLong(sub -> fees.platformFee(FeeApi.DELIVERY,
+                    sub.getSubtotalCents() - sub.getDiscountCents()))
+                .sum();
+        };
+    }
+
+    /**
+     * What that party could actually pay right now.
+     *
+     * <p>A separate question from {@link #receivedOnOrder}, and the difference
+     * is the whole reason a dispute can be refused: a merchant who was paid on
+     * Tuesday and withdrew on Wednesday received the money and cannot return
+     * it. Only EXTERNAL accounts may go negative, so the ledger would throw —
+     * asking first is what turns that into a sentence an operator can act on.
+     */
+    long availableForPayer(CustomerOrder order, DisputePayer payer, SubOrder slice) {
+        if (!required()) return Long.MAX_VALUE;
+        return switch (payer) {
+            case MERCHANT -> slice == null ? 0
+                : wallet.balancesOf(OwnerKind.MERCHANT, slice.getMerchantId()).available();
+            case COURIER -> order.getCourierUserId() == null ? 0
+                : wallet.balancesOf(OwnerKind.USER, order.getCourierUserId()).available();
+            // The platform's own account is the one place this question is
+            // uninteresting: it is where every commission in the system has
+            // been landing since 2e M3.
+            case PLATFORM -> wallet.balancesOf(OwnerKind.PLATFORM,
+                AccountRef.platform().ownerId()).available();
+        };
+    }
+
+    /**
+     * Money back, after the order was already settled.
+     *
+     * <p>{@code WalletApi.refund} and not a transfer, so the ledger says what
+     * this was: a reversal, with the original capture left exactly as it
+     * happened. The escrow is long empty by now — this moves money off whoever
+     * was paid and into the customer's spendable balance, which is why the
+     * caller has already proved they can cover it.
+     *
+     * <p>The key carries the dispute id rather than the order id, so a retried
+     * resolution is one movement while a second dispute on the same order (which
+     * cannot happen today, and might) would be its own.
+     */
+    void refundDispute(CustomerOrder order, UUID disputeId, DisputePayer payer,
+                       SubOrder slice, int amountCents) {
+        if (!required() || amountCents <= 0) return;
+        AccountRef from = switch (payer) {
+            case MERCHANT -> AccountRef.merchant(slice.getMerchantId(), Bucket.AVAILABLE);
+            case COURIER -> AccountRef.user(order.getCourierUserId(), Bucket.AVAILABLE);
+            case PLATFORM -> AccountRef.platform();
+        };
+        wallet.refund(from, AccountRef.user(order.getUserId(), Bucket.AVAILABLE), amountCents,
+            WalletApi.Reference.of(REF_KIND, order.getId(), "Refund for a reported problem"),
+            "order:" + order.getId() + ":dispute:" + disputeId);
+    }
+
     /** What the merchant actually earned on their slice, for their dashboard. */
     long merchantEarningsOn(SubOrder sub) {
         int base = sub.getSubtotalCents() - sub.getDiscountCents();

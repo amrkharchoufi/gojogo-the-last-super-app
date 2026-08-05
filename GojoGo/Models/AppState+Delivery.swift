@@ -446,6 +446,8 @@ extension AppState {
 
         let code = deliveryPromotionCode
         let tip = deliveryTipCents
+        let recipientName = deliveryRecipientName.trimmingCharacters(in: .whitespaces)
+        let recipientPhone = deliveryRecipientPhone.trimmingCharacters(in: .whitespaces)
 
         Task {
             do {
@@ -455,7 +457,9 @@ extension AppState {
                     note: "",
                     promotionCode: code,
                     tipCents: tip,
-                    pickup: pickup)
+                    pickup: pickup,
+                    recipientName: recipientName,
+                    recipientPhone: recipientPhone)
                 applyLiveOrder(order)
                 startDeliveryPolling()
                 deliveryPromotionCode = ""
@@ -521,6 +525,8 @@ extension AppState {
                     promotionCode: code,
                     tipCents: tip,
                     pickup: pickup,
+                    recipientName: deliveryRecipientName.trimmingCharacters(in: .whitespaces),
+                    recipientPhone: deliveryRecipientPhone.trimmingCharacters(in: .whitespaces),
                     scheduledFor: when)
                 showDeliveryCheckout = false
                 selectedDeliveryRestaurantID = nil
@@ -530,6 +536,8 @@ extension AppState {
                 deliveryTipCents = 0
                 deliveryWantsPickup = false
                 deliveryScheduledFor = nil
+                deliveryRecipientName = ""
+                deliveryRecipientPhone = ""
                 deliveryQuote = nil
                 deliveryBookings.insert(order, at: 0)
                 await refreshDeliveryBookings()
@@ -683,6 +691,12 @@ extension AppState {
     }
 
     func applyLiveOrder(_ order: OrderDTO) {
+        // Kept whole beside the unpacked fields (Phase 4 M6): the problem sheet
+        // needs the order's lines to ask which items were wrong, and refetching
+        // an order the screen is already looking at would be a request to say
+        // what it was just told.
+        deliveryLiveOrder = order
+        deliveryCourierRating = order.courierRating ?? 0
         guard let status = DeliveryStore.status(order.status) else {
             // Cancelled — nothing left to track, but somebody has to say why.
             // Since Phase 4 M1 a cancellation is usually not the customer's own:
@@ -863,5 +877,76 @@ extension AppState {
         guard let id = deliveryConversationID else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         openJobConversation(id)
+    }
+}
+
+
+// MARK: - Phase 4 M6: rating the courier, sharing, reporting a problem
+
+extension AppState {
+
+    /// Rates the courier — a different question from rating the order, which is
+    /// about the food. That separation is why it took five milestones to exist
+    /// at all, so the app keeps it: two controls, never one.
+    func rateCourier(_ orderID: UUID, stars: Int) {
+        Task {
+            do {
+                let order = try await DeliveryStore.shared.rateCourier(orderID, stars: stars)
+                applyLiveOrder(order)
+                showDeliveryNotice("Thanks — that helps the next person too.")
+            } catch {
+                showDeliveryNotice(Self.message(from: error,
+                                                fallback: "Couldn't send that rating."))
+            }
+        }
+    }
+
+    /// Mints (or re-fetches) the public link for this delivery. Idempotent
+    /// server-side, so a second tap is the same link rather than a second
+    /// secret for one order.
+    func shareDeliveryOrder(_ orderID: UUID) {
+        Task {
+            do {
+                deliveryShareLink = try await DeliveryStore.shared.shareOrder(orderID)
+            } catch {
+                showDeliveryNotice(Self.message(from: error,
+                                                fallback: "Couldn't make a link for that order."))
+            }
+        }
+    }
+
+    /// Loads whatever has been reported about this order, if anything.
+    func loadDeliveryDispute(_ orderID: UUID) async {
+        guard backendConnected else { return }
+        do {
+            deliveryDispute = try await DeliveryStore.shared.dispute(orderID)
+        } catch {
+            deliveryDispute = nil
+        }
+    }
+
+    /// Reports a problem. The claim is ids and quantities — the server prices
+    /// it off the order's own lines, so nothing here decides what anything is
+    /// worth.
+    func reportDeliveryProblem(_ orderID: UUID, reason: DisputeReasonChoice,
+                               note: String, items: [UUID: Int], subOrderID: UUID?) {
+        deliveryDisputeBusy = true
+        Task {
+            defer { deliveryDisputeBusy = false }
+            do {
+                let body = FileDisputeBody(
+                    subOrderId: subOrderID,
+                    reason: reason.rawValue,
+                    note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+                    items: items.filter { $0.value > 0 }
+                        .map { DisputedItemBody(menuItemId: $0.key, qty: $0.value) })
+                deliveryDispute = try await DeliveryStore.shared.fileDispute(orderID, body: body)
+                showDeliveryDispute = false
+                showDeliveryNotice("Reported. We'll look at it and come back to you.")
+            } catch {
+                showDeliveryNotice(Self.message(from: error,
+                                                fallback: "Couldn't send that report."))
+            }
+        }
     }
 }

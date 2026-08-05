@@ -64,7 +64,7 @@ class PickupOrderTests {
         delivery = new DeliveryService(merchants, menuItems, orders, addresses, events,
             payments, promotions, mock(MerchantStorefrontService.class),
             mock(OrderFulfilmentService.class), mock(DispatchApi.class),
-            new DeliveryPolicy(new StubConfig()), mock(MediaDocumentApi.class), 99);
+            new DeliveryPolicy(new StubConfig()), mock(MediaDocumentApi.class), mock(com.gojogo.share.ShareApi.class), 99);
 
         Merchant forno = merchant(FORNO, "Forno Nero", 300, 25, true, 10, "Side door, Rue Ali");
         Merchant sushi = merchant(SUSHI, "Kaido Sushi", 400, 40, false, null, "");
@@ -118,7 +118,7 @@ class PickupOrderTests {
     void aDeliveryStillPricesExactlyAsItDid() {
         OrderDto placed = delivery.place(ME, new PlaceOrderRequest(FORNO,
             List.of(new OrderLineRequest(PIZZA_ITEM, 1)), null, null, "Home", "",
-            null, 250, null, null, null));
+            null, 250, null, null, null, null, null));
 
         assertThat(placed.fulfilmentKind()).isEqualTo("DELIVERY");
         assertThat(placed.deliveryFeeCents()).isEqualTo(300);
@@ -207,7 +207,7 @@ class PickupOrderTests {
     void aDeliveryTellsItTheOppositeAndPassesTheRealFee() {
         delivery.place(ME, new PlaceOrderRequest(FORNO,
             List.of(new OrderLineRequest(PIZZA_ITEM, 1)), null, null, "Home", "",
-            null, 0, null, null, null));
+            null, 0, null, null, null, null, null));
 
         verify(promotions).resolve(eq(FORNO), eq(ME), isNull(), eq(2_000), eq(300), eq(false));
     }
@@ -216,7 +216,7 @@ class PickupOrderTests {
 
     private PlaceOrderRequest pickup(int tipCents, BasketRequest... baskets) {
         return new PlaceOrderRequest(null, null, List.of(baskets), null, null, "",
-            null, tipCents, null, "PICKUP", null);
+            null, tipCents, null, "PICKUP", null, null, null);
     }
 
     private static BasketRequest basket(UUID merchantId, UUID itemId, int qty) {
@@ -228,6 +228,9 @@ class PickupOrderTests {
                                      String pickupAddress) {
         Merchant merchant = new Merchant(UUID.randomUUID(), name, "Kitchen", null, 33.57, -7.58);
         set(merchant, "id", id);
+        // A restaurant is created closed and published by its owner. Checkout
+        // reads that flag since Phase 4 M6, so an orderable one has to be open.
+        merchant.setActive(true);
         set(merchant, "deliveryFeeCents", deliveryFeeCents);
         set(merchant, "etaMinutes", etaMinutes);
         set(merchant, "pickupEnabled", pickupEnabled);
