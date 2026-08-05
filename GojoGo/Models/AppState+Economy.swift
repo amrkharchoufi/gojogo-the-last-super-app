@@ -10,20 +10,15 @@ import SwiftUI
 extension AppState {
 
     /// Replaces the marketplace catalog with live listings. The newest listing
-    /// becomes the featured hero; the rest fill the grid. Falls back to whatever
-    /// is cached on failure (empty backend keeps the sample catalog).
+    /// becomes the featured hero; the rest fill the grid. A failed call keeps
+    /// whatever is cached — a request that didn't come back says nothing about
+    /// what's for sale — but a call that *did* come back is adopted whole.
     func refreshEconomy() async {
         guard backendConnected else { return }
         do {
             let page = try await EconomyStore.shared.browse()
-            if !page.products.isEmpty {   // empty prod: keep samples
-                economyNextBefore = page.nextBefore
-                withAnimation(.easeOut(duration: 0.25)) {
-                    featuredProduct = page.products.first ?? featuredProduct
-                    products = Array(page.products.dropFirst())
-                }
-                schedulePersist()
-            }
+            economyNextBefore = page.nextBefore
+            adoptBrowsePage(page.products)
         } catch {
             #if DEBUG
             print("Economy refresh failed: \(error.localizedDescription)")
@@ -32,28 +27,56 @@ extension AppState {
         // Browse can't see the seller's paused or sold items, so the shelf is
         // fetched separately — and it's what puts the count on the chrome chip.
         await refreshSellerListings()
-        dropGhostListings()
     }
 
-    /// Clears catalog cards that claim to be this user's but that the server has
-    /// never heard of. Publishing used to leave one behind whenever the POST
-    /// failed (or ran before the backend had connected), and the card persisted
-    /// with the rest of the cached session — so an interrupted publish left the
-    /// seller looking at a listing no buyer could see, on an account whose shelf
-    /// didn't list it. Publishing no longer invents them; this clears the ones
-    /// already sitting in caches out there.
+    /// Settles the catalog on what browse just served, and drops what it didn't.
     ///
-    /// Deliberately after `refreshSellerListings()`: `mine()` tracks every
-    /// listing the user owns, paused and sold included, which browse can't see.
-    /// Anything still unaccounted for by then is genuinely not on the server.
-    private func dropGhostListings() {
-        guard backendConnected, !user.handle.isEmpty else { return }
-        func isGhost(_ product: Product) -> Bool {
-            product.seller == user.handle && !EconomyStore.shared.isRemote(product.id)
+    /// This used to run only when the page came back non-empty ("empty prod:
+    /// keep samples", from when there was a sample catalog to keep — there
+    /// isn't any more, `SampleData.products` is empty and the screen has a real
+    /// empty state). What that guard actually did was make an empty marketplace
+    /// the one case where nothing could ever leave the cached catalog: the last
+    /// listing being deleted froze the previous page on screen for good, and no
+    /// refresh, relaunch, or reinstall of the account's data could clear it.
+    /// That's how a deleted listing kept its detail page — hero card, price,
+    /// "Message" button and all — on one device and no other.
+    ///
+    /// So: an answer of "nothing for sale" is an answer, and it replaces the
+    /// catalog like any other. Cards browse can't be expected to return are
+    /// kept explicitly (`isKeptFromBrowse`) rather than by leaving stale cards
+    /// in place and hoping. This also subsumes the narrower sweep that cleared
+    /// the seller's own unpublished drafts: a card the server has never vouched
+    /// for isn't the user's to keep, whoever it claims to be selling.
+    private func adoptBrowsePage(_ served: [Product]) {
+        let servedIDs = Set(served.map(\.id))
+        let kept = products.filter { isKeptFromBrowse($0, servedIDs: servedIDs) }
+        withAnimation(.easeOut(duration: 0.25)) {
+            featuredProduct = served.first ?? SampleData.featuredProduct
+            products = Array(served.dropFirst()) + kept
         }
-        guard products.contains(where: isGhost) else { return }
-        withAnimation(.easeOut(duration: 0.2)) { products.removeAll(where: isGhost) }
+        // A seeded card that browse now serves is part of the catalog proper,
+        // and belongs in the cache with the rest of it.
+        economySeededListingIDs.subtract(servedIDs)
+        economySeededListingIDs.formIntersection(Set(products.map(\.id)))
         schedulePersist()
+        // The dropped card can be the one on screen right now — deleted by its
+        // seller while a buyer reads it. Saying so beats leaving them on a
+        // detail page offering to message about it.
+        if let open = browsingProduct, liveProduct(id: open.id) == nil {
+            closeProduct()
+            showEconomyNotice("That listing isn't available any more.")
+        }
+    }
+
+    /// Whether a catalog card survives a browse page that didn't include it.
+    /// Only two do, and both are listings the server vouched for this session:
+    /// a paused or sold item seeded from the seller's own shelf (browse filters
+    /// those out by design), and whatever detail sheet is open right now, so a
+    /// refresh landing mid-read doesn't empty the screen under the reader.
+    private func isKeptFromBrowse(_ product: Product, servedIDs: Set<UUID>) -> Bool {
+        guard !servedIDs.contains(product.id),
+              EconomyStore.shared.isRemote(product.id) else { return false }
+        return product.status != .active || browsingProduct?.id == product.id
     }
 
     /// Loads the next page of listings when the given product nears the bottom.
@@ -273,7 +296,11 @@ extension AppState {
         withAnimation(.ggSnappy) {
             sellerListings.removeAll { $0.id == listingID }
             products.removeAll { $0.id == listingID }
+            // The hero is a catalog card like any other, and a deleted listing
+            // that keeps the front page is the loudest place to leave one.
+            if featuredProduct.id == listingID { featuredProduct = SampleData.featuredProduct }
         }
+        economySeededListingIDs.remove(listingID)
         if browsingProduct?.id == listingID { browsingProduct = nil }
         if editingListing?.id == listingID { editingListing = nil }
         Task {
@@ -436,10 +463,15 @@ extension AppState {
 
     /// Inserts a fetched listing into the catalog (idempotent) so `liveProduct`
     /// can resolve it for the detail sheet without disturbing browse order.
+    ///
+    /// Marked as seeded, which keeps it out of the cached catalog on disk: what
+    /// arrives here was fetched to be opened once, and a card that outlives the
+    /// session it was opened in outlives the listing behind it.
     private func seedCatalog(_ product: Product) {
         guard featuredProduct.id != product.id,
               !products.contains(where: { $0.id == product.id }) else { return }
         products.append(product)
+        economySeededListingIDs.insert(product.id)
     }
 
     /// Opens a thread parked while the caller finished My World setup.
