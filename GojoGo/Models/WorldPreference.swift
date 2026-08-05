@@ -16,6 +16,7 @@ enum WorldPreference {
         static let threadBackgrounds = "world.threadBackgrounds"
         static let muted = "world.mutedConversations"
         static let dismissedContext = "world.dismissedContextCards"
+        static let deletedMessages = "world.deletedMessages"
     }
 
     private static let store = UserDefaults.standard
@@ -88,5 +89,54 @@ enum WorldPreference {
     static var dismissedContextCards: Set<UUID> {
         get { Set((store.stringArray(forKey: Key.dismissedContext) ?? []).compactMap(UUID.init(uuidString:))) }
         set { store.set(newValue.map(\.uuidString), forKey: Key.dismissedContext) }
+    }
+
+    // MARK: Deleted messages
+    //
+    // Deleting a message is a server-side fact — it has to be, or it lasts until
+    // the next page fetch — and this is only the receipt for the moment before
+    // the backend has heard about it. Something has to hold the line while the
+    // request is in flight, or fails, or the phone is in a tunnel: the thread
+    // polls, the message is still on the page, and the bubble the user just
+    // deleted comes back.
+    //
+    // Deliberately short-lived. An id is dropped the instant the server confirms
+    // it, because from then on the message is filtered before it is ever sent —
+    // so what is left here is only what hasn't been confirmed, and a set that
+    // grows for the life of the install is exactly what this is not.
+
+    /// Messages deleted in this thread that the backend may not know about yet.
+    static func deletedMessages(in conversationID: UUID) -> Set<UUID> {
+        Set((deletedMessageMap[conversationID.uuidString] ?? []).compactMap(UUID.init(uuidString:)))
+    }
+
+    static func markMessageDeleted(_ messageID: UUID, in conversationID: UUID) {
+        var map = deletedMessageMap
+        var ids = map[conversationID.uuidString] ?? []
+        guard !ids.contains(messageID.uuidString) else { return }
+        ids.append(messageID.uuidString)
+        map[conversationID.uuidString] = ids
+        store.set(map, forKey: Key.deletedMessages)
+    }
+
+    /// Called once the backend has the deletion; the local note has nothing left
+    /// to do.
+    static func clearMessageDeleted(_ messageID: UUID, in conversationID: UUID) {
+        var map = deletedMessageMap
+        guard var ids = map[conversationID.uuidString] else { return }
+        ids.removeAll { $0 == messageID.uuidString }
+        map[conversationID.uuidString] = ids.isEmpty ? nil : ids
+        store.set(map, forKey: Key.deletedMessages)
+    }
+
+    /// Deleting the whole thread makes every note about it redundant.
+    static func clearDeletedMessages(in conversationID: UUID) {
+        var map = deletedMessageMap
+        guard map.removeValue(forKey: conversationID.uuidString) != nil else { return }
+        store.set(map, forKey: Key.deletedMessages)
+    }
+
+    private static var deletedMessageMap: [String: [String]] {
+        store.dictionary(forKey: Key.deletedMessages) as? [String: [String]] ?? [:]
     }
 }

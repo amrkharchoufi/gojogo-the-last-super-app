@@ -128,9 +128,22 @@ final class WorldMessageArchive {
             lock.lock(); memory[conversationId] = []; lock.unlock()
             return []
         }
-        let messages = archived.map(Self.toMessage)
+        // Builds before the placeholders were kept out (below) wrote them here
+        // as ordinary text, which is what turned one bad refetch into a thread
+        // of permanent "couldn't be decrypted" bubbles: the archive is the copy
+        // the merge trusts, so a stored placeholder outranks every later attempt
+        // at the real message forever. Dropping them on the way in is the
+        // migration — there is no version to check and no content to lose.
+        let messages = archived.filter { !Self.isPlaceholder($0) }.map(Self.toMessage)
         lock.lock(); memory[conversationId] = messages; lock.unlock()
         return messages
+    }
+
+    /// Whether an archived row is one of this build's "couldn't open it"
+    /// sentences rather than something somebody sent.
+    private static func isPlaceholder(_ a: ArchivedMessage) -> Bool {
+        a.kind == WorldMessageKind.text.rawValue
+            && WorldMessagePlaceholder.all.contains(a.text)
     }
 
     /// The list-row preview this device can derive without the server —
@@ -228,10 +241,18 @@ final class WorldMessageArchive {
     // MARK: Mapping
 
     private static func toArchived(_ m: WorldMessage) -> ArchivedMessage? {
+        // A payload this device couldn't open is never written down, for the
+        // same reason `WorldEnvelopeVault` never banks a failure: some of them
+        // are transient — the store is locked before first unlock, the profile
+        // id hasn't loaded yet — and archiving the sentence makes a message that
+        // would open a second later unreadable for good. The message isn't lost
+        // by leaving it out; it is on the server, and the next pass re-derives
+        // whatever it can. What is lost by keeping it is the real message.
+        guard !m.isUndecryptable else { return nil }
         // Timestamps are re-derived, and a reaction overlay's lifted copy is
         // transient — but both already never enter `messages`. Everything that
         // does is worth keeping.
-        ArchivedMessage(
+        return ArchivedMessage(
             id: m.id, kind: m.kind.rawValue, text: m.text, fromUser: m.fromUser,
             fileName: m.fileName, fileMeta: m.fileMeta,
             readLabel: m.readLabel, readAt: m.readAt,

@@ -1,5 +1,20 @@
 import SwiftUI
 
+/// The sentences shown in place of a payload this device couldn't open.
+///
+/// Named, and at file scope, because two layers have to agree on them. They are
+/// not content: `WorldMessageArchive` refuses to store them, for the same reason
+/// `WorldEnvelopeVault` never banks a failure — some of these are transient (the
+/// store is locked before first unlock, the profile id hasn't loaded yet), and
+/// writing one down turns a message that would open a moment later into a
+/// permanent error bubble. Builds before that rule wrote them anyway, so the set
+/// doubles as the migration that clears them back out.
+enum WorldMessagePlaceholder {
+    static let couldNotDecrypt = "This message couldn't be decrypted."
+    static let wasNotEncrypted = "This message wasn't encrypted and was not shown."
+    static let all: Set<String> = [couldNotDecrypt, wasNotEncrypted]
+}
+
 /// Messaging-module API surface (My World) plus DTO→UI-model mapping. Server
 /// UUIDs are reused as WorldConversation/WorldMessage ids, so a mutation can
 /// address the backend directly. `liveConversationIds` lets AppState route a
@@ -97,6 +112,13 @@ final class MessagingStore {
         try await APIClient.shared.postNoContent(
             "/v1/conversations/\(conversationId.uuidString.lowercased())/messages/\(messageId.uuidString.lowercased())/reactions",
             body: ReactBody(tapback: tapback.rawValue))
+    }
+
+    /// Deletes a message for this account only. The other participant keeps
+    /// their copy — this is the reader's own screen, not an unsend.
+    func deleteMessage(_ conversationId: UUID, message messageId: UUID) async throws {
+        try await APIClient.shared.delete(
+            "/v1/conversations/\(conversationId.uuidString.lowercased())/messages/\(messageId.uuidString.lowercased())")
     }
 
     func unreact(_ conversationId: UUID, message messageId: UUID) async throws {
@@ -373,14 +395,14 @@ final class MessagingStore {
                 // reassured.
                 return WorldEnvelopePayload(
                     kind: Self.undecryptableKind,
-                    text: "This message wasn't encrypted and was not shown.")
+                    text: WorldMessagePlaceholder.wasNotEncrypted)
             } catch {
                 #if DEBUG
                 print("Envelope open failed (\(dto.id)): \(error)")
                 #endif
                 return WorldEnvelopePayload(
                     kind: Self.undecryptableKind,
-                    text: "This message couldn't be decrypted.")
+                    text: WorldMessagePlaceholder.couldNotDecrypt)
             }
         }
         // No body on the wire, or no profile id yet. A payload the extension or
@@ -398,7 +420,7 @@ final class MessagingStore {
         // Transient by construction — messaging hasn't finished connecting, so
         // this is never banked and opens fine on the next pass.
         return WorldEnvelopePayload(kind: Self.undecryptableKind,
-                                    text: "This message couldn't be decrypted.")
+                                    text: WorldMessagePlaceholder.couldNotDecrypt)
     }
 
     /// Marks a payload this device couldn't open. Not a wire kind — nothing

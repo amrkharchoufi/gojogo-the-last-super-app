@@ -30,7 +30,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Single-table DynamoDB access for the messaging module. Key design:
@@ -583,11 +585,82 @@ class MessagingRepository {
             .key(Map.of("pk", s("USER#" + userId), "sk", s("CONV#" + convId))));
     }
 
+    /**
+     * Everything one user has hidden in one thread: the whole-thread watermark,
+     * and the individual messages they deleted after it.
+     *
+     * <p>One item, because both answer the same question on the same read path —
+     * "what is this user not served any more" — and the message list can afford
+     * exactly one point lookup to ask it.
+     */
+    record HiddenHistory(Instant clearedAt, Set<UUID> deletedMessageIds) {
+        static final HiddenHistory NONE = new HiddenHistory(null, Set.of());
+    }
+
+    /**
+     * Records that this user cleared the thread's history at {@code at}: every
+     * message stored at or before that instant is invisible to them from now on.
+     *
+     * <p>Its own item rather than a field on the membership row, and that is the
+     * whole point — the membership row does <em>not</em> survive deletion, and
+     * the first new message re-creates it ({@link #appendMessage}). A watermark
+     * that lived there would be wiped by the very event it has to outlive, and
+     * the thread would come back carrying every message the user deleted. Kept
+     * per-user: the other participant's copy is theirs and is untouched.
+     *
+     * <p>The whole item is replaced, which drops any per-message tombstones with
+     * it. That is the pruning: a message deleted before the watermark is already
+     * behind it, and naming it twice keeps a set growing that nothing reads.
+     */
+    void clearHistory(UUID userId, UUID convId, Instant at) {
+        db().putItem(r -> r.tableName(table).item(Map.of(
+            "pk", s("USER#" + userId),
+            "sk", s("CLEARED#" + convId),
+            "convId", s(convId.toString()),
+            "clearedAt", s(at.toString()))));
+    }
+
+    /**
+     * Hides one message from one participant. The message itself is untouched —
+     * the other side keeps it, exactly as deleting a whole thread leaves theirs
+     * alone.
+     *
+     * <p>An {@code ADD} onto a string set: idempotent, so a client retrying a
+     * delete it never got an answer to costs nothing, and it creates the item
+     * when the thread was never cleared. {@code SET} on the plain attribute in
+     * the same expression keeps a row created this way readable like any other.
+     */
+    void deleteMessageForUser(UUID userId, UUID convId, UUID msgId) {
+        db().updateItem(r -> r.tableName(table)
+            .key(Map.of("pk", s("USER#" + userId), "sk", s("CLEARED#" + convId)))
+            .updateExpression("ADD deletedMsgIds :m SET convId = :c")
+            .expressionAttributeValues(Map.of(
+                ":m", AttributeValue.fromSs(List.of(msgId.toString())),
+                ":c", s(convId.toString()))));
+    }
+
+    /** What this user has hidden in this thread — never null. */
+    HiddenHistory hiddenHistory(UUID userId, UUID convId) {
+        var item = db().getItem(r -> r.tableName(table).key(Map.of(
+            "pk", s("USER#" + userId), "sk", s("CLEARED#" + convId)))).item();
+        if (item == null || item.isEmpty()) return HiddenHistory.NONE;
+        Instant clearedAt = item.containsKey("clearedAt")
+            ? Instant.parse(item.get("clearedAt").s()) : null;
+        Set<UUID> deleted = item.containsKey("deletedMsgIds")
+            ? item.get("deletedMsgIds").ss().stream().map(UUID::fromString)
+                .collect(Collectors.toUnmodifiableSet())
+            : Set.of();
+        return new HiddenHistory(clearedAt, deleted);
+    }
+
     /** Re-creates the membership row of a participant who left, so the thread is
-     *  back in their list (read from the start, since their unread was dropped). */
-    Membership rejoin(UUID userId, ConversationMeta meta) {
+     *  back in their list (read from the start, since their unread was dropped).
+     *  Activity time and preview are passed in rather than read off the meta:
+     *  a thread re-opened after a delete has no history <em>for this user</em>,
+     *  and must not come back advertising the last message they deleted. */
+    Membership rejoin(UUID userId, ConversationMeta meta, Instant lastActivityAt, String preview) {
         Map<String, AttributeValue> item = membershipItem(
-            userId, meta.id(), 0, meta.lastActivityAt(), meta.preview(), meta.title(),
+            userId, meta.id(), 0, lastActivityAt, preview, meta.title(),
             !"DIRECT".equals(meta.type()), false, false, null);
         db().putItem(r -> r.tableName(table).item(item));
         return readMembership(item);

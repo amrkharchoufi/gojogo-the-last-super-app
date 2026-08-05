@@ -1159,6 +1159,9 @@ final class AppState: ObservableObject {
         }
         worldMutedConversations.remove(id)
         WorldPreference.mutedConversations = worldMutedConversations
+        // Notes about individual messages in a thread that is going entirely —
+        // the server prunes its own the same way, for the same reason.
+        WorldPreference.clearDeletedMessages(in: id)
         clearWorldContextCardPreference(id)
         // A deleted thread's local history goes with it — including the opened
         // payloads, which are that history in its wire form.
@@ -1496,14 +1499,54 @@ final class AppState: ObservableObject {
         worldReactionTarget = nil
     }
 
+    /// Deletes one message from this account's copy of a thread.
+    ///
+    /// Taking it off the screen and out of the archive is only half of it, and on
+    /// its own it does not hold: the message is still on the server, the thread
+    /// re-fetches its newest page on every open and on a poll, and the bubble
+    /// comes back. So the backend is told — it hides the message for this account
+    /// alone — and a local note covers the window before it answers, or the case
+    /// where it never does. Same shape as deleting a whole conversation, at
+    /// message scale.
+    ///
+    /// Not an unsend: the other person keeps their copy. "Delete" lives in a menu
+    /// beside Copy and Translate, which is a menu about your own screen.
     func deleteWorldMessage(_ messageID: UUID) {
         guard let id = selectedWorldConversationID,
               let i = worldConversations.firstIndex(where: { $0.id == id }) else { return }
+        guard let deleted = worldConversations[i].messages.first(where: { $0.id == messageID })
+        else { return }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             worldConversations[i].messages.removeAll { $0.id == messageID }
         }
         archiveWorldMessages(id)
         worldReactionTarget = nil
+        // A thread the server never heard of has nothing to tell it about.
+        guard MessagingStore.shared.isLive(id) else { return }
+        WorldPreference.markMessageDeleted(messageID, in: id)
+        // A bubble still waiting for its echo is only known by the id this phone
+        // invented for it, which the server cannot act on — a photo can be
+        // uploading for long enough to make that a real thing to do. The note is
+        // still taken; `applyIncomingMessage` carries it onto the real id the
+        // moment the echo says what it is.
+        guard deleted.sentAt != nil else { return }
+        confirmWorldMessageDeletion(messageID, in: id)
+    }
+
+    /// Tells the backend about a deleted message and drops the local note once it
+    /// has: from then on the message is filtered before it is ever sent, so
+    /// keeping the note would only grow a set nothing reads. A failure leaves it
+    /// in place, and the next reload — which will see the message still on the
+    /// page — asks again.
+    func confirmWorldMessageDeletion(_ messageID: UUID, in conversationID: UUID) {
+        Task {
+            do {
+                try await MessagingStore.shared.deleteMessage(conversationID, message: messageID)
+                WorldPreference.clearMessageDeleted(messageID, in: conversationID)
+            } catch {
+                // Left marked on purpose — the reload retry is the recovery.
+            }
+        }
     }
 
     // MARK: My World — polls

@@ -1,6 +1,7 @@
 package com.gojogo.messaging.internal;
 
 import com.gojogo.messaging.internal.MessagingRepository.ConversationMeta;
+import com.gojogo.messaging.internal.MessagingRepository.HiddenHistory;
 import com.gojogo.messaging.internal.MessagingRepository.Membership;
 import com.gojogo.messaging.internal.MessagingRepository.StoredMessage;
 import com.gojogo.messaging.internal.MessagingRepository.WorldProfile;
@@ -108,9 +109,20 @@ class MessagingService {
                     meta = withContext(meta, context);
                 }
                 ConversationMeta resolved = meta;
-                // Re-opening a thread you left puts it back in your list.
+                // Re-opening a thread you left puts it back in your list — as an
+                // empty thread, not the one you deleted. The row it comes back
+                // with is the row the list draws before any message is fetched,
+                // so it must not carry the last preview or the activity time of
+                // history this user cleared.
                 Membership m = repo.getMembership(userId, resolved.id())
-                    .orElseGet(() -> repo.rejoin(userId, resolved));
+                    .orElseGet(() -> {
+                        Instant clearedAt = repo.hiddenHistory(userId, resolved.id()).clearedAt();
+                        boolean emptied = clearedAt != null
+                            && !resolved.lastActivityAt().isAfter(clearedAt);
+                        return repo.rejoin(userId, resolved,
+                            emptied ? clearedAt : resolved.lastActivityAt(),
+                            emptied ? null : resolved.preview());
+                    });
                 return toConversationDto(resolved, m);
             }
         }
@@ -147,15 +159,50 @@ class MessagingService {
     MessagesResponse listMessages(UUID userId, UUID convId, Instant before, int limit) {
         ConversationMeta meta = requireParticipant(userId, convId);
         int capped = Math.min(Math.max(limit, 1), 50);
-        List<StoredMessage> stored = repo.listMessages(convId, before, capped);
-        List<UUID> senderIds = stored.stream().map(StoredMessage::senderId).toList();
+        HiddenHistory hidden = repo.hiddenHistory(userId, convId);
+        Instant clearedAt = hidden.clearedAt();
+        // Paging backwards past your own delete can only find messages you
+        // deleted, so it isn't asked for at all.
+        if (clearedAt != null && before != null && !before.isAfter(clearedAt)) {
+            return new MessagesResponse(List.of(), null, null);
+        }
+        Page page = trim(repo.listMessages(convId, before, capped), capped, hidden);
+        List<UUID> senderIds = page.messages().stream().map(StoredMessage::senderId).toList();
         Map<UUID, ProfileDto> authors = profiles.findByIds(senderIds);
         Map<UUID, WorldProfile> worlds = repo.worldProfilesByIds(senderIds);
-        List<MessageDto> messages = stored.stream().map(sm -> toMessageDto(sm, authors, worlds)).toList();
-        Instant nextBefore = stored.size() == capped && !stored.isEmpty()
-            ? stored.get(stored.size() - 1).createdAt() : null;
+        List<MessageDto> messages = page.messages().stream()
+            .map(sm -> toMessageDto(sm, authors, worlds)).toList();
         UUID peerReadMessageId = peerReadCutoff(userId, convId, meta);
-        return new MessagesResponse(messages, nextBefore, peerReadMessageId);
+        return new MessagesResponse(messages, page.nextBefore(), peerReadMessageId);
+    }
+
+    /** A newest-first page after the caller's own history watermark is applied. */
+    record Page(List<StoredMessage> messages, Instant nextBefore) {}
+
+    /**
+     * Drops everything the caller has hidden from a newest-first page, and
+     * decides whether there is anything older left to ask for.
+     *
+     * <p>The cursor is the subtle part, and the two kinds of hiding behave
+     * differently in it. The watermark is a floor: the page is newest-first, so
+     * the moment one message falls at or before it, everything beyond does too —
+     * there is no older page, and a cursor would hand the client a request that
+     * can only come back empty. A deleted <em>message</em> proves nothing of the
+     * sort, and the cursor is taken from the stored page rather than the visible
+     * one so that deleting the oldest message on a page cannot cut the thread
+     * off above it.
+     */
+    static Page trim(List<StoredMessage> page, int capped, HiddenHistory hidden) {
+        Instant clearedAt = hidden.clearedAt();
+        List<StoredMessage> visible = page.stream()
+            .filter(m -> clearedAt == null || m.createdAt().isAfter(clearedAt))
+            .filter(m -> !hidden.deletedMessageIds().contains(m.id()))
+            .toList();
+        boolean reachedWatermark = clearedAt != null
+            && page.stream().anyMatch(m -> !m.createdAt().isAfter(clearedAt));
+        boolean moreOlder = page.size() == capped && !reachedWatermark;
+        Instant nextBefore = moreOlder ? page.get(page.size() - 1).createdAt() : null;
+        return new Page(visible, nextBefore);
     }
 
     /**
@@ -389,8 +436,42 @@ class MessagingService {
         repo.setPinned(userId, convId, pinned);
     }
 
+    /**
+     * Deletes the thread for one participant. The other side keeps theirs.
+     *
+     * <p>Dropping the membership row is only the visible half, and on its own it
+     * does not survive: the row is what puts the thread in the list, and both a
+     * new message ({@link MessagingRepository#appendMessage}) and re-opening the
+     * same 1:1 (the reuse path in {@code createConversation}) put it straight
+     * back — pointing at the same conversation, whose messages were never
+     * touched. The user deleted a chat and the server replayed all of it into
+     * the new one. The watermark is the durable half: from here on this user is
+     * served nothing stored at or before this instant, whatever happens to the
+     * row.
+     */
     void leave(UUID userId, UUID convId) {
+        repo.clearHistory(userId, convId, Instant.now());
         repo.deleteMembership(userId, convId);
+    }
+
+    /**
+     * Deletes one message for one participant — the same promise the thread-level
+     * delete makes, at message scale. The stored message is untouched and the
+     * other side keeps their copy; this only records that the caller is no longer
+     * served it.
+     *
+     * <p>Deliberately not an unsend. "Delete" sits in a menu beside Copy and
+     * Translate, which is a menu about the reader's own screen, and reaching out
+     * of it to take a message off somebody else's phone is a different feature
+     * that should have to say so.
+     *
+     * <p>Idempotent by construction, and it does not check that the message
+     * exists: a client can delete a bubble whose send is still in flight, and the
+     * only wrong answer there is one that leaves the message coming back.
+     */
+    void deleteMessage(UUID userId, UUID convId, UUID msgId) {
+        requireParticipant(userId, convId);
+        repo.deleteMessageForUser(userId, convId, msgId);
     }
 
     // ---- mapping / helpers ------------------------------------------------
