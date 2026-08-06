@@ -164,25 +164,38 @@ struct SearchView: View {
                 .foregroundStyle(GGColor.textPrimary.opacity(0.92))
                 .focused($focused)
                 .lineLimit(2...4)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(SearchScope.allCases, id: \.self) { s in
-                        Button {
-                            withAnimation(.ggSnappy) { scope = s }
-                        } label: {
-                            MonoChip(text: s.label, active: scope == s)
+            // Scopes and the ask-Madeleine arrow share one row, as they always
+            // have. Phase 5 split them onto two — six scopes don't fit where
+            // four did — which pushed the arrow onto a line of its own and left
+            // the last chip guillotined mid-word. They still don't fit, so the
+            // strip scrolls; the fade is what says so, rather than a hard cut.
+            HStack(spacing: 10) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(SearchScope.allCases, id: \.self) { s in
+                            Button {
+                                withAnimation(.ggSnappy) { scope = s }
+                            } label: {
+                                MonoChip(text: s.label, active: scope == s)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                    }
+                    .padding(.trailing, 4)
+                }
+                .mask(scopeFade)
+
+                // A fixed slot: the spinner comes and goes on every keystroke,
+                // and the arrow must not move when it does.
+                ZStack {
+                    if searching {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(GGColor.textTertiary)
                     }
                 }
-            }
-            HStack(spacing: 8) {
-                if searching {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(GGColor.textTertiary)
-                }
-                Spacer()
+                .frame(width: 14)
+
                 Button {
                     focused = false
                     if !query.isEmpty { app.sendMadeleine(query); app.activeTab = .madeleine }
@@ -198,6 +211,20 @@ struct SearchView: View {
         }
         .padding(18)
         .glass(cornerRadius: 22, fillOpacity: 0.06, borderOpacity: 0.12)
+    }
+
+    /// Opaque until the last few points, so a chip running past the edge
+    /// dissolves into the card instead of being cut through the middle of a
+    /// letter. Leading stays hard — nothing is ever hidden on that side.
+    private var scopeFade: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: 0.9),
+                .init(color: .clear, location: 1)
+            ],
+            startPoint: .leading, endPoint: .trailing
+        )
     }
 
     // MARK: Results
