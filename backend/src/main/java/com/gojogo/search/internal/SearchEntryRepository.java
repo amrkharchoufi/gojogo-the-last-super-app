@@ -32,12 +32,29 @@ interface SearchEntryRepository extends JpaRepository<SearchEntry, UUID> {
     List<SearchEntry> search(@Param("q") String q, @Param("kind") String kind,
                              @Param("limit") int limit);
 
-    /** The trending rail: pure engagement order, per kind or across all. */
+    /**
+     * The trending rail: engagement earned recently, decaying with age.
+     *
+     * <p>This used to order by lifetime {@code popularity}, which made it a
+     * leaderboard — and since nothing ever refreshed that column after a
+     * document was created, in practice it ordered by {@code updated_at} and
+     * the rail was "newest first" wearing a popularity label. Both remain as
+     * tiebreakers beneath the score, which is what decides the order now.
+     */
     @Query(value = """
         SELECT * FROM search.document
         WHERE active AND (:kind IS NULL OR kind = :kind)
-        ORDER BY popularity DESC, updated_at DESC
+        ORDER BY trend_score DESC, popularity DESC, updated_at DESC
         LIMIT :limit
         """, nativeQuery = true)
     List<SearchEntry> trending(@Param("kind") String kind, @Param("limit") int limit);
+
+    /** The recompute's claim order: never sampled first, then stalest. */
+    @Query(value = """
+        SELECT * FROM search.document
+        WHERE active
+        ORDER BY sampled_at ASC NULLS FIRST
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<SearchEntry> dueForTrendSample(@Param("limit") int limit);
 }

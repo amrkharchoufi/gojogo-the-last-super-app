@@ -53,6 +53,17 @@ class SearchEntry {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
+    /** Engagement earned recently, decaying with age. See V50 for the shape. */
+    @Column(name = "trend_score", nullable = false)
+    private double trendScore;
+
+    @Column(name = "sampled_popularity", nullable = false)
+    private long sampledPopularity;
+
+    /** Null until the first sample, which only sets a baseline. */
+    @Column(name = "sampled_at")
+    private OffsetDateTime sampledAt;
+
     protected SearchEntry() {
     }
 
@@ -109,5 +120,54 @@ class SearchEntry {
 
     OffsetDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    double getTrendScore() {
+        return trendScore;
+    }
+
+    long getSampledPopularity() {
+        return sampledPopularity;
+    }
+
+    OffsetDateTime getSampledAt() {
+        return sampledAt;
+    }
+
+    /**
+     * Folds one observation of the live counter into the decaying score.
+     *
+     * <p>Deliberately does not touch {@code updatedAt}: that column means "the
+     * thing itself changed" and is the rail's last tiebreaker. A recompute
+     * running every quarter hour and stamping it would make every document
+     * permanently look freshly edited, which is a worse version of the bug
+     * this is here to fix.
+     *
+     * <p>A drop in the counter — an unlike, a withdrawn rating — contributes
+     * zero rather than a negative: the score measures engagement gained, and
+     * letting it go negative would rank a thing people are backing away from
+     * below one nobody has touched at all.
+     */
+    void sample(long livePopularity, OffsetDateTime now, double halfLifeMinutes) {
+        long observed = Math.max(0, livePopularity);
+        if (sampledAt == null) {
+            // Baseline only. See V50.
+            this.trendScore = 0;
+        } else {
+            long gained = Math.max(0, observed - sampledPopularity);
+            double elapsed = Math.max(0,
+                java.time.Duration.between(sampledAt, now).toMillis() / 60_000.0);
+            double decay = halfLifeMinutes <= 0 ? 0 : Math.pow(0.5, elapsed / halfLifeMinutes);
+            this.trendScore = gained + trendScore * decay;
+        }
+        this.popularity = observed;
+        this.sampledPopularity = observed;
+        this.sampledAt = now;
+    }
+
+    /** The thing is gone or hidden: stop ranking it, keep the row's history. */
+    void deactivate() {
+        this.active = false;
+        this.trendScore = 0;
     }
 }

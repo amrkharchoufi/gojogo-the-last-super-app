@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.UUID;
@@ -59,6 +60,40 @@ class SearchIndexService implements SearchIndexApi {
             sources = resolved;
         }
         return resolved;
+    }
+
+    /**
+     * Re-reads one document's live engagement and folds it into the decaying
+     * trend score. Called by {@link SearchTrendJob}, never by a vertical.
+     *
+     * <p>{@code REQUIRES_NEW} per document rather than one transaction for the
+     * batch: a source that throws should cost its own row and nothing else,
+     * and a batch-wide transaction marked rollback-only by one bad render
+     * would silently discard every sample taken before it.
+     *
+     * <p>A kind with no registered source is skipped, not deactivated. The
+     * sources map is built from whatever beans exist, so "nothing answers for
+     * PRODUCT" means the module didn't load — deleting its rows on that basis
+     * would empty the index over a deploy ordering accident.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void sampleTrend(SearchKind kind, UUID refId, double halfLifeMinutes) {
+        SearchableContent source = sources().get(kind);
+        if (source == null) return;
+        try {
+            SearchEntry entry = entries.findByKindAndRefId(kind, refId).orElse(null);
+            if (entry == null) return;
+            source.render(refId).ifPresentOrElse(document -> {
+                if (document.active()) {
+                    entry.sample(document.popularity(), OffsetDateTime.now(), halfLifeMinutes);
+                } else {
+                    entry.deactivate();
+                }
+                entries.save(entry);
+            }, () -> entries.delete(entry));
+        } catch (Exception e) {
+            log.error("Trend sample of {} {} failed", kind, refId, e);
+        }
     }
 
     @Override
