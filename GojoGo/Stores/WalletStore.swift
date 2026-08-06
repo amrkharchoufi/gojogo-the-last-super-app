@@ -118,6 +118,12 @@ final class WalletStore {
     /// and a statement builds one line per row.
     private static var formatters: [String: NumberFormatter] = [:]
 
+    /// What to write instead of the locale's disambiguated symbol. Only the
+    /// currencies this platform actually settles in belong here — anything else
+    /// keeps Foundation's answer, which is the safe one when two currencies
+    /// really could share a symbol.
+    private static let unambiguousSymbols = ["USD": "$"]
+
     private static func formatter(for code: String, digits: Int) -> NumberFormatter {
         if let existing = formatters[code] { return existing }
         let formatter = NumberFormatter()
@@ -128,6 +134,15 @@ final class WalletStore {
         // French reader looking at a dollar price should see it written the
         // French way and still see dollars, not be silently shown euros.
         formatter.locale = Locale.current
+        // …but not Foundation's *disambiguated* symbol. Outside the US it
+        // renders USD as "US$", because a locale that also knows CAD and AUD
+        // wants to say which dollar this is. This platform settles in exactly
+        // one currency, so that ambiguity cannot arise here, and "US$114,30"
+        // reads like a foreign price in an app that has never quoted anything
+        // else. One line per currency the day there is a second one.
+        if let symbol = unambiguousSymbols[code] {
+            formatter.currencySymbol = symbol
+        }
         formatter.usesGroupingSeparator = true
         formatter.minimumFractionDigits = digits
         formatter.maximumFractionDigits = digits
