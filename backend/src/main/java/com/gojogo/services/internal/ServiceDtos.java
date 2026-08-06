@@ -95,11 +95,21 @@ final class ServiceDtos {
     record QuoteRequest(@Min(1) long priceCents) {
     }
 
+    /**
+     * @param cancellationFeeCents what a cancellation <em>did</em> cost — zero
+     *     until one happens, because it is written at that moment.
+     * @param cancellationFeeNowCents what cancelling <em>right now</em> would
+     *     cost. These are two different questions and the client needs the
+     *     second one; reading the first as if it answered it is how a
+     *     confirmation dialog came to promise a free cancellation on a job that
+     *     charges half the price.
+     */
     record BookingResponse(UUID id, UUID serviceId, String serviceName, UUID providerId,
                            String providerName, UUID customerId, String status,
                            OffsetDateTime startsAt, int durationMinutes, Long priceCents,
                            String currency, String paymentStatus, String note,
                            UUID conversationId, long cancellationFeeCents,
+                           long cancellationFeeNowCents,
                            OffsetDateTime requestedAt, OffsetDateTime quotedAt,
                            OffsetDateTime confirmedAt, OffsetDateTime completedAt,
                            OffsetDateTime cancelledAt) {

@@ -11,9 +11,11 @@ import SwiftUI
 //     printed on the button rather than buried in a policy sentence
 //   • done — reviewable, once
 //
-// The cancellation fee is a live number off the booking rather than a rule the
-// app re-derives. A tier the client computed would be wrong on the boundary,
-// and the boundary is exactly when somebody is deciding.
+// The cancellation fee is a live number the *server* computes per read
+// (`cancellationFeeNowCents`), never a rule this app re-derives and never the
+// historical `cancellationFeeCents`, which is zero until a cancellation
+// actually happens. Reading the wrong one of those two promised a free
+// cancellation on a job that charges half the price.
 
 struct BookingsView: View {
     @EnvironmentObject var app: AppState
@@ -72,7 +74,7 @@ struct BookingsView: View {
             }
         } message: {
             Text(cancelling.map { booking in
-                booking.cancellationFeeCents > 0
+                booking.cancellationCostNow > 0
                     ? "You'll be charged \(booking.cancellationFeeLabel) — this is close enough to the time that they've turned other work away."
                     : "Nothing will be charged. Anything held goes back to your balance."
             } ?? "")
@@ -167,7 +169,7 @@ struct BookingsView: View {
                 Button {
                     cancelling = booking
                 } label: {
-                    Text(booking.cancellationFeeCents > 0
+                    Text(booking.cancellationCostNow > 0
                          ? "Cancel · \(booking.cancellationFeeLabel)"
                          : "Cancel")
                         .font(.system(size: 12, weight: .semibold))

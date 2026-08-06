@@ -265,9 +265,19 @@ struct BookingDTO: Decodable, Identifiable, Equatable {
     let note: String?
     /// Every booking opens a thread with a booking context card.
     let conversationId: UUID?
-    /// What cancelling *right now* would cost the customer. Tiered on how close
-    /// the start is, so it is a live number and not a policy sentence.
+    /// What a cancellation *did* cost — zero until one happens, because the
+    /// server writes it at that moment. Kept for a cancelled booking's history
+    /// and never for a question about the future.
     let cancellationFeeCents: Int64
+    /// What cancelling *right now* would cost, computed server-side per ask.
+    ///
+    /// These two are easy to confuse and this app confused them: the row read
+    /// the historical column, found the zero every un-cancelled booking has,
+    /// and told the customer a cancellation was free — on a confirmed job an
+    /// hour away that charges half the price. Optional-decoded so a backend
+    /// that predates the field reads as "no fee to warn about" rather than
+    /// failing the whole list.
+    let cancellationFeeNowCents: Int64?
     let requestedAt: String
     let quotedAt: String?
     let confirmedAt: String?
@@ -282,8 +292,11 @@ struct BookingDTO: Decodable, Identifiable, Equatable {
             : EconomyStore.formatPrice(cents: priceCents, currency: currency ?? "USD")
     }
 
+    /// What cancelling now costs, or zero when it is free.
+    var cancellationCostNow: Int64 { cancellationFeeNowCents ?? 0 }
+
     var cancellationFeeLabel: String {
-        EconomyStore.formatPrice(cents: cancellationFeeCents, currency: currency ?? "USD")
+        EconomyStore.formatPrice(cents: cancellationCostNow, currency: currency ?? "USD")
     }
 
     /// A quote the customer has not answered: priced by the provider, still
