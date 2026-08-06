@@ -201,8 +201,15 @@ struct ShopOrderDTO: Decodable, Identifiable, Equatable {
         EconomyStore.formatPrice(cents: Int64(totalCents), currency: currency)
     }
 
-    /// The money moves on this tap, so the button only exists while it can.
-    var canConfirmReceived: Bool { state == .shipped || state == .placed }
+    /// The money moves on this tap, so the button only exists while the server
+    /// will actually accept it — and that is `SHIPPED` and nothing else
+    /// (`ProductCheckoutService.confirmReceived` requires it).
+    ///
+    /// This read `shipped || placed` and offered "It arrived" on an order the
+    /// seller had not posted yet, which the server refused every single time.
+    /// A button whose only outcome is a refusal is worse than no button: it
+    /// tells the buyer the order is theirs to close when it isn't.
+    var canConfirmReceived: Bool { state == .shipped }
 
     /// A digital order settles at checkout — there is nothing to ship, nothing
     /// to receive, and no window in which either party can pull out.

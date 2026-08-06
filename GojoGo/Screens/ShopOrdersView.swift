@@ -225,7 +225,17 @@ struct ShopOrderRow: View {
     @ViewBuilder
     private var actions: some View {
         switch order.state {
-        case .placed, .shipped:
+        case .placed:
+            // Nothing to receive yet — the shop hasn't posted it. Offering "it
+            // arrived" here is a button the server refuses on every tap.
+            Text("Waiting for the shop to post it")
+                .font(.system(size: 11))
+                .foregroundStyle(GGColor.textTertiary)
+            Button("Cancel", action: onCancel)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(GGColor.textSecondary)
+                .buttonStyle(.plain)
+        case .shipped:
             Button("Cancel", action: onCancel)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(GGColor.textSecondary)
