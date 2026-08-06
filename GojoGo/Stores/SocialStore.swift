@@ -59,6 +59,14 @@ final class SocialStore {
         return (feed.posts.map { map($0) }, feed.nextBefore)
     }
 
+    /// One post by id — the route a search hit takes, where the feed has never
+    /// loaded the thing being opened.
+    func post(_ postId: UUID) async throws -> Post {
+        let dto: PostDTO = try await APIClient.shared
+            .get("/v1/posts/\(postId.uuidString.lowercased())")
+        return map(dto)
+    }
+
     func createPost(text: String?, slides: [(imageUrl: String?, videoUrl: String?)],
                     imageAspect: Double) async throws -> Post {
         let body = CreatePostBody(

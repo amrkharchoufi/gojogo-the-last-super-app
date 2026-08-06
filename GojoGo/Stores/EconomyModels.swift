@@ -31,6 +31,13 @@ struct ListingDTO: Decodable {
     let status: String?
     let saveCount: Int
     let viewCount: Int?
+    /// SALE or OWNERSHIP_TRANSFER (Phase 5 M2). Optional-decoded like the two
+    /// above: a listing that predates the transfer catalog is an ordinary sale,
+    /// and reading it as anything else would put an escrow button on a bicycle.
+    let kind: String?
+    /// A chassis, plate or serial — the thing the paperwork is *about*. Only
+    /// ever present on a transfer listing.
+    let vinSerial: String?
     let createdAt: String
     /// Null until the seller first edits the listing.
     let updatedAt: String?

@@ -1,7 +1,37 @@
 import SwiftUI
 
+// MARK: - Search, live against the index (Phase 5 · M4)
+//
+// This screen used to filter whatever the app happened to have in memory, which
+// meant it could only ever find things you had already scrolled past. It now
+// asks `GET /v1/search` — one query across posts, marketplace listings, shop
+// products and services, ranked server-side by relevance × popularity.
+//
+// What stays local is what the index does not carry: videos, shorts and GojoTV
+// have no upsert signal into `search` yet, and people are answered by the
+// profile search that has always existed. Those sections are kept rather than
+// dropped, and they are kept *below* the live ones, because a result the server
+// ranked is a better answer than a substring match on a cached title.
+//
+// The query text lives in this view and never in AppState. A keystroke that
+// republished the whole app would re-render every screen behind this one.
+
 private enum SearchScope: String, CaseIterable {
-    case all, people, content, shop
+    case all, people, posts, market, shops, services
+
+    /// What the server is asked for. `nil` means "not a server scope" — people
+    /// are answered by `SocialStore`, and `all` asks for everything.
+    var kind: SearchKind? {
+        switch self {
+        case .posts: return .post
+        case .market: return .listing
+        case .shops: return .product
+        case .services: return .service
+        case .all, .people: return nil
+        }
+    }
+
+    var label: String { self == .market ? "market" : rawValue }
 }
 
 struct SearchView: View {
@@ -10,6 +40,13 @@ struct SearchView: View {
     @State private var scope: SearchScope = .all
     @FocusState private var focused: Bool
 
+    /// Live results, held here rather than in AppState — see the note above.
+    @State private var hits: [SearchHitDTO] = []
+    @State private var trending: [SearchHitDTO] = []
+    @State private var people: [MentionCandidate] = []
+    @State private var searching = false
+    @State private var searchTask: Task<Void, Never>?
+
     private var trimmed: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -17,17 +54,6 @@ struct SearchView: View {
     private var isSearching: Bool { !trimmed.isEmpty }
 
     // MARK: Live results across the whole app
-
-    private var matchedPeople: [PersonSuggestion] {
-        app.people.filter { $0.name.lowercased().contains(trimmed) }
-    }
-
-    private var matchedPosts: [Post] {
-        app.posts.filter {
-            $0.author.lowercased().contains(trimmed)
-                || ($0.text?.lowercased().contains(trimmed) ?? false)
-        }
-    }
 
     private var matchedVideos: [VideoItem] {
         app.videos.filter {
@@ -43,15 +69,6 @@ struct SearchView: View {
         }
     }
 
-    private var matchedProducts: [Product] {
-        ([app.featuredProduct] + app.products).filter {
-            !$0.name.isEmpty
-                && ($0.name.lowercased().contains(trimmed)
-                    || $0.category.lowercased().contains(trimmed)
-                    || $0.seller.lowercased().contains(trimmed))
-        }
-    }
-
     private var matchedShows: [TVShow] {
         ([app.tvHero] + app.tvShows).filter {
             !$0.title.isEmpty
@@ -60,15 +77,20 @@ struct SearchView: View {
         }
     }
 
+    /// The server's answer for the scope in hand. `all` shows everything it
+    /// returned; a kind scope was already filtered server-side.
+    private var visibleHits: [SearchHitDTO] { hits }
+
+    /// Local Watch matches only make sense while the whole app is in scope —
+    /// they are not in the index, so a "services" scope must never quietly
+    /// return a short.
+    private var showsLocalContent: Bool { scope == .all }
+
     private var hasResults: Bool {
-        switch scope {
-        case .all:
-            return !(matchedPeople.isEmpty && matchedPosts.isEmpty && matchedVideos.isEmpty
-                     && matchedShorts.isEmpty && matchedProducts.isEmpty && matchedShows.isEmpty)
-        case .people: return !matchedPeople.isEmpty
-        case .content: return !(matchedPosts.isEmpty && matchedVideos.isEmpty && matchedShorts.isEmpty && matchedShows.isEmpty)
-        case .shop: return !matchedProducts.isEmpty
-        }
+        if !visibleHits.isEmpty { return true }
+        if scope == .all || scope == .people { if !people.isEmpty { return true } }
+        guard showsLocalContent else { return false }
+        return !(matchedVideos.isEmpty && matchedShorts.isEmpty && matchedShows.isEmpty)
     }
 
     var body: some View {
@@ -91,6 +113,8 @@ struct SearchView: View {
                     if isSearching {
                         if hasResults {
                             resultsSections
+                        } else if searching {
+                            searchingRows
                         } else {
                             noResults
                         }
@@ -103,10 +127,32 @@ struct SearchView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 130)
             }
+            .scrollDismissesKeyboard(.immediately)
+            // Debounced rather than per-keystroke: the index is a round trip,
+            // and a query fired on every letter is five requests to answer one
+            // question. The task is cancelled and replaced, so the answer on
+            // screen is always the one for the text on screen.
+            .onChange(of: query) { _, _ in scheduleSearch() }
+            .onChange(of: scope) { _, _ in scheduleSearch(immediate: true) }
+            .task { await loadTrending() }
 
             HStack { Wordmark(size: 19); Spacer() }
                 .padding(.horizontal, 20).padding(.top, 8)
+
+            // A result that has been deleted since it was indexed fails on the
+            // tap, and this screen is the only place that can say so — the
+            // banner otherwise only exists on the Economy surfaces, which is
+            // where a search failure would have gone to die.
+            if let notice = app.economyNotice {
+                EconomyNoticeBanner(message: notice) { app.dismissEconomyNotice() }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 44)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(3)
+            }
         }
+        .animation(.ggOverlay, value: app.economyNotice)
     }
 
     // MARK: Search card
@@ -118,14 +164,23 @@ struct SearchView: View {
                 .foregroundStyle(GGColor.textPrimary.opacity(0.92))
                 .focused($focused)
                 .lineLimit(2...4)
-            HStack(spacing: 8) {
-                ForEach(SearchScope.allCases, id: \.self) { s in
-                    Button {
-                        withAnimation(.ggSnappy) { scope = s }
-                    } label: {
-                        MonoChip(text: s.rawValue, active: scope == s)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(SearchScope.allCases, id: \.self) { s in
+                        Button {
+                            withAnimation(.ggSnappy) { scope = s }
+                        } label: {
+                            MonoChip(text: s.label, active: scope == s)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                }
+            }
+            HStack(spacing: 8) {
+                if searching {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(GGColor.textTertiary)
                 }
                 Spacer()
                 Button {
@@ -149,22 +204,30 @@ struct SearchView: View {
 
     @ViewBuilder
     private var resultsSections: some View {
-        if scope == .all || scope == .people {
-            if !matchedPeople.isEmpty {
+        // The indexed kinds first, in the order the server ranked them within
+        // each kind. Grouped rather than interleaved: a listing and a service
+        // are answers to different questions, and a mixed list makes the reader
+        // sort them by eye.
+        ForEach(SearchKind.allCases) { kind in
+            let group = visibleHits.filter { $0.searchKind == kind }
+            if !group.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(title: "People")
-                    ForEach(matchedPeople.prefix(5)) { personRow($0) }
+                    SectionHeader(title: kind.label)
+                    ForEach(group) { hit in hitRow(hit) }
                 }
             }
         }
 
-        if scope == .all || scope == .content {
-            if !matchedPosts.isEmpty {
+        if scope == .all || scope == .people {
+            if !people.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(title: "Posts")
-                    ForEach(matchedPosts.prefix(4)) { postRow($0) }
+                    SectionHeader(title: "People")
+                    ForEach(people.prefix(6)) { candidate in candidateRow(candidate) }
                 }
             }
+        }
+
+        if showsLocalContent {
             if !matchedVideos.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     SectionHeader(title: "Videos")
@@ -185,14 +248,125 @@ struct SearchView: View {
             }
         }
 
-        if scope == .all || scope == .shop {
-            if !matchedProducts.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(title: "Economy")
-                    ForEach(matchedProducts.prefix(5)) { productRow($0) }
-                }
+    }
+
+    /// Rows that stand in for an answer that hasn't landed. Deliberately not a
+    /// spinner over the whole screen: the previous answer stays readable until
+    /// the new one replaces it.
+    private var searchingRows: some View {
+        VStack(spacing: 10) {
+            ForEach(0..<3, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(GGColor.ink(0.06))
+                    .frame(height: 62)
+                    .shimmering()
             }
         }
+    }
+
+    /// One indexed result. The snippet is the server's, trimmed there rather
+    /// than here, so what is shown is what was matched.
+    private func hitRow(_ hit: SearchHitDTO) -> some View {
+        Button {
+            focused = false
+            app.openSearchHit(hit)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: hit.searchKind?.icon ?? "magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(GGColor.ink(0.08)))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(hit.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                        .lineLimit(1)
+                        .multilineTextAlignment(.leading)
+                    if let snippet = hit.snippet, !snippet.isEmpty {
+                        Text(snippet)
+                            .font(.system(size: 12))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                Spacer(minLength: 0)
+                if let category = hit.category, !category.isEmpty {
+                    Text(category)
+                        .font(.ggMono(9, .semibold))
+                        .tracking(0.6)
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+            }
+            .padding(12)
+            .glass(cornerRadius: 16, fillOpacity: 0.04, borderOpacity: 0.08)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// A person, from the profile search that has always existed — the index
+    /// does not carry accounts.
+    private func candidateRow(_ candidate: MentionCandidate) -> some View {
+        Button {
+            focused = false
+            app.openUserProfile(handle: candidate.handle, avatarURL: candidate.avatarURL,
+                                avatarGradient: SocialStore.gradient(for: candidate.handle))
+        } label: {
+            HStack(spacing: 12) {
+                UserAvatar(size: 44, letter: String(candidate.handle.prefix(1)).uppercased(),
+                           imageURL: candidate.avatarURL)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(candidate.name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Text("@\(candidate.handle)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Running the query
+
+    private func scheduleSearch(immediate: Bool = false) {
+        searchTask?.cancel()
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            hits = []
+            people = []
+            searching = false
+            return
+        }
+        searching = true
+        searchTask = Task {
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            async let indexed = try? await SearchStore.shared.search(text, kind: scope.kind)
+            async let profiles = (scope == .all || scope == .people)
+                ? try? await SocialStore.shared.searchProfiles(text)
+                : []
+            let (foundHits, foundPeople) = await (indexed, profiles)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                hits = foundHits ?? []
+                people = foundPeople ?? []
+                searching = false
+            }
+        }
+    }
+
+    private func loadTrending() async {
+        guard trending.isEmpty else { return }
+        let rail = (try? await SearchStore.shared.trending()) ?? []
+        withAnimation(.easeOut(duration: 0.2)) { trending = rail }
     }
 
     private var noResults: some View {
@@ -210,74 +384,6 @@ struct SearchView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 44)
-    }
-
-    private func personRow(_ p: PersonSuggestion) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                app.openUserProfile(handle: p.name, avatarURL: p.avatarURL,
-                                    avatarGradient: p.gradient)
-            } label: {
-                HStack(spacing: 12) {
-                    UserAvatar(size: 44, letter: String(p.name.prefix(1)).uppercased(),
-                               imageURL: p.avatarURL)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(p.name)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(GGColor.textPrimary)
-                        Text("On gojogo")
-                            .font(.system(size: 12))
-                            .foregroundStyle(GGColor.textTertiary)
-                    }
-                    Spacer()
-                }
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                withAnimation(.ggSnappy) { app.toggleFollowPerson(p.id) }
-            } label: {
-                Text(p.following ? "Following" : "Follow")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(p.following ? GGColor.textSecondary : GGColor.onAccent)
-                    .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(Capsule().fill(p.following ? GGColor.ink(0.1) : GGColor.white))
-            }
-            .buttonStyle(PressableStyle())
-        }
-    }
-
-    private func postRow(_ post: Post) -> some View {
-        Button {
-            app.openPostViewer(post.id)
-        } label: {
-            HStack(spacing: 12) {
-                UserAvatar(size: 40, gradient: post.avatarGradient,
-                           letter: String(post.author.prefix(1)).uppercased(),
-                           imageURL: post.avatarURL)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(post.author)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
-                    if let text = post.text {
-                        Text(text)
-                            .font(.system(size: 13))
-                            .foregroundStyle(GGColor.textSecondary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                    }
-                }
-                Spacer()
-                if post.imageURL != nil || post.imageData != nil {
-                    MediaImage(url: post.imageURL, data: post.imageData, cornerRadius: 8)
-                        .frame(width: 48, height: 48)
-                        .clipped()
-                }
-            }
-            .padding(12)
-            .glass(cornerRadius: 16, fillOpacity: 0.04, borderOpacity: 0.08)
-        }
-        .buttonStyle(.plain)
     }
 
     private func videoRow(_ v: VideoItem) -> some View {
@@ -400,11 +506,20 @@ struct SearchView: View {
 
     @ViewBuilder
     private var defaultSections: some View {
+        // Trending is an aggregate on a 15-minute server cache, so it is asked
+        // once per appearance and not per keystroke.
+        if !trending.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Trending now")
+                ForEach(trending.prefix(6)) { hit in hitRow(hit) }
+            }
+        }
+
         let hasDiscover = !app.people.isEmpty
             || !SampleData.searchContent.isEmpty
             || !app.products.isEmpty
 
-        if !hasDiscover {
+        if !hasDiscover && trending.isEmpty {
             GGEmptyState(
                 icon: "magnifyingglass",
                 title: "Nothing to discover yet",

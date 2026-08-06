@@ -251,6 +251,73 @@ struct MainAppView: View {
                     .environmentObject(app)
             }
         }
+        // MARK: Phase 5 — shops, services, transfers and the two consoles.
+        //
+        // All of them are declared here and nowhere else. An AppState-driven
+        // cover attached from two live screens dismisses instead of presenting,
+        // which this app has already paid for once — so Economy's segments
+        // raise flags and this view owns every presentation of them.
+        .fullScreenCover(isPresented: Binding(
+            get: { app.browsingShopProduct != nil },
+            set: { if !$0 { app.closeShopProduct() } }
+        )) {
+            if let product = app.browsingShopProduct {
+                ShopProductDetailView(product: product)
+                    .environmentObject(app)
+            }
+        }
+        .sheet(isPresented: $app.showShopCheckout) {
+            ShopCheckoutSheet()
+                .environmentObject(app)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
+        .sheet(isPresented: $app.showShopOrders) {
+            ShopOrdersView()
+                .environmentObject(app)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { app.browsingService != nil },
+            set: { if !$0 { app.closeService() } }
+        )) {
+            if let service = app.browsingService {
+                ServiceDetailView(service: service)
+                    .environmentObject(app)
+            }
+        }
+        .sheet(isPresented: $app.showBookings) {
+            BookingsView()
+                .environmentObject(app)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { app.showSellerConsole },
+            set: { if !$0 { app.closeSellerConsole() } }
+        )) {
+            SellerConsoleView().environmentObject(app)
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { app.showProviderConsole },
+            set: { if !$0 { app.closeProviderConsole() } }
+        )) {
+            ProviderConsoleView().environmentObject(app)
+        }
+        .sheet(isPresented: Binding(
+            get: { app.showTransfers },
+            set: { if !$0 { app.closeTransfers() } }
+        )) {
+            TransfersView()
+                .environmentObject(app)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
         .fullScreenCover(isPresented: Binding(
             get: { app.selectedTVShow != nil },
             set: { if !$0 { app.closeTVShow() } }

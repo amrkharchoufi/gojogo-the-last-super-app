@@ -66,77 +66,15 @@ struct EconomyView: View {
         ZStack(alignment: .top) {
             GGBackground()
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    locationRow
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
-
-                    searchBar
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
-
-                    filterChips
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-
-                    departmentStrip
-                        .padding(.top, 16)
-                        .zIndex(1)
-
-                    if catalog.isEmpty {
-                        GGEmptyState(
-                            icon: "bag",
-                            title: "No listings yet",
-                            message: "Be the first to sell something nearby.",
-                            actionTitle: "Sell an item",
-                            action: { app.showSellSheet = true }
-                        )
-                        .padding(.top, 40)
-                    } else {
-                        if !filtered.isEmpty {
-                            dealBanner
-                                .padding(.horizontal, 16)
-                                .padding(.top, 18)
-                                .zIndex(0)
-                        }
-
-                        let saved = catalog.filter(\.saved)
-                        if !saved.isEmpty {
-                            productRail(
-                                title: "Keep shopping",
-                                subtitle: "From your saved list",
-                                products: saved
-                            )
-                            .padding(.top, 22)
-                        }
-
-                        productRail(
-                            title: "Today's deals",
-                            subtitle: "Best prices near you",
-                            products: deals
-                        )
-                        .padding(.top, 22)
-
-                        productRail(
-                            title: category == "All" ? "Inspired by your browsing" : "More in \(category)",
-                            subtitle: "Top picks nearby",
-                            products: topPicks
-                        )
-                        .padding(.top, 22)
-
-                        resultsGrid
-                            .padding(.horizontal, 16)
-                            .padding(.top, 22)
-                    }
-
-                    Color.clear.frame(height: tabBarInset)
-                }
-                .padding(.top, 56)
+            // Three catalogs on one tab (Phase 5): the C2C shelf that has been
+            // here since 2b M1, the merchant shops, and bookable services. They
+            // share the chrome and nothing else — each owns its own scroll view,
+            // so switching segments never leaves one screen's offset on another.
+            switch app.economySegment {
+            case .marketplace: marketplaceScroll
+            case .shops:       ShopsSection(chromeHidden: $chromeHidden)
+            case .services:    ServicesSection(chromeHidden: $chromeHidden)
             }
-            .scrollDismissesKeyboard(.immediately)
-            .refreshable { await app.refreshEconomy() }
-            .trackScrollChrome(hidden: $chromeHidden)
 
             topChrome
                 .autoHideChrome(chromeHidden)
@@ -145,30 +83,157 @@ struct EconomyView: View {
                 EconomyNoticeBanner(message: notice) { app.dismissEconomyNotice() }
                     .padding(.horizontal, 16)
                     // Clears the wordmark row rather than sitting on top of it.
-                    .padding(.top, 66)
+                    .padding(.top, 108)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(3)
             }
+
+            // The basket rides above every segment: adding something in Shops
+            // and then wandering into Services must not lose it.
+            if !app.shopBasket.isEmpty, app.economySegment != .marketplace {
+                basketBar
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, tabBarInset - 12)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(2)
+            }
         }
         .animation(.ggOverlay, value: app.economyNotice)
+        .animation(.ggSnappy, value: app.shopBasket.count)
+        .task {
+            // Each segment loads itself on first appearance; this only covers
+            // the case of landing straight back on a non-default one.
+            switch app.economySegment {
+            case .marketplace: break
+            case .shops:       await app.refreshShops()
+            case .services:    await app.refreshServices()
+            }
+            // Whether the Transfers chip exists at all is an answer only the
+            // server has, so it is asked once when the tab opens rather than
+            // added to the connect chain everybody pays for.
+            await app.refreshTransfers()
+        }
+    }
+
+    /// What Economy has always been: the peer-to-peer shelf.
+    private var marketplaceScroll: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                locationRow
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+
+                searchBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+
+                filterChips
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+
+                departmentStrip
+                    .padding(.top, 16)
+                    .zIndex(1)
+
+                if catalog.isEmpty {
+                    GGEmptyState(
+                        icon: "bag",
+                        title: "No listings yet",
+                        message: "Be the first to sell something nearby.",
+                        actionTitle: "Sell an item",
+                        action: { app.showSellSheet = true }
+                    )
+                    .padding(.top, 40)
+                } else {
+                    if !filtered.isEmpty {
+                        dealBanner
+                            .padding(.horizontal, 16)
+                            .padding(.top, 18)
+                            .zIndex(0)
+                    }
+
+                    let saved = catalog.filter(\.saved)
+                    if !saved.isEmpty {
+                        productRail(
+                            title: "Keep shopping",
+                            subtitle: "From your saved list",
+                            products: saved
+                        )
+                        .padding(.top, 22)
+                    }
+
+                    productRail(
+                        title: "Today's deals",
+                        subtitle: "Best prices near you",
+                        products: deals
+                    )
+                    .padding(.top, 22)
+
+                    productRail(
+                        title: category == "All" ? "Inspired by your browsing" : "More in \(category)",
+                        subtitle: "Top picks nearby",
+                        products: topPicks
+                    )
+                    .padding(.top, 22)
+
+                    resultsGrid
+                        .padding(.horizontal, 16)
+                        .padding(.top, 22)
+                }
+
+                Color.clear.frame(height: tabBarInset)
+            }
+            .padding(.top, 98)
+        }
+        .scrollDismissesKeyboard(.immediately)
+        .refreshable { await app.refreshEconomy() }
+        .trackScrollChrome(hidden: $chromeHidden)
     }
 
     // MARK: - Chrome
 
     private var topChrome: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("GOJOGO")
-                    .font(.ggMono(11, .semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(GGColor.textSecondary)
-                Wordmark(size: 20, trailing: "economy")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("GOJOGO")
+                        .font(.ggMono(11, .semibold))
+                        .tracking(0.6)
+                        .foregroundStyle(GGColor.textSecondary)
+                    Wordmark(size: 20, trailing: "economy")
+                }
+                Spacer(minLength: 0)
+                segmentActions
             }
-            Spacer(minLength: 0)
-            if app.canManageListings {
-                sellerHubButton
+            segmentPicker
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background {
+            TopScrim()
+                .allowsHitTesting(false)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .contentShape(Rectangle())
+    }
+
+    /// The trailing chrome is per segment, because "the thing you'd want next"
+    /// is: your own listings when browsing the shelf, your orders when browsing
+    /// shops, your bookings when browsing services.
+    @ViewBuilder
+    private var segmentActions: some View {
+        switch app.economySegment {
+        case .marketplace:
+            // Only once there is one. A transfer is a rare thing to be doing,
+            // and a permanent chip for it would be chrome most people never
+            // have a use for.
+            if !app.transfers.isEmpty {
+                chromeChip(icon: "doc.text", label: "Transfers") { app.openTransfers() }
             }
+            if app.canManageListings { sellerHubButton }
             Button {
                 app.showSellSheet = true
             } label: {
@@ -184,16 +249,109 @@ struct EconomyView: View {
                 .background(Capsule().fill(GGColor.white))
             }
             .buttonStyle(PressableStyle())
+        case .shops:
+            if app.isSeller {
+                chromeChip(icon: "storefront", label: "Your shop") { app.openSellerConsole() }
+            }
+            chromeChip(icon: "shippingbox", label: "Orders") {
+                app.showShopOrders = true
+            }
+        case .services:
+            if app.isServiceProvider {
+                chromeChip(icon: "calendar.badge.clock", label: "Your work") {
+                    app.openProviderConsole()
+                }
+            }
+            chromeChip(icon: "calendar", label: "Bookings") {
+                app.showBookings = true
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
-        .background {
-            TopScrim()
-                .allowsHitTesting(false)
+    }
+
+    private func chromeChip(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(GGColor.textPrimary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .glassCapsule(interactive: false)
         }
-        .fixedSize(horizontal: false, vertical: true)
-        .contentShape(Rectangle())
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel(label)
+    }
+
+    private var segmentPicker: some View {
+        HStack(spacing: 8) {
+            ForEach(EconomySegment.allCases) { segment in
+                let active = app.economySegment == segment
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    withAnimation(.ggSnappy) { app.economySegment = segment }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: segment.icon)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(segment.label)
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundStyle(active ? GGColor.onAccent : GGColor.textPrimary)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(active ? GGColor.white : GGColor.ink(0.08)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// One basket, one shop — so the bar names the shop rather than a count of
+    /// items, which is the fact that decides whether the next tap is allowed.
+    private var basketBar: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            app.showShopCheckout = true
+        } label: {
+            HStack(spacing: 12) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "bag.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("\(app.basketCount)")
+                        .font(.ggMono(9, .bold))
+                        .foregroundStyle(GGColor.white)
+                        .padding(3)
+                        .background(Circle().fill(GGColor.onAccent))
+                        .offset(x: 8, y: -7)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Basket")
+                        .font(.system(size: 14, weight: .bold))
+                    if let shop = app.basketSellerName {
+                        Text(shop)
+                            .font(.system(size: 11))
+                            .opacity(0.8)
+                    }
+                }
+                Spacer(minLength: 0)
+                Text(EconomyStore.formatPrice(cents: app.basketTotalCents, currency: "USD"))
+                    .font(.ggMono(14, .semibold))
+            }
+            .foregroundStyle(GGColor.onAccent)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Capsule().fill(GGColor.white))
+            .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
+        }
+        .buttonStyle(PressableStyle())
     }
 
     /// Way into the seller's own shelf. Carries the live count so a seller can
@@ -728,6 +886,21 @@ struct ProductDetailView: View {
                         app.manageListing(product.id)
                     } label: {
                         Text("Manage listing")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(GGColor.onAccent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Capsule().fill(GGColor.white))
+                    }
+                    .buttonStyle(PressableStyle())
+                } else if EconomyStore.shared.isTransfer(product.id) {
+                    // A title changes hands here, not a parcel. Enquiring is
+                    // free — the escrow comes later, once the seller has named
+                    // a price — so this is a question rather than a purchase.
+                    Button {
+                        app.startTransfer(listingId: product.id)
+                    } label: {
+                        Text("Enquire · escrow")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(GGColor.onAccent)
                             .frame(maxWidth: .infinity)

@@ -277,6 +277,80 @@ final class AppState: ObservableObject {
     /// Transient message shown over Economy — a refused edit, a failed relist.
     @Published var economyNotice: String? = nil
     var economyNoticeTask: Task<Void, Never>?
+
+    // MARK: Shops — the merchant catalog (Phase 5 · M1 + M2)
+    //
+    // Beside the C2C shelf above, not instead of it: `products` up there is one
+    // person selling one thing, and everything below is a provisioned seller
+    // with variants, stock and an order that settles when the buyer says it
+    // arrived. Two catalogs on one tab, which is what the segment picker is for.
+
+    /// Which half of Economy is on screen. Persisted with the rest of the tab
+    /// state so coming back lands where you left.
+    @Published var economySegment: EconomySegment = .marketplace
+    @Published var shopProducts: [ShopProductDTO] = []
+    @Published var shopCategory: String = "All"
+    @Published var shopLoading: Bool = false
+    var shopNextBefore: String? = nil
+    var shopLoadingMore: Bool = false
+    /// The product page, presented over the tab.
+    @Published var browsingShopProduct: ShopProductDTO? = nil
+    @Published var shopProductReviews: [ShopReviewDTO] = []
+    /// One checkout is one seller (SPECS §6, read literally), so the basket
+    /// carries the seller it belongs to and refuses to mix.
+    @Published var shopBasket: [ShopBasketLine] = []
+    @Published var showShopCheckout: Bool = false
+    @Published var shopOrders: [ShopOrderDTO] = []
+    @Published var showShopOrders: Bool = false
+    /// What a digital purchase granted — downloads and licence keys.
+    @Published var entitlements: [ShopEntitlementDTO] = []
+
+    // MARK: Services (Phase 5 · M3)
+
+    @Published var services: [ServiceDTO] = []
+    @Published var serviceCategory: String = "All"
+    @Published var servicesLoading: Bool = false
+    var servicesNextBefore: String? = nil
+    var servicesLoadingMore: Bool = false
+    @Published var browsingService: ServiceDTO? = nil
+    @Published var serviceSlots: SlotsDTO? = nil
+    @Published var serviceSlotsLoading: Bool = false
+    @Published var serviceReviews: [ServiceReviewDTO] = []
+    @Published var bookings: [BookingDTO] = []
+    @Published var showBookings: Bool = false
+
+    // MARK: The two Phase 5 consoles
+    //
+    // Derived from `/v1/me/roles` like every other role in this app — an
+    // approved application provisions a row, and the row is the fact.
+
+    @Published var isSeller: Bool = false
+    @Published var isServiceProvider: Bool = false
+    @Published var showSellerConsole: Bool = false
+    @Published var showProviderConsole: Bool = false
+
+    @Published var myShop: ShopSellerDTO? = nil
+    @Published var myShopProducts: [ShopProductDTO] = []
+    @Published var shopOrderQueue: [ShopOrderDTO] = []
+    @Published var shopPromotions: [ShopPromotionDTO] = []
+    @Published var shopWallet: PayeeWalletDTO? = nil
+    @Published var sellerConsoleLoading: Bool = false
+
+    @Published var myProvider: ProviderDTO? = nil
+    @Published var myServices: [ServiceDTO] = []
+    @Published var providerBookings: [BookingDTO] = []
+    @Published var providerAvailability: [AvailabilityRuleDTO] = []
+    @Published var providerExceptions: [String] = []
+    @Published var providerDocuments: [ProviderDocumentDTO] = []
+    @Published var providerWallet: PayeeWalletDTO? = nil
+    @Published var providerConsoleLoading: Bool = false
+
+    // MARK: Ownership transfers (Phase 5 · M2)
+
+    @Published var transfers: [TransferDTO] = []
+    @Published var showTransfers: Bool = false
+    @Published var openTransferID: UUID? = nil
+    @Published var transferDocuments: [TransferDocumentDTO] = []
     @Published var selectedTVShow: TVShow? = nil
     @Published var tvShows: [TVShow] = SampleData.tvShows
     @Published var tvHero: TVShow = SampleData.tvHero
@@ -2326,6 +2400,49 @@ final class AppState: ObservableObject {
         economyNextBefore = nil
         economyNoticeTask?.cancel()
         economyNotice = nil
+        // Phase 5: two catalogs, two consoles and a basket, none of which the
+        // next person to sign in on this device is entitled to see. The basket
+        // most of all — it is the only one that could turn into somebody else's
+        // order.
+        economySegment = .marketplace
+        shopProducts = []
+        shopNextBefore = nil
+        shopCategory = "All"
+        browsingShopProduct = nil
+        shopProductReviews = []
+        shopBasket = []
+        showShopCheckout = false
+        shopOrders = []
+        showShopOrders = false
+        entitlements = []
+        services = []
+        servicesNextBefore = nil
+        serviceCategory = "All"
+        browsingService = nil
+        serviceSlots = nil
+        serviceReviews = []
+        bookings = []
+        showBookings = false
+        isSeller = false
+        isServiceProvider = false
+        showSellerConsole = false
+        showProviderConsole = false
+        myShop = nil
+        myShopProducts = []
+        shopOrderQueue = []
+        shopPromotions = []
+        shopWallet = nil
+        myProvider = nil
+        myServices = []
+        providerBookings = []
+        providerAvailability = []
+        providerExceptions = []
+        providerDocuments = []
+        providerWallet = nil
+        transfers = []
+        showTransfers = false
+        openTransferID = nil
+        transferDocuments = []
         deliveryPollTask?.cancel()
         deliveryLiveOrderID = nil
         deliveryNoticeTask?.cancel()

@@ -398,6 +398,14 @@ extension AppState {
         if roles.isDriver == true { live.insert(.driver) }
         if roles.isCourier == true { live.insert(.courier) }
         partnerRoles = live
+        // Phase 5's two kinds are read from the partner list rather than from a
+        // flag of their own: `dispatch` has no registry for a seller or a
+        // provider, so an approved application *is* the fact here, and its
+        // `refId` is the shop or provider row the console talks to.
+        isSeller = roles.partners.contains { $0.kind == "SELLER" && $0.status == "APPROVED" }
+        isServiceProvider = roles.partners.contains {
+            $0.kind == "SERVICE_PROVIDER" && $0.status == "APPROVED"
+        }
         schedulePersist()
     }
 }

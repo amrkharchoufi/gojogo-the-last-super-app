@@ -10,6 +10,34 @@ enum AppNavMode: String, Hashable {
 
 enum AppTab: Hashable { case home, watch, madeleine, travel, delivery, economy, search }
 
+/// The three halves of the Economy tab. Marketplace is the C2C shelf that has
+/// been there since 2b M1; Shops and Services are Phase 5's two catalogs, which
+/// share a tab rather than taking two more because they are the same errand —
+/// somebody selling something — seen from three angles.
+enum EconomySegment: String, Hashable, CaseIterable, Identifiable {
+    case marketplace
+    case shops
+    case services
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .marketplace: return "Marketplace"
+        case .shops: return "Shops"
+        case .services: return "Services"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .marketplace: return "tag.fill"
+        case .shops: return "bag.fill"
+        case .services: return "wrench.and.screwdriver.fill"
+        }
+    }
+}
+
 /// App-wide appearance. Media-immersive surfaces (stories, shorts, players)
 /// stay dark in both themes by design.
 enum AppTheme: String, Hashable {

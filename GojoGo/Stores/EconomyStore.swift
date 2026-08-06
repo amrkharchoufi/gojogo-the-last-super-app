@@ -13,15 +13,23 @@ final class EconomyStore {
     private(set) var remoteListingIds: Set<UUID> = []
     /// Listings the signed-in user is selling — you can't message yourself.
     private(set) var ownListingIds: Set<UUID> = []
+    /// Listings whose sale is an ownership transfer (Phase 5 M2). Tracked here
+    /// rather than carried on `Product` because it changes exactly one thing —
+    /// which button the detail page offers — and everything else about a
+    /// transfer listing is an ordinary listing.
+    private(set) var transferListingIds: Set<UUID> = []
 
     func reset() {
         remoteListingIds = []
         ownListingIds = []
+        transferListingIds = []
     }
 
     func isRemote(_ listingId: UUID) -> Bool { remoteListingIds.contains(listingId) }
 
     func isOwn(_ listingId: UUID) -> Bool { ownListingIds.contains(listingId) }
+
+    func isTransfer(_ listingId: UUID) -> Bool { transferListingIds.contains(listingId) }
 
     // MARK: Browse / detail
 
@@ -123,6 +131,11 @@ final class EconomyStore {
         for dto in dtos {
             remoteListingIds.insert(dto.id)
             if dto.isOwn { ownListingIds.insert(dto.id) } else { ownListingIds.remove(dto.id) }
+            if dto.kind?.uppercased() == "OWNERSHIP_TRANSFER" {
+                transferListingIds.insert(dto.id)
+            } else {
+                transferListingIds.remove(dto.id)
+            }
         }
     }
 

@@ -461,6 +461,25 @@ extension AppState {
         }
     }
 
+    /// Opens a listing by id — the route a search hit takes, where the catalog
+    /// page in memory has probably never contained it. Same shape as
+    /// `openListingContext`: fetch, seed, open, and say so when it has gone.
+    func openListing(id: UUID) {
+        if let existing = liveProduct(id: id) {
+            openProduct(existing)
+            return
+        }
+        Task {
+            do {
+                let product = try await EconomyStore.shared.get(id)
+                seedCatalog(product)
+                openProduct(product)
+            } catch {
+                showEconomyNotice("That listing isn't available any more.")
+            }
+        }
+    }
+
     /// Inserts a fetched listing into the catalog (idempotent) so `liveProduct`
     /// can resolve it for the detail sheet without disturbing browse order.
     ///
