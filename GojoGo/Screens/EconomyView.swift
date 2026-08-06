@@ -410,6 +410,11 @@ struct EconomyView: View {
 
     /// Way into the seller's own shelf. Carries the live count so a seller can
     /// see at a glance that they still have something up, without opening it.
+    ///
+    /// The word "Selling" is what this row gives up to stay one line: the box
+    /// and a number read as "listings, this many" on their own, and a seller
+    /// meets this chip on every visit — unlike Transfers, which is rare enough
+    /// that dropping *its* label would leave a glyph nobody recognises.
     private var sellerHubButton: some View {
         let live = app.sellerListings.filter { $0.status == .active }.count
         return Button {
@@ -418,9 +423,11 @@ struct EconomyView: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "shippingbox")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(live > 0 ? "Selling \(live)" : "Selling")
                     .font(.system(size: 12, weight: .semibold))
+                if live > 0 {
+                    Text("\(live)")
+                        .font(.ggMono(12, .semibold))
+                }
             }
             .foregroundStyle(GGColor.textPrimary)
             .padding(.horizontal, 12)
@@ -428,7 +435,7 @@ struct EconomyView: View {
             .glassCapsule(interactive: false)
         }
         .buttonStyle(PressableStyle())
-        .accessibilityLabel("Your listings")
+        .accessibilityLabel(live > 0 ? "Your listings, \(live) live" : "Your listings")
     }
 
     private var locationRow: some View {
