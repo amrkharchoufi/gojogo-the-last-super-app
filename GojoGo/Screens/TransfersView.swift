@@ -22,6 +22,7 @@ struct TransfersView: View {
     @State private var cancelling: TransferDTO?
     @State private var confirmingReceipt: TransferDTO?
     @State private var uploadingFor: TransferDTO?
+    @State private var pickingDocument = false
     @State private var uploading = false
 
     var body: some View {
@@ -87,10 +88,14 @@ struct TransfersView: View {
         } message: {
             Text("Anything held goes back to the buyer in full.")
         }
-        .fileImporter(isPresented: Binding(
-            get: { uploadingFor != nil },
-            set: { if !$0 { uploadingFor = nil } }
-        ), allowedContentTypes: [.pdf, .image, .data], allowsMultipleSelection: false) { result in
+        // Presentation and target are kept apart on purpose. Driving
+        // `isPresented` off `uploadingFor` meant dismissal cleared the very
+        // thing `onCompletion` needs, and the two orderings are not ours to
+        // guarantee — a race whose losing side is a file that silently never
+        // uploads. A plain flag presents; `uploadingFor` only carries the target.
+        .fileImporter(isPresented: $pickingDocument,
+                      allowedContentTypes: [.pdf, .image, .data],
+                      allowsMultipleSelection: false) { result in
             handleDocument(result)
         }
     }
@@ -172,11 +177,16 @@ struct TransfersView: View {
     @ViewBuilder
     private func actions(_ transfer: TransferDTO, selling: Bool) -> some View {
         HStack(spacing: 10) {
-            if transfer.step == .paymentHeld || transfer.step == .docsConfirmed {
+            // Seller only. `presign`/`attach` both 404 anyone who isn't the
+            // seller, so offering this to the buyer was a button whose only
+            // possible outcome was an error — and the paperwork is the
+            // seller's to produce anyway.
+            if selling, transfer.step == .paymentHeld || transfer.step == .docsConfirmed {
                 Button {
                     app.openTransferID = transfer.id
                     app.loadTransferDocuments(transfer.id)
                     uploadingFor = transfer
+                    pickingDocument = true
                 } label: {
                     HStack(spacing: 5) {
                         if uploading { ProgressView().tint(GGColor.textPrimary) }
@@ -235,18 +245,28 @@ struct TransfersView: View {
     }
 
     private func handleDocument(_ result: Result<[URL], Error>) {
+        let transfer = uploadingFor
+        uploadingFor = nil
         guard case .success(let urls) = result, let url = urls.first,
-              let transfer = uploadingFor else { return }
+              let transfer else { return }
         uploading = true
         Task {
             defer { uploading = false }
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else { return }
+            // A paper that can't be read is worth saying out loud: the reviewer
+            // is waiting on it, and silence here reads as "sent".
+            guard let data = try? Data(contentsOf: url) else {
+                app.showEconomyNotice("Couldn't read that file.")
+                return
+            }
             let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
                 ?? "application/octet-stream"
-            _ = await app.uploadTransferDocument(transfer.id, data: data,
-                                                 label: url.lastPathComponent, contentType: type)
+            if let failure = await app.uploadTransferDocument(
+                transfer.id, data: data,
+                label: url.lastPathComponent, contentType: type) {
+                app.showEconomyNotice(failure)
+            }
         }
     }
 }
