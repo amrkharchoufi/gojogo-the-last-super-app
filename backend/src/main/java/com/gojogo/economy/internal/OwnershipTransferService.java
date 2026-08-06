@@ -67,7 +67,7 @@ class OwnershipTransferService {
             .findByListingIdAndBuyerIdAndState(listingId, me, TransferState.INQUIRY)
             .orElseGet(() -> transfers.save(
                 new OwnershipTransfer(listingId, listing.getSellerId(), me)));
-        return toResponse(transfer, listing);
+        return toResponse(transfer, listing, transferDocs.countByTransferId(transfer.getId()));
     }
 
     /** The seller names the price. From here the number never moves — a
@@ -235,8 +235,15 @@ class OwnershipTransferService {
         Map<UUID, Listing> byId = listings.findAllById(page.stream()
                 .map(OwnershipTransfer::getListingId).collect(Collectors.toSet())).stream()
             .collect(Collectors.toMap(Listing::getId, l -> l));
+        // One grouped count for the page rather than one query per row.
+        Map<UUID, Long> documentCounts = transferDocs.countByTransferIdIn(
+                page.stream().map(OwnershipTransfer::getId).collect(Collectors.toSet())).stream()
+            .collect(Collectors.toMap(
+                TransferDocumentRepository.TransferDocumentCount::getTransferId,
+                TransferDocumentRepository.TransferDocumentCount::getTotal));
         return page.stream()
-            .map(t -> toResponse(t, byId.get(t.getListingId())))
+            .map(t -> toResponse(t, byId.get(t.getListingId()),
+                documentCounts.getOrDefault(t.getId(), 0L)))
             .toList();
     }
 
@@ -254,16 +261,18 @@ class OwnershipTransferService {
     }
 
     private ProductDtos.TransferResponse toResponse(OwnershipTransfer transfer) {
-        return toResponse(transfer, listings.findById(transfer.getListingId()).orElse(null));
+        return toResponse(transfer, listings.findById(transfer.getListingId()).orElse(null),
+            transferDocs.countByTransferId(transfer.getId()));
     }
 
-    private ProductDtos.TransferResponse toResponse(OwnershipTransfer t, Listing listing) {
+    private ProductDtos.TransferResponse toResponse(OwnershipTransfer t, Listing listing,
+                                                    long documentCount) {
         return new ProductDtos.TransferResponse(t.getId(), t.getListingId(),
             listing == null ? "Removed listing" : listing.getTitle(),
             listing == null ? null : listing.getVinSerial(),
             t.getSellerId(), t.getBuyerId(), t.getState().name(), t.getPriceCents(),
             payments.currency(), t.isFlaggedManual(), t.getCreatedAt(), t.getAcceptedAt(),
             t.getPaidAt(), t.getDocsConfirmedAt(), t.getTransferredAt(), t.getReleasedAt(),
-            t.getCancelledAt(), t.getCancelNote());
+            t.getCancelledAt(), t.getCancelNote(), documentCount);
     }
 }

@@ -431,6 +431,9 @@ struct TransferDTO: Decodable, Identifiable, Equatable {
     let releasedAt: String?
     let cancelledAt: String?
     let cancelNote: String?
+    /// How many papers are attached. Absent on responses from a backend older
+    /// than this field, which reads as "none known" rather than as zero.
+    let documentCount: Int?
 
     var step: TransferState { TransferState(wire: state) }
 

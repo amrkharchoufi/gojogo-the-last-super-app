@@ -162,11 +162,34 @@ struct TransfersView: View {
         }
     }
 
+    /// "Papers" until the server has told us how many; the count once it has.
+    /// A backend without the field is not the same as a transfer with nothing
+    /// attached, so the bare label stands in rather than a confident "0".
+    private func attachedLabel(_ transfer: TransferDTO) -> String {
+        guard let count = transfer.documentCount else { return "Papers" }
+        return count == 0 ? "Papers" : "Papers \(count)"
+    }
+
+    private func attachedAccessibilityLabel(_ transfer: TransferDTO) -> String {
+        guard let count = transfer.documentCount else { return "Papers" }
+        switch count {
+        case 0:  return "Papers, none attached"
+        case 1:  return "Papers, 1 attached"
+        default: return "Papers, \(count) attached"
+        }
+    }
+
     private func sellerHint(_ transfer: TransferDTO) -> String {
         switch transfer.step {
         case .inquiry: return "Somebody's interested. Name a price to move it on."
         case .offerAccepted: return "Waiting for them to pay into escrow."
-        case .paymentHeld: return "Money is held. Upload the paperwork so a reviewer can check it."
+        case .paymentHeld:
+            // Still asking for papers after they've been sent reads as though
+            // the upload didn't take.
+            if let count = transfer.documentCount, count > 0 {
+                return "Money is held. Your paperwork is with a reviewer."
+            }
+            return "Money is held. Upload the paperwork so a reviewer can check it."
         case .docsConfirmed: return "Papers checked. Hand it over and they'll confirm."
         case .transferred: return "They've confirmed — the money is on its way to you."
         case .released: return "Paid."
@@ -192,7 +215,9 @@ struct TransfersView: View {
                         if uploading { ProgressView().tint(GGColor.textPrimary) }
                         Image(systemName: "paperclip")
                             .font(.system(size: 11, weight: .semibold))
-                        Text("Papers")
+                        // The count is the receipt. Without it an upload that
+                        // silently failed looked exactly like one that worked.
+                        Text(attachedLabel(transfer))
                             .font(.system(size: 12, weight: .semibold))
                     }
                     .foregroundStyle(GGColor.textPrimary)
@@ -201,6 +226,7 @@ struct TransfersView: View {
                     .glassCapsule(interactive: false)
                 }
                 .buttonStyle(PressableStyle())
+                .accessibilityLabel(attachedAccessibilityLabel(transfer))
             }
 
             Spacer(minLength: 0)
@@ -266,7 +292,11 @@ struct TransfersView: View {
                 transfer.id, data: data,
                 label: url.lastPathComponent, contentType: type) {
                 app.showEconomyNotice(failure)
+                return
             }
+            // The count lives on the transfer, not on the upload's reply, so
+            // the card only says "Papers 1" once the row is re-read.
+            await app.refreshTransfers()
         }
     }
 }

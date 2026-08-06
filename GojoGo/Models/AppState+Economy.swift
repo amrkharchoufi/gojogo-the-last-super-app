@@ -27,6 +27,10 @@ extension AppState {
         // Browse can't see the seller's paused or sold items, so the shelf is
         // fetched separately — and it's what puts the count on the chrome chip.
         await refreshSellerListings()
+        // A transfer moves when the other party acts, so the gesture that means
+        // "show me what changed" has to cover them too. Leaving them out meant
+        // pulling to refresh on a stale enquiry redrew everything except it.
+        await refreshTransfers()
     }
 
     /// Settles the catalog on what browse just served, and drops what it didn't.

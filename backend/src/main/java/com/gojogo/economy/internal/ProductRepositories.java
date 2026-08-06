@@ -133,4 +133,17 @@ interface OwnershipTransferRepository extends JpaRepository<OwnershipTransfer, U
 interface TransferDocumentRepository extends JpaRepository<TransferDocument, UUID> {
 
     List<TransferDocument> findByTransferIdOrderByUploadedAtAsc(UUID transferId);
+
+    long countByTransferId(UUID transferId);
+
+    /** Counts for a page of transfers in one round trip, so the list endpoint
+     *  doesn't fan out into a query per row. */
+    @Query("select d.transferId as transferId, count(d) as total from TransferDocument d "
+        + "where d.transferId in :transferIds group by d.transferId")
+    List<TransferDocumentCount> countByTransferIdIn(@Param("transferIds") Collection<UUID> transferIds);
+
+    interface TransferDocumentCount {
+        UUID getTransferId();
+        long getTotal();
+    }
 }

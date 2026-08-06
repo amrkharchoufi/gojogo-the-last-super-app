@@ -27,10 +27,14 @@ extension AppState {
         transferDocuments = []
     }
 
+    /// Polled while the marketplace is on screen, so it diffs before it
+    /// assigns: `transfers` lives on AppState, and reassigning an identical
+    /// array republishes the whole app every 30 seconds for nothing.
     func refreshTransfers() async {
         guard backendConnected else { return }
         do {
             let mine = try await ShopStore.shared.transfers()
+            guard mine != transfers else { return }
             withAnimation(.easeOut(duration: 0.2)) { transfers = mine }
         } catch {
             #if DEBUG

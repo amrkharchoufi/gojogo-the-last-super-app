@@ -15,6 +15,8 @@ import SwiftUI
 struct ShopsSection: View {
     @EnvironmentObject var app: AppState
     @Binding var chromeHidden: Bool
+    /// Measured by the chrome that floats above this scroll, not assumed.
+    var chromeHeight: CGFloat = ChromeMetrics.assumedHeight
 
     private let columns = [GridItem(.flexible(), spacing: 12),
                            GridItem(.flexible(), spacing: 12)]
@@ -64,7 +66,7 @@ struct ShopsSection: View {
 
                 Color.clear.frame(height: tabBarInset + (app.shopBasket.isEmpty ? 0 : 60))
             }
-            .padding(.top, 98)
+            .padding(.top, chromeHeight)
         }
         .refreshable { await app.refreshShops() }
         .trackScrollChrome(hidden: $chromeHidden)

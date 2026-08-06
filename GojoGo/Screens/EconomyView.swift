@@ -8,6 +8,12 @@ struct EconomyView: View {
     @State private var nearMe = false
     @State private var underBudget = false
     @State private var chromeHidden = false
+    /// What the chrome actually measures, not what it used to measure. Every
+    /// scroll below it insets by this. It was three hard-coded 98s, which held
+    /// only while the header stayed one wordmark and two chips tall — M2's
+    /// Transfers chip made it a third, the row overflowed, and the overflow
+    /// landed on top of the row beneath.
+    @State private var chromeHeight: CGFloat = ChromeMetrics.assumedHeight
     @FocusState private var searchFocused: Bool
 
     /// Browse only ever shows live listings — a seller's paused or sold items
@@ -72,8 +78,8 @@ struct EconomyView: View {
             // so switching segments never leaves one screen's offset on another.
             switch app.economySegment {
             case .marketplace: marketplaceScroll
-            case .shops:       ShopsSection(chromeHidden: $chromeHidden)
-            case .services:    ServicesSection(chromeHidden: $chromeHidden)
+            case .shops:       ShopsSection(chromeHidden: $chromeHidden, chromeHeight: chromeHeight)
+            case .services:    ServicesSection(chromeHidden: $chromeHidden, chromeHeight: chromeHeight)
             }
 
             topChrome
@@ -83,7 +89,7 @@ struct EconomyView: View {
                 EconomyNoticeBanner(message: notice) { app.dismissEconomyNotice() }
                     .padding(.horizontal, 16)
                     // Clears the wordmark row rather than sitting on top of it.
-                    .padding(.top, 108)
+                    .padding(.top, chromeHeight + 10)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(3)
@@ -102,7 +108,15 @@ struct EconomyView: View {
         }
         .animation(.ggOverlay, value: app.economyNotice)
         .animation(.ggSnappy, value: app.shopBasket.count)
-        .task {
+        .onPreferenceChange(ChromeHeightKey.self) { height in
+            guard height > 0, abs(height - chromeHeight) > 0.5 else { return }
+            chromeHeight = height
+        }
+        // Keyed on the connection, not just on appearing. Asking once at
+        // appearance raced the connect chain: on a cold launch `backendConnected`
+        // is still false, `refreshTransfers` returns having done nothing, and
+        // the chip stayed missing until the tab was left and re-entered.
+        .task(id: app.backendConnected) {
             // Each segment loads itself on first appearance; this only covers
             // the case of landing straight back on a non-default one.
             switch app.economySegment {
@@ -111,9 +125,21 @@ struct EconomyView: View {
             case .services:    await app.refreshServices()
             }
             // Whether the Transfers chip exists at all is an answer only the
-            // server has, so it is asked once when the tab opens rather than
-            // added to the connect chain everybody pays for.
+            // server has, so it is asked here rather than added to the connect
+            // chain everybody pays for.
             await app.refreshTransfers()
+        }
+        // Someone else's move — an enquiry arriving, a price being named, an
+        // escrow paid — changes this screen with no input from the person
+        // looking at it. Without this the seller sits on the tab and never
+        // learns anybody asked.
+        .task(id: app.economySegment) {
+            guard app.economySegment == .marketplace else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled else { return }
+                await app.refreshTransfers()
+            }
         }
     }
 
@@ -185,7 +211,7 @@ struct EconomyView: View {
 
                 Color.clear.frame(height: tabBarInset)
             }
-            .padding(.top, 98)
+            .padding(.top, chromeHeight)
         }
         .scrollDismissesKeyboard(.immediately)
         .refreshable { await app.refreshEconomy() }
@@ -196,16 +222,21 @@ struct EconomyView: View {
 
     private var topChrome: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("GOJOGO")
-                        .font(.ggMono(11, .semibold))
-                        .tracking(0.6)
-                        .foregroundStyle(GGColor.textSecondary)
-                    Wordmark(size: 20, trailing: "economy")
+            // Side by side while they both fit; the actions drop to their own
+            // line when they don't. The alternative — letting the row squeeze —
+            // is what broke "gojoeconomy" across two lines and hyphenated
+            // "Transfers" mid-word on every phone narrower than the content.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 0) {
+                    brandBlock
+                    Spacer(minLength: 12)
+                    segmentActionsRow
                 }
-                Spacer(minLength: 0)
-                segmentActions
+                VStack(alignment: .leading, spacing: 10) {
+                    brandBlock
+                    segmentActionsRow
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
             segmentPicker
         }
@@ -218,6 +249,29 @@ struct EconomyView: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
+        .measureChromeHeight()
+    }
+
+    private var brandBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("GOJOGO")
+                .font(.ggMono(11, .semibold))
+                .tracking(0.6)
+                .foregroundStyle(GGColor.textSecondary)
+            Wordmark(size: 20, trailing: "economy")
+        }
+        // The wordmark is a logo: it keeps its width or the layout gives way,
+        // never the other way round.
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: true)
+    }
+
+    private var segmentActionsRow: some View {
+        HStack(spacing: 8) {
+            segmentActions
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: true)
     }
 
     /// The trailing chrome is per segment, because "the thing you'd want next"
@@ -1228,6 +1282,35 @@ struct SellListingSheet: View {
             .foregroundStyle(GGColor.textPrimary)
             .padding(14)
             .glass(cornerRadius: 16, fillOpacity: 0.05, borderOpacity: 0.1)
+        }
+    }
+}
+
+// MARK: - Chrome measurement
+
+/// The Economy chrome floats over three independent scroll views, so each one
+/// has to inset itself by the header's height. Measuring it beats guessing it:
+/// the guess was a constant, and a constant is wrong the first time a chip,
+/// a longer word, or a larger type size makes the header taller.
+enum ChromeMetrics {
+    /// Only the value used before the first measurement lands.
+    static let assumedHeight: CGFloat = 98
+}
+
+struct ChromeHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = ChromeMetrics.assumedHeight
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+extension View {
+    /// Publishes this view's height as the chrome height.
+    func measureChromeHeight() -> some View {
+        background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: ChromeHeightKey.self, value: proxy.size.height)
+            }
         }
     }
 }

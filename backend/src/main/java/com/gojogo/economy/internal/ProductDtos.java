@@ -171,6 +171,10 @@ final class ProductDtos {
                             OffsetDateTime createdAt, OffsetDateTime acceptedAt,
                             OffsetDateTime paidAt, OffsetDateTime docsConfirmedAt,
                             OffsetDateTime transferredAt, OffsetDateTime releasedAt,
-                            OffsetDateTime cancelledAt, String cancelNote) {
+                            OffsetDateTime cancelledAt, String cancelNote,
+                            // How many papers are attached. The app had no way to
+                            // tell an upload that worked from one that didn't, which
+                            // is how a silently-dropped upload went unnoticed.
+                            long documentCount) {
     }
 }
