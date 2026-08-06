@@ -386,7 +386,7 @@ struct ShopProductEditor: View {
         saving = true
         error = nil
         Task {
-            let failure = await app.saveShopProduct(product?.id, ShopProductBody(
+            let outcome = await app.saveShopProduct(product?.id, ShopProductBody(
                 name: name.trimmingCharacters(in: .whitespaces),
                 description: description,
                 category: category.trimmingCharacters(in: .whitespaces),
@@ -403,14 +403,25 @@ struct ShopProductEditor: View {
                 },
                 kind: isDigital ? "DIGITAL" : "PHYSICAL"))
             saving = false
-            // A digital product with licence keys needs its generator attached
-            // once; doing it here rather than behind a second tap is what keeps
-            // "save" from producing something nobody can be given.
-            if failure == nil, isDigital, licenseKeys, let id = product?.id {
-                _ = await app.attachDigitalAsset(to: id, data: nil, fileName: "",
-                                                 contentType: "", licenseKeys: true)
+            guard case .saved(let saved) = outcome else {
+                withAnimation(.ggSnappy) { error = outcome.errorMessage }
+                return
             }
-            if failure == nil { dismiss() } else { withAnimation(.ggSnappy) { error = failure } }
+            // A licence-key product needs its generator attached, and the id to
+            // attach it to only exists once the create has returned — which is
+            // why this reads the saved product rather than the one passed in.
+            // It used to read `product?.id`, which is nil on a create, so a
+            // newly made licence product was saved with nothing behind it: live
+            // in the catalog, buyable, and with no key to hand over.
+            if isDigital, licenseKeys {
+                if let failure = await app.attachDigitalAsset(
+                    to: saved.id, data: nil, fileName: "",
+                    contentType: "", licenseKeys: true) {
+                    withAnimation(.ggSnappy) { error = failure }
+                    return
+                }
+            }
+            dismiss()
         }
     }
 

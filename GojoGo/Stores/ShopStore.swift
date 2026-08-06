@@ -167,11 +167,16 @@ final class ShopStore {
 
     /// A licence-key product has no file to upload — the key is generated at
     /// capture, so attaching one is a body with no object behind it.
+    ///
+    /// The kind is `LICENSE`, which is what `EntitlementKind` actually spells.
+    /// This read `LICENSE_KEY` — a name invented on this side of the wire — and
+    /// the server refused every attach with "Unknown entitlement kind", so a
+    /// licence product could be created and never made deliverable.
     func attachLicenseAsset(to productId: UUID) async throws {
         try await APIClient.shared.putNoContent(
             "/v1/economy/sellers/mine/products/\(productId)/digital-asset",
             body: ShopDigitalAssetBody(objectKey: "generated", fileName: "",
-                                       contentType: "", entitlementKind: "LICENSE_KEY"))
+                                       contentType: "", entitlementKind: "LICENSE"))
     }
 
     // MARK: Ownership transfers

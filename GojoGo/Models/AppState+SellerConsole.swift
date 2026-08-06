@@ -8,6 +8,19 @@ import SwiftUI
 // caller's token — so nothing here carries a shop id, and nothing here can be
 // pointed at somebody else's shop by editing a request.
 
+/// What a product save produced. The product itself, because a digital one is
+/// not finished until an asset is attached to its id, and that id does not
+/// exist until the create returns.
+enum ShopProductSaveResult {
+    case saved(ShopProductDTO)
+    case failed(String)
+
+    var errorMessage: String? {
+        if case .failed(let message) = self { return message }
+        return nil
+    }
+}
+
 extension AppState {
 
     func openSellerConsole() {
@@ -64,7 +77,12 @@ extension AppState {
     /// Creates or edits a product. The same body posts both ways, variants
     /// included — a variant missing from the list is retired server-side rather
     /// than deleted, because order lines point at it forever.
-    func saveShopProduct(_ productId: UUID?, _ body: ShopProductBody) async -> String? {
+    ///
+    /// Returns the saved product rather than just a success flag, because a
+    /// digital one has a second step that needs its id: a licence-key product
+    /// created and never given its generator is a product that takes money and
+    /// delivers nothing.
+    func saveShopProduct(_ productId: UUID?, _ body: ShopProductBody) async -> ShopProductSaveResult {
         do {
             let product = productId == nil
                 ? try await ShopStore.shared.createProduct(body)
@@ -81,9 +99,9 @@ extension AppState {
                 }
                 if browsingShopProduct?.id == product.id { browsingShopProduct = product }
             }
-            return nil
+            return .saved(product)
         } catch {
-            return Self.message(from: error, fallback: "Couldn't save that product.")
+            return .failed(Self.message(from: error, fallback: "Couldn't save that product."))
         }
     }
 

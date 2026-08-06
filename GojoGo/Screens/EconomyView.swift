@@ -1046,6 +1046,11 @@ struct SellListingSheet: View {
     @State private var publishError: String?
     @State private var photoItem: PhotosPickerItem?
     @State private var photoData: Data?
+    /// An ownership transfer rather than an ordinary sale: a car, a plot, a
+    /// numbered thing. Chosen here and nowhere else — the escrow that follows
+    /// points at this listing, so what it is cannot change later.
+    @State private var transfer = false
+    @State private var vinSerial = ""
 
     var body: some View {
         NavigationStack {
@@ -1076,6 +1081,8 @@ struct SellListingSheet: View {
 
                     field("Details", text: $notes, lines: true)
 
+                    kindPicker
+
                     if let publishError {
                         Text(publishError)
                             .font(.system(size: 13))
@@ -1096,7 +1103,8 @@ struct SellListingSheet: View {
                         Task {
                             let failure = await app.createListing(
                                 title: title, price: price, category: category,
-                                notes: notes, imageData: photoData)
+                                notes: notes, imageData: photoData,
+                                transfer: transfer, vinSerial: vinSerial)
                             publishing = false
                             guard failure == nil else {
                                 withAnimation { publishError = failure }
@@ -1158,6 +1166,47 @@ struct SellListingSheet: View {
                 if let data = try? await item?.loadTransferable(type: Data.self) {
                     photoData = data
                 }
+            }
+        }
+    }
+
+    /// Ordinary sale, or something whose paperwork changes hands.
+    ///
+    /// Only offered at creation. The transfer machine holds an escrow against
+    /// this listing, so a kind that could be edited afterwards would be a live
+    /// deal changing shape under both parties — which is also why the seller's
+    /// edit form posts the kind straight back rather than showing it.
+    private var kindPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ForEach([false, true], id: \.self) { isTransfer in
+                    let active = transfer == isTransfer
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        withAnimation(.ggSnappy) { transfer = isTransfer }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: isTransfer ? "doc.text" : "tag")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(isTransfer ? "Ownership transfer" : "Straight sale")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(active ? GGColor.onAccent : GGColor.textPrimary)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 9)
+                        .background(Capsule().fill(active ? GGColor.white : GGColor.ink(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if transfer {
+                field("VIN, plate or serial", text: $vinSerial)
+                Text("The buyer's money is held in escrow, a reviewer checks the paperwork, and it only reaches you once the buyer confirms the transfer.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

@@ -661,7 +661,11 @@ private struct ListingEditForm: View {
             condition: condition,
             locationLabel: location.trimmingCharacters(in: .whitespacesAndNewlines),
             description: details,
-            imageUrls: imageURLs)
+            imageUrls: imageURLs,
+            // Not editable here: what a listing *is* was decided when it was
+            // posted, and a live escrow points at it.
+            kind: listing.kind,
+            vinSerial: listing.vinSerial)
     }
 
     /// Cents → a plain editable number ("1200", "1200.50"), so what the seller

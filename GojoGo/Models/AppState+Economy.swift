@@ -114,7 +114,8 @@ extension AppState {
     /// seller asked to publish, and a card that looks published is a worse
     /// answer than being told it didn't go up.
     func createListing(title: String, price: String, category: String, notes: String,
-                       imageData: Data? = nil) async -> String? {
+                       imageData: Data? = nil,
+                       transfer: Bool = false, vinSerial: String = "") async -> String? {
         let trimmed = title.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "Give the listing a title." }
 
@@ -139,7 +140,12 @@ extension AppState {
                 condition: "Good",
                 locationLabel: "nearby",
                 description: notes,
-                imageUrls: imageUrls)
+                imageUrls: imageUrls,
+                // What a listing *is* is decided here and never again: an
+                // escrow points at it, and a kind that could be edited later
+                // would be a live deal changing shape underneath itself.
+                kind: transfer ? "OWNERSHIP_TRANSFER" : "SALE",
+                vinSerial: transfer ? vinSerial.trimmingCharacters(in: .whitespaces) : "")
             let product = try await EconomyStore.shared.create(body)
             withAnimation { products.insert(product, at: 0) }
             schedulePersist()

@@ -68,6 +68,13 @@ struct ListingBody: Encodable {
     let locationLabel: String
     let description: String
     let imageUrls: [String]
+    /// SALE or OWNERSHIP_TRANSFER (Phase 5 M2). Sent on create and on edit
+    /// because this is a whole-object upsert — omitting it would quietly turn a
+    /// transfer listing back into an ordinary sale on the seller's next edit.
+    let kind: String
+    /// The chassis, plate or serial the paperwork is about. Only meaningful on
+    /// a transfer, and the server ignores it on anything else.
+    let vinSerial: String
 }
 
 struct ListingStatusBody: Encodable {
@@ -132,6 +139,11 @@ struct SellerListing: Identifiable, Equatable {
     var locationLabel: String
     var description: String
     var imageURLs: [String]
+    /// Carried on the seller's own copy because the edit form posts the whole
+    /// listing back: a kind that isn't in the body is a transfer listing that
+    /// silently becomes an ordinary sale the first time its seller fixes a typo.
+    var kind: String
+    var vinSerial: String
     var status: ListingStatus
     var saveCount: Int
     var viewCount: Int

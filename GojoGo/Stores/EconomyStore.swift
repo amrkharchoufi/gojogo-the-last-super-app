@@ -170,6 +170,8 @@ final class EconomyStore {
             locationLabel: dto.locationLabel,
             description: dto.description,
             imageURLs: dto.imageUrls,
+            kind: dto.kind ?? "SALE",
+            vinSerial: dto.vinSerial ?? "",
             status: ListingStatus(wire: dto.status),
             saveCount: dto.saveCount,
             viewCount: dto.viewCount ?? 0,
