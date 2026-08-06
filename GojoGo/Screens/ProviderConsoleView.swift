@@ -141,8 +141,11 @@ struct ProviderConsoleView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(GGColor.textPrimary)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 44, height: 44)
                     .glassCapsule(interactive: false)
+                    // See ShopProductDetailView.closeBar: an Image in a frame
+                    // hit-tests to the glyph unless it is given a shape.
+                    .contentShape(Circle())
             }
             .buttonStyle(PressableStyle())
         }

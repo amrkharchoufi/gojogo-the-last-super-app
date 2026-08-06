@@ -44,10 +44,12 @@ struct ServiceDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     facts
-                    if let description = live.description, !description.isEmpty {
+                    // Same guard as the product page: a field the server
+                    // stores as JSON comes back as "{}" rather than as empty.
+                    if let description = ShopProductDetailView.readable(live.description) {
                         block(title: "What's included", body: description)
                     }
-                    if let requirements = live.requirements, !requirements.isEmpty {
+                    if let requirements = ShopProductDetailView.readable(live.requirements) {
                         block(title: "What they need from you", body: requirements)
                     }
                     slotPicker
@@ -254,8 +256,11 @@ struct ServiceDetailView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(GGColor.textPrimary)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 44, height: 44)
                     .glassCapsule(interactive: false)
+                    // See ShopProductDetailView.closeBar: without a shape this
+                    // hit-tests to the glyph, not the circle.
+                    .contentShape(Circle())
             }
             .buttonStyle(PressableStyle())
             Spacer(minLength: 0)

@@ -40,10 +40,10 @@ struct ShopProductDetailView: View {
                     gallery
                     header
                     variantPicker
-                    if let specs = live.specs, !specs.isEmpty {
+                    if let specs = Self.readable(live.specs) {
                         block(title: "Details", body: specs)
                     }
-                    if let description = live.description, !description.isEmpty {
+                    if let description = Self.readable(live.description) {
                         block(title: "About", body: description)
                     }
                     reviews
@@ -191,6 +191,21 @@ struct ShopProductDetailView: View {
         .disabled(!variant.inStock)
     }
 
+    /// Text worth putting a heading over, or nil.
+    ///
+    /// `specs` is stored as JSON server-side, so a product with none comes back
+    /// as the string `"{}"` rather than as an empty one — and an emptiness check
+    /// that only tested for `""` duly rendered a **Details** heading with two
+    /// braces under it. Found on the first product ever created. The empty
+    /// containers are listed rather than parsed: this is a display guard, and a
+    /// JSON decode that failed would have to fall back to showing it anyway.
+    static func readable(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty,
+              !["{}", "[]", "null", "\"\""].contains(trimmed) else { return nil }
+        return trimmed
+    }
+
     private func block(title: String, body: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -238,6 +253,11 @@ struct ShopProductDetailView: View {
 
     // MARK: Chrome
 
+    /// The only way out of this page, which is why the tap target is the whole
+    /// circle and not the glyph. An `Image` in a `frame` hit-tests to the drawn
+    /// symbol unless it is given a shape of its own — so this read as a dead
+    /// button for anything but a dead-centre tap, and a full-screen cover with
+    /// no working exit is a trap.
     private var closeBar: some View {
         HStack {
             Button {
@@ -246,8 +266,9 @@ struct ShopProductDetailView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(GGColor.textPrimary)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 44, height: 44)
                     .glassCapsule(interactive: false)
+                    .contentShape(Circle())
             }
             .buttonStyle(PressableStyle())
             Spacer(minLength: 0)
