@@ -72,11 +72,12 @@ class ApnsPushSender {
     }
 
     /** Best-effort push for a freshly recorded notification. */
-    void notify(UUID recipientId, UUID actorId, String type, UUID postId, UUID storyFrameId) {
+    void notify(UUID recipientId, UUID actorId, String type, UUID postId, UUID commentId,
+                UUID storyFrameId) {
         if (!props.enabled() || keyBroken) return;
         executor.submit(() -> {
             try {
-                deliver(recipientId, actorId, type, postId, storyFrameId);
+                deliver(recipientId, actorId, type, postId, commentId, storyFrameId);
             } catch (Exception e) {
                 log.debug("APNs push failed: {}", e.toString());
             }
@@ -200,15 +201,15 @@ class ApnsPushSender {
     }
 
     private void deliver(UUID recipientId, UUID actorId, String type, UUID postId,
-                         UUID storyFrameId) throws Exception {
+                         UUID commentId, UUID storyFrameId) throws Exception {
         var devices = tokens.findByProfileId(recipientId);
         if (devices.isEmpty()) return;
         ProfileDto actor = profiles.findById(actorId).orElse(null);
         String title = actor != null
             ? (actor.displayName() != null ? actor.displayName() : "@" + actor.handle())
             : "GojoGo";
-        String body = phrase(type);
-        byte[] payload = payload(title, body, type, postId, storyFrameId);
+        String body = phrase(type, commentId != null);
+        byte[] payload = payload(title, body, type, postId, commentId, storyFrameId);
         String jwt = jwt();
         for (DeviceToken device : devices) {
             send(device, jwt, payload);
@@ -241,7 +242,7 @@ class ApnsPushSender {
     }
 
     private byte[] payload(String title, String body, String type, UUID postId,
-                           UUID storyFrameId) throws Exception {
+                           UUID commentId, UUID storyFrameId) throws Exception {
         Map<String, Object> alert = new LinkedHashMap<>();
         alert.put("title", title);
         alert.put("body", body);
@@ -252,6 +253,8 @@ class ApnsPushSender {
         root.put("aps", aps);
         root.put("type", type);
         if (postId != null) root.put("postId", postId.toString());
+        // The tap opens the thread rather than the post when there is one.
+        if (commentId != null) root.put("commentId", commentId.toString());
         if (storyFrameId != null) root.put("storyFrameId", storyFrameId.toString());
         return json.writeValueAsBytes(root);
     }
@@ -288,13 +291,14 @@ class ApnsPushSender {
         return Base64.getDecoder().decode(base64);
     }
 
-    private static String phrase(String type) {
+    /** Same wording as the in-app row — see {@code NotificationService.textFor}. */
+    private static String phrase(String type, boolean onComment) {
         return switch (type) {
             case "follow" -> "started following you";
             case "like" -> "liked your post";
             case "comment" -> "commented on your post";
             case "reply" -> "replied to your comment";
-            case "mention" -> "mentioned you";
+            case "mention" -> onComment ? "mentioned you in a comment" : "mentioned you in a post";
             case "story_reaction" -> "reacted to your story";
             case "story_reply" -> "replied to your story";
             default -> "sent you an update";

@@ -82,21 +82,35 @@ class CommentService {
         }
 
         OffsetDateTime now = OffsetDateTime.now();
+        // Resolved before anything is published, because who is tagged decides
+        // what the author is told — see below.
+        List<MentionDto> tagged = mentions.resolve(MentionTarget.COMMENT, text);
+        Set<UUID> taggedIds = tagged.stream().map(MentionDto::profileId).collect(Collectors.toSet());
+
         // Whoever this write is already telling by a more specific route must not
         // also get a "mentioned you" for the @handle that names them.
         Set<UUID> alreadyNotified = new HashSet<>();
         if (addressee == null) {
-            alreadyNotified.add(post.getAuthorId());
-            // Notify the author (the notifications module ignores self-comments).
-            events.publishEvent(new PostCommented(postId, post.getAuthorId(), me,
-                comment.getId(), now));
+            // <b>A comment that @-names the post's author is a mention.</b> It
+            // is the more specific fact and the one the author cares about:
+            // "commented on your post" under a post with forty comments says
+            // nothing, while "mentioned you in a comment" is addressed to them.
+            // Only the top-level case swaps. A reply already carries the handle
+            // it answers — the compose box types it for you — so treating that
+            // as a tag would retire "replied to your comment" entirely.
+            if (!taggedIds.contains(post.getAuthorId())) {
+                alreadyNotified.add(post.getAuthorId());
+                // Notify the author (the notifications module ignores self-comments).
+                events.publishEvent(new PostCommented(postId, post.getAuthorId(), me,
+                    comment.getId(), now));
+            }
         } else {
             alreadyNotified.add(addressee.getAuthorId());
             events.publishEvent(new CommentReplied(postId, addressee.getId(),
                 addressee.getAuthorId(), me, comment.getId(), now));
         }
-        List<MentionDto> tagged = mentions.record(MentionTarget.COMMENT, comment.getId(), me,
-            text, postId, comment.getId(), alreadyNotified);
+        mentions.record(MentionTarget.COMMENT, comment.getId(), me,
+            tagged, postId, comment.getId(), alreadyNotified);
 
         return new CommentResponse(comment.getId(),
             authorSummary(me, follows.followeeIds(me)),

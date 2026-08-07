@@ -519,7 +519,14 @@ struct NotificationDTO: Decodable {
     var actor: NotificationActorDTO
     var postId: UUID?
     var commentId: UUID?
+    var storyFrameId: UUID?
     var text: String
+    /// Thumbnail of the post or story frame this is about. Optional so a build
+    /// pointed at an older backend still decodes a feed.
+    var previewUrl: String?
+    /// The comment's words, or the post's caption — the row's second line.
+    var snippet: String?
+    var actorFollowed: Bool?
     var createdAt: String
     var read: Bool
 }

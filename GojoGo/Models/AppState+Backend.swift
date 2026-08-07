@@ -238,6 +238,35 @@ extension AppState {
         }
     }
 
+    /// Opens a post — its thread when `comments` is set, otherwise the post
+    /// itself — fetching it first if the feed has never loaded it.
+    ///
+    /// Activity is the surface that needs this most: a notification can be days
+    /// old and about a post that scrolled out of the feed long ago, and the old
+    /// behaviour there was to give up and open whatever the user posted most
+    /// recently, which is a different post about a different thing.
+    func openPostSurface(_ postID: UUID, comments: Bool) {
+        func open() {
+            if comments { openComments(for: postID) } else { openPostViewer(postID) }
+        }
+        if posts.contains(where: { $0.id == postID }) {
+            open()
+            return
+        }
+        guard backendConnected else { return }
+        Task {
+            do {
+                // Seeded into the feed so the viewer can resolve it; `refreshSocial`
+                // replaces `posts` wholesale, so it doesn't outlive the next refresh.
+                let post = try await SocialStore.shared.post(postID)
+                posts.insert(post, at: 0)
+                open()
+            } catch {
+                showEconomyNotice("That post isn't there any more.")
+            }
+        }
+    }
+
     /// Replaces the activity feed with live notifications (follows / likes /
     /// comments). Falls back to whatever's cached on failure.
     func refreshNotifications() async {
@@ -552,7 +581,7 @@ extension AppState {
         syncFollow(profileId: profileId, following: following)
     }
 
-    private func syncFollow(profileId: UUID, following: Bool) {
+    func syncFollow(profileId: UUID, following: Bool) {
         guard backendConnected else { return }
         Task {
             do {

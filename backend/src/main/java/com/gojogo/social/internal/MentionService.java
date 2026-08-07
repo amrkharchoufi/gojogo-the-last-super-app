@@ -65,10 +65,40 @@ class MentionService {
     }
 
     /**
-     * Records the tags in {@code text} and publishes one {@link UserMentioned}
-     * per distinct person. Tagging yourself is stored (the caption still
-     * underlines it) but notifies nobody — that filter lives in the
-     * notifications module, which already ignores self-actions.
+     * Who {@code text} tags, without writing anything.
+     *
+     * <p>Split out from {@link #record} because a caller sometimes has to know
+     * the answer <em>before</em> it decides what else to publish: a comment that
+     * names the post's author is a mention, not a plain comment, and that choice
+     * has to be made before the comment event goes out.
+     */
+    @Transactional(readOnly = true)
+    List<MentionDto> resolve(MentionTarget kind, String text) {
+        List<String> handles = parse(text, limitFor(kind));
+        if (handles.isEmpty()) {
+            return List.of();
+        }
+        Map<String, ProfileDto> found = profiles.findByHandles(handles);
+        return handles.stream()
+            .map(found::get)
+            .filter(java.util.Objects::nonNull)
+            .map(p -> new MentionDto(p.id(), p.handle()))
+            .toList();
+    }
+
+    /** Resolves {@code text} and records what it tags — see the overload. */
+    @Transactional
+    List<MentionDto> record(MentionTarget kind, UUID targetId, UUID authorId, String text,
+                            UUID postId, UUID commentId, Collection<UUID> alreadyNotified) {
+        return record(kind, targetId, authorId, resolve(kind, text), postId, commentId,
+            alreadyNotified);
+    }
+
+    /**
+     * Stores already-resolved tags and publishes one {@link UserMentioned} per
+     * distinct person. Tagging yourself is stored (the caption still underlines
+     * it) but notifies nobody — that filter lives in the notifications module,
+     * which already ignores self-actions.
      *
      * @param alreadyNotified people this write is telling by another route —
      *                        the replied-to author, who should get one
@@ -76,18 +106,9 @@ class MentionService {
      * @return the tags as the response should carry them
      */
     @Transactional
-    List<MentionDto> record(MentionTarget kind, UUID targetId, UUID authorId, String text,
-                            UUID postId, UUID commentId, Collection<UUID> alreadyNotified) {
-        List<String> handles = parse(text, limitFor(kind));
-        if (handles.isEmpty()) {
-            return List.of();
-        }
-        Map<String, ProfileDto> found = profiles.findByHandles(handles);
-        List<MentionDto> resolved = handles.stream()
-            .map(found::get)
-            .filter(java.util.Objects::nonNull)
-            .map(p -> new MentionDto(p.id(), p.handle()))
-            .toList();
+    List<MentionDto> record(MentionTarget kind, UUID targetId, UUID authorId,
+                            List<MentionDto> resolved, UUID postId, UUID commentId,
+                            Collection<UUID> alreadyNotified) {
         if (resolved.isEmpty()) {
             return List.of();
         }

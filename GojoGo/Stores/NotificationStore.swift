@@ -39,14 +39,27 @@ final class NotificationStore {
     }
 
     func map(_ dto: NotificationDTO) -> ActivityItem {
-        ActivityItem(
+        // Registering the actor keeps a tapped row's profile openable by id
+        // rather than by whatever name it happens to render under.
+        if let handle = dto.actor.handle {
+            SocialStore.shared.registerProfile(id: dto.actor.id, handle: handle)
+        }
+        return ActivityItem(
             id: dto.id,
             kind: ActivityKind(rawValue: dto.type) ?? .system,
             actor: dto.actor.name ?? dto.actor.handle ?? "Someone",
+            actorHandle: dto.actor.handle,
+            actorID: dto.actor.id,
+            actorFollowed: dto.actorFollowed ?? false,
             text: dto.text,
+            snippet: dto.snippet,
             timeAgo: BackendDate.relative(dto.createdAt),
+            createdAt: BackendDate.parse(dto.createdAt) ?? Date(),
             read: dto.read,
             avatarURL: dto.actor.avatarUrl,
-            postID: dto.postId)
+            previewURL: dto.previewUrl,
+            postID: dto.postId,
+            commentID: dto.commentId,
+            storyFrameID: dto.storyFrameId)
     }
 }

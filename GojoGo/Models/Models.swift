@@ -728,9 +728,13 @@ struct FileChip: Identifiable {
 // MARK: - Activity / notifications
 
 /// Raw values are the server's notification `type` — a new one there needs a
-/// case here or it renders as `.system`.
+/// case here or it renders as `.system`, which is also where it would route on
+/// tap (the Madeleine tab), so a missing case is a wrong destination and not
+/// just a wrong icon.
 enum ActivityKind: String {
     case like, comment, reply, follow, mention, order, system
+    case storyReaction = "story_reaction"
+    case storyReply = "story_reply"
 
     var icon: String {
         switch self {
@@ -740,6 +744,8 @@ enum ActivityKind: String {
         case .follow: return "person.fill.badge.plus"
         case .mention: return "at"
         case .order: return "bag.fill"
+        case .storyReaction: return "face.smiling.inverse"
+        case .storyReply: return "arrowshape.turn.up.left.fill"
         case .system: return "sparkles"
         }
     }
@@ -747,10 +753,11 @@ enum ActivityKind: String {
     var tint: Color {
         switch self {
         case .like: return Color(hex: "E85D75")
-        case .comment, .reply: return GGColor.blue
+        case .comment, .reply, .storyReply: return GGColor.blue
         case .follow: return Color(hex: "7A6CF0")
         case .mention: return Color(hex: "E8B45D")
         case .order: return Color(hex: "5DC98A")
+        case .storyReaction: return Color(hex: "E85D75")
         case .system: return GGColor.accent
         }
     }
@@ -760,21 +767,46 @@ struct ActivityItem: Identifiable {
     let id: UUID
     var kind: ActivityKind
     var actor: String
+    /// The actor's handle — what a profile is opened by, and not the same
+    /// string as `actor`, which is a display name whenever they have set one.
+    var actorHandle: String?
+    var actorID: UUID?
+    /// Whether *you* follow them. Only meaningful on a `.follow` row, which is
+    /// the one that offers to follow back.
+    var actorFollowed: Bool
     var text: String
+    /// What was said — the comment, or the post's caption when nothing was.
+    /// The row's second line, and half of the answer to "about which post?".
+    var snippet: String?
     var timeAgo: String
+    /// The real timestamp behind `timeAgo`, which the section headers group by.
+    var createdAt: Date
     var read: Bool
     var avatarURL: String?
     var previewURL: String?
     /// What this is about, when it is about something — a tap opens it instead
     /// of guessing at the user's most recent post.
     var postID: UUID?
+    /// Set when the activity happened inside a thread. A like has none, which
+    /// is exactly why a like must not open one.
+    var commentID: UUID?
+    /// Set instead of `postID` when this is about a story.
+    var storyFrameID: UUID?
 
-    init(id: UUID = UUID(), kind: ActivityKind, actor: String, text: String,
-         timeAgo: String, read: Bool = false, avatarURL: String? = nil,
-         previewURL: String? = nil, postID: UUID? = nil) {
-        self.id = id; self.kind = kind; self.actor = actor; self.text = text
-        self.timeAgo = timeAgo; self.read = read; self.avatarURL = avatarURL
+    init(id: UUID = UUID(), kind: ActivityKind, actor: String,
+         actorHandle: String? = nil, actorID: UUID? = nil, actorFollowed: Bool = false,
+         text: String, snippet: String? = nil,
+         timeAgo: String, createdAt: Date = Date(), read: Bool = false,
+         avatarURL: String? = nil, previewURL: String? = nil, postID: UUID? = nil,
+         commentID: UUID? = nil, storyFrameID: UUID? = nil) {
+        self.id = id; self.kind = kind; self.actor = actor
+        self.actorHandle = actorHandle; self.actorID = actorID
+        self.actorFollowed = actorFollowed
+        self.text = text; self.snippet = snippet
+        self.timeAgo = timeAgo; self.createdAt = createdAt
+        self.read = read; self.avatarURL = avatarURL
         self.previewURL = previewURL; self.postID = postID
+        self.commentID = commentID; self.storyFrameID = storyFrameID
     }
 }
 
