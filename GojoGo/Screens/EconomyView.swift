@@ -14,6 +14,9 @@ struct EconomyView: View {
     /// Transfers chip made it a third, the row overflowed, and the overflow
     /// landed on top of the row beneath.
     @State private var chromeHeight: CGFloat = ChromeMetrics.assumedHeight
+    /// Local rather than `app.showDeliveryAddressSheet`, which GojoDelivery
+    /// owns. One flag driving two `.sheet`s presents on neither.
+    @State private var pickingAddress = false
     @FocusState private var searchFocused: Bool
 
     /// Browse only ever shows live listings — a seller's paused or sold items
@@ -112,6 +115,13 @@ struct EconomyView: View {
             guard height > 0, abs(height - chromeHeight) > 0.5 else { return }
             chromeHeight = height
         }
+        .sheet(isPresented: $pickingAddress) {
+            DeliveryAddressSheet()
+                .environmentObject(app)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(GGColor.sheetBG)
+        }
         // Keyed on the connection, not just on appearing. Asking once at
         // appearance raced the connect chain: on a cold launch `backendConnected`
         // is still false, `refreshTransfers` returns having done nothing, and
@@ -128,6 +138,10 @@ struct EconomyView: View {
             // server has, so it is asked here rather than added to the connect
             // chain everybody pays for.
             await app.refreshTransfers()
+            // Economy's own load: the addresses arrive with `refreshDelivery`,
+            // which only runs on the delivery tab. Without this the row reads
+            // "Add a delivery address" to someone who has three saved.
+            await app.refreshDeliveryAddresses()
         }
         // Someone else's move — an enquiry arriving, a price being named, an
         // escrow paid, a listing going SOLD — changes this screen with no input
@@ -445,9 +459,14 @@ struct EconomyView: View {
         .accessibilityLabel(live > 0 ? "Your listings, \(live) live" : "Your listings")
     }
 
+    /// The same saved addresses GojoDelivery uses — they live on the account,
+    /// not on a vertical, so the one you set for a takeaway is the one a seller
+    /// ships to. It read "Home · Casablanca" for everybody until now: a chevron
+    /// that opened nothing, on an address nobody had entered.
     private var locationRow: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            pickingAddress = true
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "location.fill")
@@ -456,9 +475,10 @@ struct EconomyView: View {
                 Text("Deliver to")
                     .font(.system(size: 13))
                     .foregroundStyle(GGColor.textSecondary)
-                Text("Home · Casablanca")
+                Text(app.deliveryAddressLabel)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(GGColor.textPrimary)
+                    .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(GGColor.textTertiary)
@@ -466,7 +486,7 @@ struct EconomyView: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
     }
 
     private var searchBar: some View {
