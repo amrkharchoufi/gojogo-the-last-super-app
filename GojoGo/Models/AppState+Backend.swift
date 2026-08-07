@@ -81,6 +81,19 @@ extension AppState {
         if let year = profile.birthYear { user.birthYear = year }
         if !profile.interests.isEmpty { user.interests = profile.interests.sorted() }
         if let mail = profile.email { email = mail }
+        // The profile picture is on screen (home chrome, "Your story", the
+        // composer) the moment the app renders after sign-in, so warm it here —
+        // ahead of the feed's own media — or every one of those spots sits on
+        // the letter placeholder until the download happens to land.
+        prefetchOwnAvatar()
+    }
+
+    /// Decodes this user's own avatar into `ImageCache` so the surfaces that draw
+    /// it can render it on their first frame instead of flashing the initial.
+    func prefetchOwnAvatar() {
+        guard let raw = user.avatarURL,
+              let url = URL(string: raw), url.scheme != nil else { return }
+        Task { await ImagePrefetcher.shared.prefetch([url]) }
     }
 
     /// Replaces the home feed + story rail with live content.
@@ -91,8 +104,9 @@ extension AppState {
             let page = try await SocialStore.shared.fetchFeed()
             var rings = try await StoriesStore.shared.fetchRings()
             if !rings.contains(where: \.isYou) {
-                rings.insert(Story(name: "You", letter: String((user.name.first ?? "g").uppercased()),
-                                   gradient: user.avatarGradient, frames: [], isYou: true), at: 0)
+                rings.insert(Story(name: "You", letter: ownAvatarLetter ?? "",
+                                   gradient: user.avatarGradient, frames: [], isYou: true,
+                                   avatarURL: user.avatarURL), at: 0)
             }
             feedNextBefore = page.nextBefore
             withAnimation(.easeOut(duration: 0.3)) {

@@ -73,7 +73,7 @@ extension AppState {
         } else {
             stories.insert(
                 Story(name: "You",
-                      letter: String((user.name.first ?? "g").uppercased()),
+                      letter: ownAvatarLetter ?? "",
                       gradient: user.avatarGradient,
                       frames: frames,
                       isYou: true,
@@ -327,8 +327,9 @@ extension AppState {
         do {
             var rings = try await StoriesStore.shared.fetchRings()
             if !rings.contains(where: \.isYou) {
-                rings.insert(Story(name: "You", letter: String((user.name.first ?? "g").uppercased()),
-                                   gradient: user.avatarGradient, frames: [], isYou: true), at: 0)
+                rings.insert(Story(name: "You", letter: ownAvatarLetter ?? "",
+                                   gradient: user.avatarGradient, frames: [], isYou: true,
+                                   avatarURL: user.avatarURL), at: 0)
             }
             withAnimation(.easeOut(duration: 0.25)) { stories = rings }
         } catch {
