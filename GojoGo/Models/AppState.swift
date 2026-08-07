@@ -354,6 +354,11 @@ final class AppState: ObservableObject {
     @Published var providerWallet: PayeeWalletDTO? = nil
     @Published var providerConsoleLoading: Bool = false
 
+    /// One flag for both consoles: a payout is a single-tap act and only one
+    /// console is on screen at a time, so a second tap anywhere is the same
+    /// mistake — the double-tap that would otherwise be two withdrawals.
+    @Published var payeePayoutBusy: Bool = false
+
     // MARK: Ownership transfers (Phase 5 · M2)
 
     @Published var transfers: [TransferDTO] = []
@@ -2531,6 +2536,7 @@ final class AppState: ObservableObject {
         providerExceptions = []
         providerDocuments = []
         providerWallet = nil
+        payeePayoutBusy = false
         transfers = []
         showTransfers = false
         openTransferID = nil

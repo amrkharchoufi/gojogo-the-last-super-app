@@ -289,7 +289,10 @@ struct SellerConsoleView: View {
     @ViewBuilder
     private var money: some View {
         PayeeWalletCard(wallet: app.shopWallet,
-                        emptyLine: "Nothing settled yet. A sale pays out once the buyer confirms it arrived.")
+                        emptyLine: "Nothing settled yet. A sale pays out once the buyer confirms it arrived.",
+                        busy: app.payeePayoutBusy,
+                        onSetUpPayouts: { app.startShopPayoutOnboarding() },
+                        onPayOut: { app.requestShopPayout($0) })
     }
 
     // MARK: Settings
@@ -422,31 +425,44 @@ struct SellerProductRow: View {
     }
 }
 
-/// Balances plus the statement, for whichever payee this is. Shared by both
-/// Phase 5 consoles — a shop and a provider are paid the same way and the
-/// screen has nothing vertical-specific in it.
+/// Balances, the way out to a bank, and the statement — for whichever payee
+/// this is. Shared by both Phase 5 consoles: a shop and a provider are paid the
+/// same way and the screen has nothing vertical-specific in it.
+///
+/// This balance is *not* the Gojo Wallet. The wallet is the same person's money
+/// for buying things; this is what the business has earned, and the only way it
+/// moves is out to a bank. Saying so on the card is the difference between a
+/// seller who knows where their sales went and one who goes looking in the
+/// wrong screen.
 struct PayeeWalletCard: View {
     let wallet: PayeeWalletDTO?
     let emptyLine: String
+    var busy: Bool = false
+    var onSetUpPayouts: (() -> Void)? = nil
+    var onPayOut: ((Int64) -> Void)? = nil
+
+    private var currency: String { wallet?.balances.currency ?? "USD" }
+    private var available: Int64 { wallet?.balances.available ?? 0 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("AVAILABLE")
+                Text("AVAILABLE TO WITHDRAW")
                     .font(.ggMono(9, .semibold))
                     .tracking(0.8)
                     .foregroundStyle(GGColor.textTertiary)
-                Text(EconomyStore.formatPrice(cents: wallet?.balances.available ?? 0,
-                                              currency: wallet?.balances.currency ?? "USD"))
+                Text(EconomyStore.formatPrice(cents: available, currency: currency))
                     .font(.ggMono(26, .semibold))
                     .foregroundStyle(GGColor.textPrimary)
             }
 
             if let escrow = wallet?.balances.escrow, escrow > 0 {
-                Text("\(EconomyStore.formatPrice(cents: escrow, currency: wallet?.balances.currency ?? "USD")) held against orders that haven't settled.")
+                Text("\(EconomyStore.formatPrice(cents: escrow, currency: currency)) held against orders that haven't settled.")
                     .font(.system(size: 11))
                     .foregroundStyle(GGColor.textTertiary)
             }
+
+            payouts
 
             Divider().overlay(GGColor.hairline)
 
@@ -477,6 +493,66 @@ struct PayeeWalletCard: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glass(cornerRadius: 20, tint: GGColor.ink(0.05))
+    }
+
+    /// The way out, in the four states a payee can actually be in: not onboarded,
+    /// half-onboarded, ready with enough to send, and ready with too little.
+    /// Each one says what to do next rather than leaving a dead balance on the
+    /// screen.
+    @ViewBuilder
+    private var payouts: some View {
+        if let wallet, let onSetUpPayouts, let onPayOut {
+            VStack(alignment: .leading, spacing: 8) {
+                if !wallet.canPayOut {
+                    Text("This is your business balance, not your Gojo Wallet. Bank transfers aren't switched on yet — your earnings are safe here until they are.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(GGColor.textTertiary)
+                } else if !wallet.isOnboarded {
+                    Button(action: onSetUpPayouts) {
+                        payoutCapsule("Set up bank transfers")
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(busy)
+                    Text("Payouts go through Stripe, which asks for your bank details directly — they never pass through GoJoGo.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(GGColor.textTertiary)
+                } else if !wallet.isPayoutReady {
+                    // Stripe's own words, translated: only the payee can act on
+                    // them, so only they are shown them.
+                    Text(wallet.payoutsNeedSentence)
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textSecondary)
+                    Button(action: onSetUpPayouts) {
+                        payoutCapsule("Finish setting up transfers")
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(busy)
+                } else if available >= wallet.minimumPayout {
+                    Button { onPayOut(available) } label: {
+                        payoutCapsule("Withdraw \(EconomyStore.formatPrice(cents: available, currency: currency))")
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(busy)
+                    Text("Goes to the bank account you set up with Stripe. One withdrawal a day.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(GGColor.textTertiary)
+                } else {
+                    Text("Withdrawals start at \(EconomyStore.formatPrice(cents: wallet.minimumPayout, currency: currency)).")
+                        .font(.system(size: 11))
+                        .foregroundStyle(GGColor.textTertiary)
+                }
+            }
+        }
+    }
+
+    private func payoutCapsule(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(GGColor.onAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(Capsule().fill(GGColor.white))
+            .opacity(busy ? 0.5 : 1)
     }
 }
 

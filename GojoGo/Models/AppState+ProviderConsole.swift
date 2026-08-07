@@ -30,8 +30,18 @@ extension AppState {
         do {
             myProvider = try await ServicesStore.shared.myProvider()
         } catch {
-            showEconomyNotice(Self.message(from: error, fallback: "Couldn't load your profile."))
-            return
+            // Only fatal when there is nothing on screen yet: this runs on every
+            // appear and every pull, and a dropped request must not blank a
+            // console that was already showing a practice — or take its queue
+            // and its money down with it.
+            if myProvider == nil {
+                showEconomyNotice(Self.message(from: error,
+                                               fallback: "Couldn't load your profile."))
+                return
+            }
+            #if DEBUG
+            print("Provider refresh failed, keeping what's loaded: \(error.localizedDescription)")
+            #endif
         }
         async let catalog = try? await ServicesStore.shared.myServices()
         async let queue = try? await ServicesStore.shared.providerBookings()
@@ -231,6 +241,51 @@ extension AppState {
             return nil
         } catch {
             return Self.message(from: error, fallback: "Couldn't post that reply.")
+        }
+    }
+
+    // MARK: Getting the money out (Phase 5 · M5)
+    //
+    // A practice's earnings settle into its own payee balance, not the person's
+    // Gojo Wallet — the same separation the shop has, and the same Stripe
+    // Connect path out.
+
+    func startProviderPayoutOnboarding() {
+        guard !payeePayoutBusy else { return }
+        payeePayoutBusy = true
+        Task {
+            defer { payeePayoutBusy = false }
+            do {
+                let link = try await ServicesStore.shared.providerPayoutOnboardingLink()
+                guard let url = URL(string: link) else {
+                    showEconomyNotice("Couldn't open the payout setup page.")
+                    return
+                }
+                _ = await CheckoutSession().present(url)
+                providerWallet = (try? await ServicesStore.shared.providerWallet()) ?? providerWallet
+            } catch {
+                showEconomyNotice(Self.message(
+                    from: error, fallback: "Couldn't start payout setup."))
+            }
+        }
+    }
+
+    func requestProviderPayout(_ amountMinor: Int64) {
+        guard !payeePayoutBusy else { return }
+        payeePayoutBusy = true
+        Task {
+            defer { payeePayoutBusy = false }
+            do {
+                let payout = try await ServicesStore.shared.providerPayOut(amountMinor: amountMinor)
+                providerWallet = (try? await ServicesStore.shared.providerWallet()) ?? providerWallet
+                showEconomyNotice(payout.status == "SENT"
+                    ? "\(EconomyStore.formatPrice(cents: payout.amountMinor, currency: payout.currency)) is on its way to your bank."
+                    : (payout.failureReason.isEmpty
+                       ? "That payout didn't go through."
+                       : payout.failureReason))
+            } catch {
+                showEconomyNotice(Self.message(from: error, fallback: "Couldn't pay that out."))
+            }
         }
     }
 }

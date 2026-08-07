@@ -70,7 +70,10 @@ struct ProviderConsoleView: View {
                     case .hours: hours
                     case .money:
                         PayeeWalletCard(wallet: app.providerWallet,
-                                        emptyLine: "Nothing settled yet. A job pays out 48 hours after you mark it done.")
+                                        emptyLine: "Nothing settled yet. A job pays out 48 hours after you mark it done.",
+                                        busy: app.payeePayoutBusy,
+                                        onSetUpPayouts: { app.startProviderPayoutOnboarding() },
+                                        onPayOut: { app.requestProviderPayout($0) })
                     case .profile: profile
                     }
                 }
