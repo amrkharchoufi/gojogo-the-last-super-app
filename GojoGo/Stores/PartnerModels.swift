@@ -153,7 +153,10 @@ enum MerchantApplicationStatus: String, Equatable {
 
     /// What the GojoDelivery header chip reads. The chip only appears for a
     /// provisioned restaurant, so the other cases are a neutral fallback.
-    var chipLabel: String { self == .suspended ? "Suspended" : "Your restaurant" }
+    ///
+    /// One word, like the courier chip beside it ("Deliver"/"Online"):
+    /// "Your restaurant" wrapped onto two lines and made the header lopsided.
+    var chipLabel: String { self == .suspended ? "Suspended" : "Restaurant" }
 
     var icon: String { self == .suspended ? "pause.circle" : "storefront" }
 }

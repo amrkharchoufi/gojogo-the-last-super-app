@@ -41,6 +41,10 @@ struct MerchantHeaderButton: View {
                     Text(app.merchantChipLabel)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(ink)
+                        // The chip is a capsule, never a paragraph: it grows
+                        // sideways rather than wrapping onto a second line.
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 .padding(.horizontal, 13)
                 .frame(height: 36)
