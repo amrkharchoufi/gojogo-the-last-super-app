@@ -47,7 +47,7 @@ extension AppState {
     var isMerchantPartner: Bool { merchantAccount?.status == .approved }
 
     /// What the header chip reads.
-    var merchantChipLabel: String { merchantAccount?.status.chipLabel ?? "Your restaurant" }
+    var merchantChipLabel: String { merchantAccount?.status.chipLabel ?? "Restaurant" }
 
     var merchantChipIcon: String { merchantAccount?.status.icon ?? "storefront" }
 
