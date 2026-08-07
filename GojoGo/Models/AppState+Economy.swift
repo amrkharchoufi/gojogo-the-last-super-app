@@ -186,20 +186,81 @@ extension AppState {
 
     // MARK: Which storefronts are ours
 
-    /// Makes sure the phone knows which shop row and which provider row this
-    /// account *is*, so browse can tell "yours" from "theirs" before a tap.
+    /// Settles whether this account runs a shop and whether it runs a service
+    /// practice, and which rows those are — so browse can tell "yours" from
+    /// "theirs" before a tap, and so the two console chips appear at all.
     ///
-    /// Normally free: `/v1/me/roles` carries both ids on the approval itself and
-    /// `refreshRoles` has already put them on the state. This is the fallback
-    /// for an approval provisioned before those ids were recorded — one request
-    /// each, once, and only for the roles the account actually has.
+    /// Asked of the verticals rather than of `/v1/me/roles`, because the
+    /// storefront is the thing itself: `/v1/economy/sellers/mine` resolves the
+    /// shop from the caller's token and never reads a partner row, so its 200 is
+    /// the fact and a missing approval is a gap in provisioning rather than a
+    /// statement about this account.
+    ///
+    /// This used to be *gated* on the roles answer — `if isSeller, …` — which
+    /// made it a fallback for the one thing it could never fall back from.
+    /// `refreshRoles` swallows its own errors and runs only in the connect
+    /// chain, so a single failed or role-less roles call left a seller browsing
+    /// their own shop as a stranger for the whole session: no "Your shop" chip,
+    /// no "Yours" on their own cards, a buy button on their own products, and
+    /// nothing on the tab able to correct it, because the one call that could
+    /// have was behind the flag that was wrong.
+    ///
+    /// One request each, once per session. A 404 is a real answer and is
+    /// remembered; a request that never arrived is not, and is asked again on
+    /// the next refresh.
     func resolveOwnStorefronts() async {
         guard backendConnected else { return }
-        if isSeller, myShopId == nil, myShop == nil {
-            myShop = try? await ShopStore.shared.mySeller()
+        if !shopOwnershipSettled {
+            switch await Self.settle({ try await ShopStore.shared.mySeller() }) {
+            case .some(.some(let shop)):
+                myShop = shop
+                myShopId = shop.id
+                // Suspended is still ours — the "Yours" mark and the refusal to
+                // sell to ourselves are about whose shop it is. What a
+                // suspension takes away is the console, which is what `isSeller`
+                // opens.
+                isSeller = !shop.suspended
+                shopOwnershipSettled = true
+            case .some(.none):
+                isSeller = false
+                myShopId = nil
+                myShop = nil
+                shopOwnershipSettled = true
+            case .none:
+                break
+            }
         }
-        if isServiceProvider, myProviderId == nil, myProvider == nil {
-            myProvider = try? await ServicesStore.shared.myProvider()
+        if !providerOwnershipSettled {
+            switch await Self.settle({ try await ServicesStore.shared.myProvider() }) {
+            case .some(.some(let provider)):
+                myProvider = provider
+                myProviderId = provider.id
+                isServiceProvider = !provider.suspended
+                providerOwnershipSettled = true
+            case .some(.none):
+                isServiceProvider = false
+                myProviderId = nil
+                myProvider = nil
+                providerOwnershipSettled = true
+            case .none:
+                break
+            }
+        }
+    }
+
+    /// Runs an owner-scoped `…/mine` read and separates the two failures that
+    /// look identical to `try?` and mean opposite things: `.some(nil)` is the
+    /// server saying you don't have one, `nil` is nobody having said anything.
+    /// Remembering the second as if it were the first is how a seller loses
+    /// their shop for a session.
+    private static func settle<T>(_ read: () async throws -> T) async -> T?? {
+        do {
+            return .some(try await read())
+        } catch let error as APIClient.APIError {
+            if case .http(let status, _) = error, status == 404 { return .some(nil) }
+            return nil
+        } catch {
+            return nil
         }
     }
 

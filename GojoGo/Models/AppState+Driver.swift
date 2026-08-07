@@ -400,22 +400,26 @@ extension AppState {
         partnerRoles = live
         // Phase 5's two kinds are read from the partner list rather than from a
         // flag of their own: `dispatch` has no registry for a seller or a
-        // provider, so an approved application *is* the fact here, and its
-        // `refId` is the shop or provider row the console talks to.
+        // provider, so the approved application is what this call can see of
+        // them, and its `refId` is the shop or provider row the console talks
+        // to. It is the *fast path* and not the last word — `/v1/me/roles` never
+        // asks either vertical anything, so an approval that is missing, is
+        // still SUBMITTED, or provisioned before refIds were recorded says
+        // nothing about whether a shop exists. `resolveOwnStorefronts` asks the
+        // vertical itself and overwrites both of these; once it has, an
+        // answer from here must not put the stale one back.
         let seller = roles.partners.first { $0.kind == "SELLER" && $0.status == "APPROVED" }
         let provider = roles.partners.first {
             $0.kind == "SERVICE_PROVIDER" && $0.status == "APPROVED"
         }
-        isSeller = seller != nil
-        isServiceProvider = provider != nil
-        // The `refId` on an approved application *is* the shop row and the
-        // provider row — the same ids the two catalogs print on every card. Kept
-        // here so the phone can tell "that one is mine" while browsing, without
-        // either console having been opened. An older approval that provisioned
-        // before refIds were recorded leaves these nil, and the ownership checks
-        // fall back to whatever the console loaded.
-        myShopId = seller?.refId
-        myProviderId = provider?.refId
+        if !shopOwnershipSettled {
+            isSeller = seller != nil
+            myShopId = seller?.refId
+        }
+        if !providerOwnershipSettled {
+            isServiceProvider = provider != nil
+            myProviderId = provider?.refId
+        }
         schedulePersist()
     }
 }
