@@ -46,6 +46,15 @@ final class ImageCache {
         memory.object(forKey: url.absoluteString as NSString)
     }
 
+    /// Whether this URL is already cached on either tier — a `stat`, not a read,
+    /// so it is cheap enough to ask from `body`. Callers use it to decide whether
+    /// a placeholder is worth drawing at all: a disk hit resolves within a frame
+    /// or two, and flashing an initial in front of it reads as a glitch.
+    func isCached(_ url: URL) -> Bool {
+        if memoryImage(for: url) != nil { return true }
+        return FileManager.default.fileExists(atPath: fileURL(for: url).path)
+    }
+
     /// Full fetch: memory → disk → network. Disk read, network, and decode all run
     /// off the main thread.
     func image(for url: URL) async throws -> UIImage {

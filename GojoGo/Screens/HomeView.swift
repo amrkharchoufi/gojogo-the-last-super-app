@@ -98,7 +98,7 @@ struct HomeView: View {
                     UserAvatar(
                         size: 28,
                         gradient: app.user.avatarGradient,
-                        letter: String(app.user.name.prefix(1)),
+                        letter: app.ownAvatarLetter,
                         imageURL: app.user.avatarURL
                     )
                     .overlay(Circle().strokeBorder(GGColor.ink(0.35), lineWidth: 1))
@@ -240,7 +240,9 @@ struct HomeView: View {
     private func storyAvatar(_ story: Story, hasMedia: Bool, ring: Bool) -> some View {
         let avatar = UserAvatar(
             size: storyCircleSize,
-            letter: story.letter,
+            // Your own ring is drawn from the live profile, not from whatever
+            // letter the ring was seeded or cached with.
+            letter: story.isYou ? app.ownAvatarLetter : story.letter,
             ring: ring,
             imageURL: story.isYou && !hasMedia ? app.user.avatarURL : story.imageURL,
             imageData: story.imageData

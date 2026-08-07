@@ -432,6 +432,15 @@ final class AppState: ObservableObject {
 
     // User + content (live, mutable)
     @Published var user = GGUser()
+
+    /// Initial drawn on this user's own avatar while their photo loads (and when
+    /// they have none). `nil` before the profile is known, so a signed-out or
+    /// still-connecting session shows an empty disc rather than somebody else's
+    /// letter — the seed ring used to carry a hardcoded "J".
+    var ownAvatarLetter: String? {
+        guard let first = user.name.first ?? user.handle.first else { return nil }
+        return String(first).uppercased()
+    }
     @Published var interests: [Interest] = SampleData.interests
     @Published var stories: [Story] = SampleData.stories
     @Published var posts: [Post] = SampleData.posts
@@ -937,6 +946,10 @@ final class AppState: ObservableObject {
         // Warm the restored feed's media on launch so the first screenful is
         // decoded before the live refresh even returns — instant cold start.
         prefetchFeedImages(from: 0, count: 8)
+        // Same for the user's own avatar: it's already on disk from the last
+        // session, and promoting it into memory now is what stops Home drawing
+        // the initial for a frame before the photo appears.
+        prefetchOwnAvatar()
         // Rewrite durable relative video refs after migration.
         schedulePersist()
     }

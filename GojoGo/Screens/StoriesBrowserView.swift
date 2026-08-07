@@ -101,7 +101,7 @@ struct StoriesBrowserView: View {
         let circle = VStack(spacing: 10) {
             UserAvatar(
                 size: 88,
-                letter: story.letter,
+                letter: story.isYou ? app.ownAvatarLetter : story.letter,
                 ring: !story.seen || story.isYou,
                 imageURL: story.isYou && !story.hasMedia ? app.user.avatarURL : story.imageURL,
                 imageData: story.imageData

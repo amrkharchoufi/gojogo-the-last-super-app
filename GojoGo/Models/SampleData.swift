@@ -20,8 +20,12 @@ enum SampleData {
 
     // MARK: Stories
 
+    /// The seed "Your story" ring. It carries no letter on purpose — the signed-in
+    /// user isn't known here, and a hardcoded initial is one that belongs to
+    /// somebody else. Every surface that draws this ring substitutes the real
+    /// initial via `AppState.ownAvatarLetter`.
     static let stories: [Story] = [
-        Story(name: "You", letter: "J", gradient: g1, isYou: true),
+        Story(name: "You", letter: "", gradient: g1, isYou: true),
     ]
 
     // MARK: Feed / Watch / Activity

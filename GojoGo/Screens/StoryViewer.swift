@@ -279,7 +279,7 @@ struct StoryViewer: View {
         HStack(spacing: 10) {
             UserAvatar(
                 size: 34,
-                letter: story?.letter ?? "·",
+                letter: (story?.isYou ?? false) ? app.ownAvatarLetter : (story?.letter ?? "·"),
                 ring: true,
                 imageURL: headerAvatarURL,
                 imageData: story?.imageData

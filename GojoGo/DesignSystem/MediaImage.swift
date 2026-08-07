@@ -114,6 +114,22 @@ struct UserAvatar: View {
         }
     }
 
+    /// An empty letter is "no initial known yet" (a ring seeded before the
+    /// profile loaded), which should draw a plain disc rather than blank `Text`.
+    private var displayLetter: String? {
+        guard let letter, !letter.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return letter
+    }
+
+    @ViewBuilder
+    private var letterView: some View {
+        if let displayLetter {
+            Text(displayLetter)
+                .font(.system(size: size * 0.42, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+        }
+    }
+
     private var inner: some View {
         ZStack {
             Circle().fill(GGColor.surface2)
@@ -129,18 +145,21 @@ struct UserAvatar: View {
                     .scaledToFill()
             } else if let imageURL, let u = URL(string: imageURL), u.scheme != nil {
                 CachedAsyncImage(url: u) { phase in
-                    if case .success(let img) = phase {
+                    switch phase {
+                    case .success(let img):
                         img.resizable().scaledToFill()
-                    } else if let letter {
-                        Text(letter)
-                            .font(.system(size: size * 0.42, weight: .semibold))
-                            .foregroundStyle(GGColor.textPrimary)
+                    case .loading:
+                        // An already-cached photo is a frame or two away, so the
+                        // initial would only flash in front of it — that swap is
+                        // what reads as a glitch on the feed's own avatar right
+                        // after signing in. Uncached, the letter earns its place.
+                        if !ImageCache.shared.isCached(u) { letterView }
+                    case .failure:
+                        letterView
                     }
                 }
-            } else if let letter {
-                Text(letter)
-                    .font(.system(size: size * 0.42, weight: .semibold))
-                    .foregroundStyle(GGColor.textPrimary)
+            } else {
+                letterView
             }
         }
         .frame(width: size, height: size)
