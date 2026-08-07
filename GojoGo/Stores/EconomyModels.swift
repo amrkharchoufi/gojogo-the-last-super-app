@@ -84,7 +84,7 @@ struct ListingStatusBody: Encodable {
 // MARK: - Seller view (Phase 2b · Milestone 5)
 
 /// The seller's own totals, across every listing rather than the page in hand.
-struct SellerStatsDTO: Decodable {
+struct SellerStatsDTO: Decodable, Equatable {
     let total: Int
     let active: Int
     let paused: Int

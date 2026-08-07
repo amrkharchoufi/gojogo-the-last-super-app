@@ -54,15 +54,23 @@ extension AppState {
     private func adoptBrowsePage(_ served: [Product]) {
         let servedIDs = Set(served.map(\.id))
         let kept = products.filter { isKeptFromBrowse($0, servedIDs: servedIDs) }
-        withAnimation(.easeOut(duration: 0.25)) {
-            featuredProduct = served.first ?? SampleData.featuredProduct
-            products = Array(served.dropFirst()) + kept
+        let nextFeatured = served.first ?? SampleData.featuredProduct
+        let nextProducts = Array(served.dropFirst()) + kept
+
+        // The marketplace polls this now, so it diffs before it assigns: these
+        // two are on AppState, and reassigning an identical catalog every
+        // thirty seconds re-renders every screen behind this one.
+        if nextFeatured != featuredProduct || nextProducts != products {
+            withAnimation(.easeOut(duration: 0.25)) {
+                featuredProduct = nextFeatured
+                products = nextProducts
+            }
+            schedulePersist()
         }
         // A seeded card that browse now serves is part of the catalog proper,
         // and belongs in the cache with the rest of it.
         economySeededListingIDs.subtract(servedIDs)
         economySeededListingIDs.formIntersection(Set(products.map(\.id)))
-        schedulePersist()
         // The dropped card can be the one on screen right now — deleted by its
         // seller while a buyer reads it. Saying so beats leaving them on a
         // detail page offering to message about it.
@@ -239,16 +247,21 @@ extension AppState {
     /// two half-updated numbers on screen look like a bug.
     func refreshSellerListings() async {
         guard backendConnected else { return }
-        sellerListingsLoading = sellerListings.isEmpty
-        defer { sellerListingsLoading = false }
+        // Every assignment here is a publish, and this is on a timer now: only
+        // the first load shows a spinner, and only a real change is written.
+        if sellerListings.isEmpty, !sellerListingsLoading { sellerListingsLoading = true }
+        defer { if sellerListingsLoading { sellerListingsLoading = false } }
         do {
             let listings = try await EconomyStore.shared.mine()
             // Totals are a nicety on top of the shelf, so a failure there must
             // not cost the shelf — the tiles fall back to counting what loaded.
             let totals = try? await EconomyStore.shared.stats()
-            withAnimation(.easeOut(duration: 0.2)) {
-                sellerListings = listings
-                if let totals { sellerStats = totals }
+            let statsChanged = totals != nil && totals != sellerStats
+            if listings != sellerListings || statsChanged {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    sellerListings = listings
+                    if let totals { sellerStats = totals }
+                }
             }
         } catch {
             #if DEBUG

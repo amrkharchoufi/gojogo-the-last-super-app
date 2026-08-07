@@ -90,11 +90,17 @@ struct WalletView: View {
             // Held money is still the customer's, so it is shown as part of
             // their balance rather than as something taken from them — the
             // distinction the ESCROW bucket exists to make.
+            // One bucket, many possible reasons to be in it: a delivery, a shop
+            // order, a booking, an ownership transfer, several at once. The old
+            // wording named a single "order in flight", which was wrong on both
+            // counts for the common case — a $125 hold that was actually two
+            // service bookings reads as one order nobody can find.
             if let escrow = app.wallet?.escrowMinor, escrow > 0 {
-                Label("\(WalletStore.money(escrow, currency: currency)) held for an order in flight",
+                Label("\(WalletStore.money(escrow, currency: currency)) held until what you've booked and bought is settled",
                       systemImage: "clock.arrow.circlepath")
                     .font(.gg(13))
                     .foregroundStyle(GGColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Phase 3's buckets, shown only once they hold something — an empty

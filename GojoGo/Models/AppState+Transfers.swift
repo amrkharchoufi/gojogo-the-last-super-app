@@ -74,8 +74,25 @@ extension AppState {
             } catch {
                 showEconomyNotice(Self.message(
                     from: error, fallback: "Couldn't open an enquiry on that listing."))
+                // The refusal is the freshest thing we know about that listing.
+                // A poll can be up to thirty seconds behind the sale that took
+                // it off the market, and without this the card stays on the
+                // shelf and the enquiry can be attempted again and again — the
+                // server saying no each time. Re-reading browse drops it and
+                // closes the detail sheet on the way past (`adoptBrowsePage`).
+                if Self.isStaleListing(error) { await refreshEconomy() }
             }
         }
+    }
+
+    /// A refusal that means "this screen is out of date", as opposed to one the
+    /// user could act on. 404 is gone; 409 is a conflict with a world that has
+    /// moved — sold, hidden, or already in someone else's escrow. A 400 (`that's
+    /// your own listing`) is not stale, it's just wrong, and re-reading browse
+    /// would not change it.
+    static func isStaleListing(_ error: Error) -> Bool {
+        guard case APIClient.APIError.http(let status, _) = error else { return false }
+        return status == 404 || status == 409
     }
 
     /// The seller names the number, and only the seller can. Returns nil on

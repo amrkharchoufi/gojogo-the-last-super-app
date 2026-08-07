@@ -570,7 +570,10 @@ enum RelativeTime {
     }
 }
 
-struct Product: Identifiable {
+/// `Equatable` so the marketplace poller can tell "nothing changed" from "the
+/// catalog moved". `products` lives on AppState; reassigning an identical array
+/// on every tick republishes every screen in the app for nothing.
+struct Product: Identifiable, Equatable {
     let id: UUID
     let name: String
     let price: String

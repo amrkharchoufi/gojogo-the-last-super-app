@@ -130,15 +130,22 @@ struct EconomyView: View {
             await app.refreshTransfers()
         }
         // Someone else's move — an enquiry arriving, a price being named, an
-        // escrow paid — changes this screen with no input from the person
-        // looking at it. Without this the seller sits on the tab and never
-        // learns anybody asked.
+        // escrow paid, a listing going SOLD — changes this screen with no input
+        // from the person looking at it. Without this the seller sits on the
+        // tab and never learns anybody asked, and a buyer keeps being offered
+        // something that stopped being for sale minutes ago.
+        //
+        // The whole of `refreshEconomy` rather than just the transfers: a sale
+        // that strands a buyer on a dead listing is usually somebody else's
+        // sale, so there is no transfer on this device to notice it by. Every
+        // adopter it feeds diffs before assigning, so a quiet tick costs three
+        // requests and not one re-render.
         .task(id: app.economySegment) {
             guard app.economySegment == .marketplace else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 guard !Task.isCancelled else { return }
-                await app.refreshTransfers()
+                await app.refreshEconomy()
             }
         }
     }
