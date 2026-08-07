@@ -126,6 +126,38 @@ extension AppState {
         shopProductReviews = []
     }
 
+    /// Out of your own product page and into your shop. Both are full-screen
+    /// covers owned by `RootView`, and raising the second flag in the same frame
+    /// as lowering the first loses the presentation — so the console waits for
+    /// the page to finish leaving.
+    func manageOwnShopProduct() {
+        closeShopProduct()
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            openSellerConsole()
+        }
+    }
+
+    // MARK: Whose shop is this
+
+    /// The shop this account owns, if it owns one. `myShopId` comes off the
+    /// roles call and is there from the first connect; `myShop` only exists once
+    /// the console has been opened, so it is the fallback rather than the
+    /// source.
+    var ownShopId: UUID? { myShopId ?? myShop?.id }
+
+    /// True when this product is one of ours.
+    ///
+    /// The server refuses a self-purchase at checkout ("That's your own shop"),
+    /// which is the right place for the *rule* and the wrong place for the
+    /// *answer*: a buy button that fills a basket, walks somebody through an
+    /// address and then refuses the order told them nothing they couldn't have
+    /// been told on the product page.
+    func isOwnShopProduct(_ product: ShopProductDTO) -> Bool {
+        if let mine = ownShopId, mine == product.sellerId { return true }
+        return myShopProducts.contains { $0.id == product.id }
+    }
+
     // MARK: The basket
 
     var basketSellerName: String? { shopBasket.first?.sellerName }
@@ -138,6 +170,9 @@ extension AppState {
     /// product page *before* the tap, so the button can explain itself instead
     /// of failing under a finger.
     func basketRefusal(for product: ShopProductDTO) -> String? {
+        if isOwnShopProduct(product) {
+            return "This is your own shop — you can't buy from yourself."
+        }
         guard let first = shopBasket.first else { return nil }
         if first.sellerId != product.sellerId {
             return "Your basket is from \(first.sellerName). One order is one shop — empty it to buy from \(product.sellerName)."
@@ -154,17 +189,34 @@ extension AppState {
     /// at the stock the catalog reported, which is a courtesy rather than a
     /// guarantee: the placement transaction is the only thing that can actually
     /// decide whether the last one is yours.
-    func addToBasket(_ product: ShopProductDTO, variant: ShopVariantDTO, quantity: Int = 1) {
+    ///
+    /// A download is the exception, and it is capped at one however many times
+    /// it is tapped. Buying the same file twice charges twice and grants the
+    /// one entitlement — the server keys the shelf on the product, so the second
+    /// copy is money for nothing. It was worse than that on screen: the basket
+    /// printed a hard-coded "×1" against a line whose total had quietly doubled.
+    ///
+    /// Returns true when the basket actually changed, so the page that asked can
+    /// say so.
+    @discardableResult
+    func addToBasket(_ product: ShopProductDTO, variant: ShopVariantDTO,
+                     quantity: Int = 1) -> Bool {
         if let refusal = basketRefusal(for: product) {
             showEconomyNotice(refusal)
-            return
+            return false
         }
-        withAnimation(.ggSnappy) {
-            if let index = shopBasket.firstIndex(where: { $0.variantId == variant.id }) {
-                let capped = min(shopBasket[index].quantity + quantity, max(1, variant.stock))
-                shopBasket[index].quantity = capped
+        if let index = shopBasket.firstIndex(where: { $0.variantId == variant.id }) {
+            if product.isDigital {
+                showEconomyNotice("That download is already in your basket.")
+                return false
+            }
+            withAnimation(.ggSnappy) {
+                shopBasket[index].quantity =
+                    min(shopBasket[index].quantity + quantity, max(1, variant.stock))
                 shopBasket[index].stock = variant.stock
-            } else {
+            }
+        } else {
+            withAnimation(.ggSnappy) {
                 shopBasket.append(ShopBasketLine(
                     productId: product.id,
                     variantId: variant.id,
@@ -175,10 +227,20 @@ extension AppState {
                     unitPriceCents: variant.priceCents,
                     imageURL: product.imageURL,
                     isDigital: product.isDigital,
-                    quantity: min(quantity, max(1, variant.stock)),
+                    quantity: product.isDigital ? 1 : min(quantity, max(1, variant.stock)),
                     stock: variant.stock))
             }
         }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        return true
+    }
+
+    /// Takes one line out of the basket. The only way a download leaves it —
+    /// a digital line has no stepper to step down to zero, which is how a
+    /// basket with a file in it became a basket nobody could empty one item at
+    /// a time.
+    func removeFromBasket(_ variantId: UUID) {
+        withAnimation(.ggSnappy) { shopBasket.removeAll { $0.variantId == variantId } }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
@@ -195,6 +257,18 @@ extension AppState {
 
     func emptyBasket() {
         withAnimation(.ggSnappy) { shopBasket = [] }
+    }
+
+    /// Straight from a product page to the basket. The page is a full-screen
+    /// cover and the checkout is a sheet, so the sheet waits for the cover to
+    /// finish leaving — same reason as `manageOwnShopProduct`.
+    func checkOutFromProduct() {
+        closeShopProduct()
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !shopBasket.isEmpty else { return }
+            showShopCheckout = true
+        }
     }
 
     // MARK: Checkout

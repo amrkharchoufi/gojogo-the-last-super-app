@@ -6,11 +6,17 @@ import SwiftUI
 // own — every price and every stock count belongs to a variant — so nothing on
 // this page can be bought until one is chosen, and the button says which.
 //
-// Two refusals are shown *before* the tap rather than after it. A sold-out
+// Three refusals are shown *before* the tap rather than after it. A sold-out
 // variant is unbuyable and says so on its own chip; a basket that already
 // belongs to another shop (or to the other side of the digital/physical line)
 // explains itself in the button's own place, because the alternative is a
-// notice appearing over a tap the buyer thought had worked.
+// notice appearing over a tap the buyer thought had worked; and your own
+// product has no buy bar at all, because the server would refuse that order
+// after an address and a promo code had been typed into it.
+//
+// The add itself is *shown*. This page covers the whole screen, so the basket
+// bar that grows on the Economy tab is invisible from here — an add used to be
+// a haptic tick and nothing else, which reads as a dead button.
 
 struct ShopProductDetailView: View {
     @EnvironmentObject var app: AppState
@@ -20,8 +26,16 @@ struct ShopProductDetailView: View {
     @State private var selectedVariantID: UUID?
     @State private var quantity: Int = 1
     @State private var showAllReviews = false
+    /// Non-nil for a couple of seconds after an add lands: drives the receipt
+    /// above the bar and the tick on the button.
+    @State private var addedAt: Date?
+    @State private var addedResetTask: Task<Void, Never>?
 
     private var live: ShopProductDTO { app.browsingShopProduct ?? product }
+
+    private var isMine: Bool { app.isOwnShopProduct(live) }
+
+    private var justAdded: Bool { addedAt != nil }
 
     private var selected: ShopVariantDTO? {
         live.variants.first { $0.id == selectedVariantID }
@@ -29,7 +43,10 @@ struct ShopProductDetailView: View {
             ?? live.variants.first
     }
 
-    private var refusal: String? { app.basketRefusal(for: live) }
+    /// Only ever a *basket* refusal now — ownership is answered by the bar
+    /// itself, which is a different screen rather than a sentence over the
+    /// same one.
+    private var refusal: String? { isMine ? nil : app.basketRefusal(for: live) }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -39,6 +56,7 @@ struct ShopProductDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     gallery
                     header
+                    if isMine { ownerBanner }
                     variantPicker
                     if let specs = Self.readable(live.specs) {
                         block(title: "Details", body: specs)
@@ -57,6 +75,30 @@ struct ShopProductDetailView: View {
         }
         .safeAreaInset(edge: .bottom) { buyBar }
         .onAppear { selectedVariantID = live.variants.first(where: \.inStock)?.id }
+        .onDisappear { addedResetTask?.cancel() }
+    }
+
+    /// The seller's own product. Says so where the price and the stock are,
+    /// because that is where somebody looking at their own shelf is looking.
+    private var ownerBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "storefront")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This is your product")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Text("This is how buyers see it. You can't buy from your own shop.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glass(cornerRadius: 16, tint: GGColor.ink(0.07))
     }
 
     // MARK: Gallery
@@ -277,41 +319,118 @@ struct ShopProductDetailView: View {
         .padding(.top, 14)
     }
 
-    /// One bar, three states: buyable, sold out, or refused with the reason.
+    /// One bar, four states: yours, buyable, sold out, or refused with the
+    /// reason.
+    @ViewBuilder
     private var buyBar: some View {
-        VStack(spacing: 8) {
-            if let refusal {
-                HStack(spacing: 10) {
-                    Text(refusal)
-                        .font(.system(size: 12))
-                        .foregroundStyle(GGColor.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    Button("Empty") { app.emptyBasket() }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(GGColor.textPrimary)
-                        .buttonStyle(.plain)
+        if isMine {
+            ownerBar
+        } else {
+            VStack(spacing: 8) {
+                if let refusal {
+                    HStack(spacing: 10) {
+                        Text(refusal)
+                            .font(.system(size: 12))
+                            .foregroundStyle(GGColor.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Button("Empty") { app.emptyBasket() }
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(GGColor.textPrimary)
+                            .buttonStyle(.plain)
+                    }
                 }
-            }
-            HStack(spacing: 12) {
-                if let selected, selected.inStock, !live.isDigital {
-                    stepper(max: selected.stock)
-                }
-                Button {
-                    guard let selected, selected.inStock else { return }
-                    app.addToBasket(live, variant: selected, quantity: quantity)
-                } label: {
-                    Text(buyLabel)
-                        .font(.system(size: 15, weight: .bold))
+                if justAdded { addedReceipt }
+                HStack(spacing: 12) {
+                    if let selected, selected.inStock, !live.isDigital {
+                        stepper(max: selected.stock)
+                    }
+                    Button {
+                        add()
+                    } label: {
+                        HStack(spacing: 7) {
+                            if justAdded {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 13, weight: .bold))
+                            }
+                            Text(buyLabel)
+                                .font(.system(size: 15, weight: .bold))
+                        }
                         .foregroundStyle(GGColor.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
                         .background(Capsule().fill(
                             canBuy ? GGColor.white : GGColor.ink(0.18)))
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(!canBuy)
                 }
-                .buttonStyle(PressableStyle())
-                .disabled(!canBuy)
             }
+            .padding(.horizontal, 18)
+            .padding(.top, 12)
+            .padding(.bottom, 12)
+            .background(.ultraThinMaterial)
+            .animation(.ggSnappy, value: justAdded)
+        }
+    }
+
+    /// Proof the tap did something, and the way straight to the basket it did
+    /// it to. Slides in over the bar and leaves on its own — the alternative,
+    /// on a page that covers the basket bar entirely, was a button that looked
+    /// broken the second time it was pressed.
+    private var addedReceipt: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "bag.fill.badge.plus")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Added to basket")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Text("\(app.basketCount) \(app.basketCount == 1 ? "item" : "items") · \(EconomyStore.formatPrice(cents: app.basketTotalCents, currency: "USD"))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textSecondary)
+            }
+            Spacer(minLength: 0)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                app.checkOutFromProduct()
+            } label: {
+                Text("Basket")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .glassCapsule(interactive: false)
+            }
+            .buttonStyle(PressableStyle())
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glass(cornerRadius: 16, tint: GGColor.ink(0.10))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    /// The seller's own bar, in place of the buy one.
+    private var ownerBar: some View {
+        VStack(spacing: 6) {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                app.manageOwnShopProduct()
+            } label: {
+                Text("Manage in your shop")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(GGColor.onAccent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(Capsule().fill(GGColor.white))
+            }
+            .buttonStyle(PressableStyle())
+
+            Text("Stock, variants and the orders waiting on you live in your console.")
+                .font(.system(size: 11))
+                .foregroundStyle(GGColor.textTertiary)
+                .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 18)
         .padding(.top, 12)
@@ -319,12 +438,42 @@ struct ShopProductDetailView: View {
         .background(.ultraThinMaterial)
     }
 
-    private var canBuy: Bool { (selected?.inStock ?? false) && refusal == nil }
+    /// Adds, then keeps the receipt up for a couple of seconds. A second tap
+    /// restarts the clock rather than stacking a second timer that would pull
+    /// the receipt out from under the first.
+    private func add() {
+        guard let selected, selected.inStock else { return }
+        guard app.addToBasket(live, variant: selected, quantity: quantity) else { return }
+        addedResetTask?.cancel()
+        withAnimation(.ggSnappy) { addedAt = Date() }
+        addedResetTask = Task {
+            try? await Task.sleep(nanoseconds: 2_400_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.ggSnappy) { addedAt = nil }
+        }
+    }
+
+    private var canBuy: Bool {
+        guard let selected, selected.inStock, refusal == nil else { return false }
+        // A licence bought twice charges twice and grants once, so the second
+        // add is refused here rather than left to a notice nobody can see from
+        // under a full-screen cover.
+        if live.isDigital, app.shopBasket.contains(where: { $0.variantId == selected.id }) {
+            return false
+        }
+        return true
+    }
 
     private var buyLabel: String {
         guard let selected else { return "Unavailable" }
         guard selected.inStock else { return "Sold out" }
         guard refusal == nil else { return "In another basket" }
+        // A download is one per basket, so the button stops offering to add a
+        // second one and says what is true instead.
+        if live.isDigital, app.shopBasket.contains(where: { $0.variantId == selected.id }) {
+            return "In your basket"
+        }
+        if justAdded { return "Added" }
         let each = selected.priceCents * Int64(live.isDigital ? 1 : quantity)
         return "Add · \(EconomyStore.formatPrice(cents: each, currency: "USD"))"
     }

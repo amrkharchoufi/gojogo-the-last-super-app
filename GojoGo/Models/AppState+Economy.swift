@@ -184,6 +184,25 @@ extension AppState {
         }
     }
 
+    // MARK: Which storefronts are ours
+
+    /// Makes sure the phone knows which shop row and which provider row this
+    /// account *is*, so browse can tell "yours" from "theirs" before a tap.
+    ///
+    /// Normally free: `/v1/me/roles` carries both ids on the approval itself and
+    /// `refreshRoles` has already put them on the state. This is the fallback
+    /// for an approval provisioned before those ids were recorded — one request
+    /// each, once, and only for the roles the account actually has.
+    func resolveOwnStorefronts() async {
+        guard backendConnected else { return }
+        if isSeller, myShopId == nil, myShop == nil {
+            myShop = try? await ShopStore.shared.mySeller()
+        }
+        if isServiceProvider, myProviderId == nil, myProvider == nil {
+            myProvider = try? await ServicesStore.shared.myProvider()
+        }
+    }
+
     // MARK: The seller's own shelf (Phase 2b · M5)
     //
     // Selling used to be one-way: publish and hope. "Your listings" is where a

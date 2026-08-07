@@ -10,7 +10,11 @@ import SwiftUI
 // the receipt by a cent and make a liar of both.
 //
 // A digital basket has no address and no shipping line: there is nothing to
-// send anywhere, and asking for a street to deliver a file to is theatre.
+// send anywhere, and asking for a street to deliver a file to is theatre. It
+// also has no stepper, which is how a basket with a download in it became a
+// basket that could not be emptied: every way out of this screen was a
+// quantity control that digital lines don't get. Each line now has its own
+// remove, and the header has a way to clear the lot.
 
 struct ShopCheckoutSheet: View {
     @EnvironmentObject var app: AppState
@@ -19,6 +23,7 @@ struct ShopCheckoutSheet: View {
     @State private var promotionCode: String = ""
     @State private var placing = false
     @State private var error: String?
+    @State private var confirmingEmpty = false
     @FocusState private var addressFocused: Bool
 
     private var isDigital: Bool { app.shopBasket.contains(where: \.isDigital) }
@@ -30,7 +35,12 @@ struct ShopCheckoutSheet: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 14) {
                     if app.shopBasket.isEmpty {
-                        GGEmptyState(icon: "bag", title: "Your basket is empty")
+                        GGEmptyState(
+                            icon: "bag",
+                            title: "Your basket is empty",
+                            message: "Nothing was charged.",
+                            actionTitle: "Keep shopping",
+                            action: { app.showShopCheckout = false })
                             .padding(.top, 40)
                     } else {
                         lines
@@ -54,6 +64,13 @@ struct ShopCheckoutSheet: View {
             if !app.shopBasket.isEmpty { payBar }
         }
         .background(GGColor.sheetBG.ignoresSafeArea())
+        .animation(.ggSnappy, value: app.shopBasket)
+        .alert("Empty your basket?", isPresented: $confirmingEmpty) {
+            Button("Cancel", role: .cancel) { }
+            Button("Empty", role: .destructive) { app.emptyBasket() }
+        } message: {
+            Text("Everything in it goes. Nothing has been charged.")
+        }
         .onAppear {
             // The delivery vertical already knows where this person lives, and
             // typing it a second time is the app forgetting on their behalf.
@@ -65,6 +82,9 @@ struct ShopCheckoutSheet: View {
         }
     }
 
+    /// The title sits centred whatever else is on the row, so "Empty" is laid
+    /// over it rather than beside it — a trailing button in the same `HStack`
+    /// would drag the title off centre by its own width.
     private var header: some View {
         VStack(spacing: 3) {
             Text("Checkout")
@@ -74,6 +94,29 @@ struct ShopCheckoutSheet: View {
                 .font(.system(size: 12))
                 .foregroundStyle(GGColor.textSecondary)
         }
+        // Room reserved for the button on both sides, so a long shop name is
+        // truncated rather than run underneath it.
+        .lineLimit(1)
+        .padding(.horizontal, 70)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .trailing) {
+            if !app.shopBasket.isEmpty {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    confirmingEmpty = true
+                } label: {
+                    Text("Empty")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .glassCapsule(interactive: false)
+                }
+                .buttonStyle(PressableStyle())
+                .accessibilityLabel("Empty your basket")
+            }
+        }
+        .padding(.horizontal, 18)
         .padding(.top, 20)
         .padding(.bottom, 14)
     }
@@ -99,9 +142,13 @@ struct ShopCheckoutSheet: View {
                             .font(.ggMono(13, .semibold))
                             .foregroundStyle(GGColor.textPrimary)
                         if line.isDigital {
-                            Text("×1")
-                                .font(.ggMono(11))
-                                .foregroundStyle(GGColor.textTertiary)
+                            // The count printed here used to be the literal
+                            // "×1" while the total beside it was whatever the
+                            // line actually held — so two of the same download
+                            // read as one item at twice the price. A download
+                            // is capped at one on the way in now, and this
+                            // prints what the line says either way.
+                            digitalQuantity(line)
                         } else {
                             quantityStepper(line)
                         }
@@ -111,6 +158,30 @@ struct ShopCheckoutSheet: View {
                 .glass(cornerRadius: 16, tint: GGColor.ink(0.04))
             }
         }
+    }
+
+    /// A download has no quantity to step, so the only control it needs is the
+    /// one that takes it back out.
+    private func digitalQuantity(_ line: ShopBasketLine) -> some View {
+        HStack(spacing: 8) {
+            Text("×\(line.quantity)")
+                .font(.ggMono(11))
+                .foregroundStyle(GGColor.textTertiary)
+            Button {
+                app.removeFromBasket(line.variantId)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(line.productName)")
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .glassCapsule(interactive: false)
     }
 
     private func quantityStepper(_ line: ShopBasketLine) -> some View {

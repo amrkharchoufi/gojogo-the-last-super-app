@@ -329,6 +329,15 @@ final class AppState: ObservableObject {
     @Published var showSellerConsole: Bool = false
     @Published var showProviderConsole: Bool = false
 
+    /// The shop and provider rows this account *is*, read from `/v1/me/roles`
+    /// rather than from a console that has been opened. Both catalogs carry the
+    /// owning id on every card (`sellerId`, `providerId`), so knowing these two
+    /// is the whole of "this one is mine" — and it has to be known before the
+    /// first tap, not after the server refuses it. Nothing here is a permission:
+    /// the server is still the only thing that decides a checkout.
+    @Published var myShopId: UUID? = nil
+    @Published var myProviderId: UUID? = nil
+
     @Published var myShop: ShopSellerDTO? = nil
     @Published var myShopProducts: [ShopProductDTO] = []
     @Published var shopOrderQueue: [ShopOrderDTO] = []
@@ -2427,6 +2436,8 @@ final class AppState: ObservableObject {
         isServiceProvider = false
         showSellerConsole = false
         showProviderConsole = false
+        myShopId = nil
+        myProviderId = nil
         myShop = nil
         myShopProducts = []
         shopOrderQueue = []

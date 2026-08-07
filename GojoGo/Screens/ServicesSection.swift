@@ -45,7 +45,8 @@ struct ServicesSection: View {
                 } else {
                     VStack(spacing: 12) {
                         ForEach(app.services) { service in
-                            ServiceCard(service: service) {
+                            ServiceCard(service: service,
+                                        isOwn: app.isOwnService(service)) {
                                 app.openService(service)
                             }
                             .onAppear { app.loadMoreServicesIfNeeded(after: service.id) }
@@ -104,6 +105,9 @@ struct ServicesSection: View {
 
 struct ServiceCard: View {
     let service: ServiceDTO
+    /// One of ours. Marked in the list, not just on the page, for the same
+    /// reason a shop product is: this is where the tap gets chosen.
+    var isOwn: Bool = false
     let onTap: () -> Void
 
     var body: some View {
@@ -120,11 +124,22 @@ struct ServiceCard: View {
                     }
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(service.providerName)
-                        .font(.ggMono(9, .semibold))
-                        .tracking(0.6)
-                        .foregroundStyle(GGColor.textTertiary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(service.providerName)
+                            .font(.ggMono(9, .semibold))
+                            .tracking(0.6)
+                            .foregroundStyle(GGColor.textTertiary)
+                            .lineLimit(1)
+                        if isOwn {
+                            Text("YOURS")
+                                .font(.ggMono(8, .bold))
+                                .tracking(0.6)
+                                .foregroundStyle(GGColor.onAccent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(GGColor.white))
+                        }
+                    }
                     Text(service.name)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(GGColor.textPrimary)

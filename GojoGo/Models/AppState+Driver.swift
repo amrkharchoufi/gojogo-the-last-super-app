@@ -402,10 +402,20 @@ extension AppState {
         // flag of their own: `dispatch` has no registry for a seller or a
         // provider, so an approved application *is* the fact here, and its
         // `refId` is the shop or provider row the console talks to.
-        isSeller = roles.partners.contains { $0.kind == "SELLER" && $0.status == "APPROVED" }
-        isServiceProvider = roles.partners.contains {
+        let seller = roles.partners.first { $0.kind == "SELLER" && $0.status == "APPROVED" }
+        let provider = roles.partners.first {
             $0.kind == "SERVICE_PROVIDER" && $0.status == "APPROVED"
         }
+        isSeller = seller != nil
+        isServiceProvider = provider != nil
+        // The `refId` on an approved application *is* the shop row and the
+        // provider row — the same ids the two catalogs print on every card. Kept
+        // here so the phone can tell "that one is mine" while browsing, without
+        // either console having been opened. An older approval that provisioned
+        // before refIds were recorded leaves these nil, and the ownership checks
+        // fall back to whatever the console loaded.
+        myShopId = seller?.refId
+        myProviderId = provider?.refId
         schedulePersist()
     }
 }

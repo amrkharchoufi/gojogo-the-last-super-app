@@ -54,7 +54,8 @@ struct ShopsSection: View {
                 } else {
                     LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(app.shopProducts) { product in
-                            ShopProductCard(product: product) {
+                            ShopProductCard(product: product,
+                                            isOwn: app.isOwnShopProduct(product)) {
                                 app.openShopProduct(product)
                             }
                             .onAppear { app.loadMoreShopsIfNeeded(after: product.id) }
@@ -113,8 +114,13 @@ struct ShopsSection: View {
 
 /// One product in the grid. Prints "from" against the cheapest live variant,
 /// and says *sold out* rather than showing a price nobody can pay.
+///
+/// A seller's own product is marked here rather than only on the page behind
+/// it: browse is where somebody decides what to tap, and "you can't buy this"
+/// is worth knowing one step earlier than the buy bar.
 struct ShopProductCard: View {
     let product: ShopProductDTO
+    var isOwn: Bool = false
     let onTap: () -> Void
 
     var body: some View {
@@ -126,6 +132,12 @@ struct ShopProductCard: View {
                         .clipped()
                     if product.isDigital {
                         badge("Download", icon: "arrow.down.circle.fill")
+                            .padding(8)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if isOwn {
+                        badge("Yours", icon: "storefront")
                             .padding(8)
                     }
                 }
