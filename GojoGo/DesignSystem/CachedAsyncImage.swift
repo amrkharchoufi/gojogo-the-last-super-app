@@ -46,15 +46,6 @@ final class ImageCache {
         memory.object(forKey: url.absoluteString as NSString)
     }
 
-    /// Whether this URL is already cached on either tier — a `stat`, not a read,
-    /// so it is cheap enough to ask from `body`. Callers use it to decide whether
-    /// a placeholder is worth drawing at all: a disk hit resolves within a frame
-    /// or two, and flashing an initial in front of it reads as a glitch.
-    func isCached(_ url: URL) -> Bool {
-        if memoryImage(for: url) != nil { return true }
-        return FileManager.default.fileExists(atPath: fileURL(for: url).path)
-    }
-
     /// Full fetch: memory → disk → network. Disk read, network, and decode all run
     /// off the main thread.
     func image(for url: URL) async throws -> UIImage {
@@ -240,12 +231,18 @@ struct CachedAsyncImage<Content: View>: View {
             return
         }
         phase = .loading
+        // Settle on the *URL*, not on cancellation. A cancelled task used to
+        // return without touching `phase`, which pinned any still-visible view
+        // at `.loading` forever — a placeholder that never resolves. Staleness
+        // is the only thing worth guarding: a `.task(id:)` restart is what
+        // cancels us, and that run owns the phase from then on.
+        let target = url
         do {
             let image = try await ImageCache.shared.image(for: url)
-            guard !Task.isCancelled else { return }
+            guard target == url else { return }
             phase = .success(Image(uiImage: image))
         } catch {
-            guard !Task.isCancelled else { return }
+            guard target == url else { return }
             phase = .failure
         }
     }
