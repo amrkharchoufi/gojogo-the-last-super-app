@@ -46,6 +46,15 @@ interface PostRepository extends JpaRepository<Post, UUID> {
 
     long countByAuthorId(UUID authorId);
 
+    /**
+     * A batch of posts with their pictures already attached — what a preview
+     * needs. The fetch join is the point: {@code media} is lazy, so a plain
+     * {@code findAllById} followed by a thumbnail lookup is one extra query per
+     * post, and the caller decorating a page of activity rows would never see it.
+     */
+    @Query("select distinct p from Post p left join fetch p.media where p.id in :ids")
+    List<Post> withMediaByIds(@Param("ids") Collection<UUID> ids);
+
     @Modifying
     @Query("update Post p set p.likeCount = p.likeCount + :delta where p.id = :postId")
     void bumpLikeCount(@Param("postId") UUID postId, @Param("delta") int delta);

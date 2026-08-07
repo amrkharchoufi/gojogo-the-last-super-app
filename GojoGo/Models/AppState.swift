@@ -1838,27 +1838,93 @@ final class AppState: ObservableObject {
     }
 
     /// Route a tapped notification to the right surface.
+    ///
+    /// **The destination is the thing the row is about, not the comments sheet.**
+    /// Every kind used to land in comments, which made "someone liked your post"
+    /// answer a question nobody asked while still hiding the one they did have —
+    /// *which* post. A like opens the post; only activity that happened inside a
+    /// thread opens the thread.
     func handleActivityTap(_ item: ActivityItem) {
         showActivity = false
         switch item.kind {
         case .follow:
-            afterDismiss { $0.openUserProfile(handle: item.actor, avatarURL: item.avatarURL) }
+            afterDismiss { $0.openActivityActorProfile(item) }
+        case .storyReaction, .storyReply:
+            afterDismiss { $0.openOwnStory(frameID: item.storyFrameID) }
         case .comment, .reply, .mention, .like:
-            // Whatever it is about, if it's loaded. A tag in particular is
-            // usually on someone else's post, so the old "open my newest post"
-            // fallback would be the wrong thing every time.
-            if let postID = item.postID, posts.contains(where: { $0.id == postID }) {
-                afterDismiss { $0.openComments(for: postID) }
-            } else if item.kind == .mention {
-                afterDismiss { $0.openUserProfile(handle: item.actor, avatarURL: item.avatarURL) }
-            } else if let post = myPosts.first {
-                afterDismiss { $0.openComments(for: post.id) }
+            guard let postID = item.postID else {
+                // A tag with no post behind it is nothing but the person who
+                // wrote it; anything else has already lost its subject.
+                if item.kind == .mention { afterDismiss { $0.openActivityActorProfile(item) } }
+                return
             }
+            // In a thread → open the thread. Otherwise the post itself, which
+            // is what a like and a caption tag are about.
+            let inThread = item.commentID != nil
+            afterDismiss { $0.openPostSurface(postID, comments: inThread) }
         case .order:
             activeTab = .economy
         case .system:
             activeTab = .madeleine
         }
+    }
+
+    /// The actor's profile, opened by handle when the server gave one — `actor`
+    /// is a display name whenever they have set one, and no profile is keyed by
+    /// that.
+    func openActivityActorProfile(_ item: ActivityItem) {
+        if let id = item.actorID, let known = SocialStore.shared.handle(forProfileId: id) {
+            openUserProfile(handle: known, name: item.actor, avatarURL: item.avatarURL)
+        } else {
+            openUserProfile(handle: item.actorHandle ?? item.actor,
+                            name: item.actor, avatarURL: item.avatarURL)
+        }
+    }
+
+    /// Your own story, at the frame the activity names. Falls back to the
+    /// archive: a story is a day long and the row about it is not, so by the
+    /// time most of these are read the frame has expired off the tray.
+    func openOwnStory(frameID: UUID?) {
+        if let frameID,
+           let story = stories.first(where: { $0.isYou && $0.frames.contains { $0.id == frameID } }),
+           let index = story.frames.firstIndex(where: { $0.id == frameID }) {
+            openStory(story, at: index)
+            return
+        }
+        if let mine = stories.first(where: { $0.isYou }), mine.hasMedia {
+            openStory(mine)
+            return
+        }
+        showStoryArchive = true
+    }
+
+    /// Follows back straight from the activity row, so the answer to "someone
+    /// followed you" doesn't require a trip to their profile.
+    func followBack(_ item: ActivityItem) {
+        guard let index = notifications.firstIndex(where: { $0.id == item.id }),
+              !notifications[index].actorFollowed else { return }
+        notifications[index].actorFollowed = true
+        // Every other row by the same person shows the same state.
+        if let actorID = item.actorID {
+            for i in notifications.indices where notifications[i].actorID == actorID {
+                notifications[i].actorFollowed = true
+            }
+        }
+        user.followingCount += 1
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // By id: the row carries the actor's, and a handle can have been
+        // changed since the notification was written.
+        if let actorID = item.actorID {
+            syncFollow(profileId: actorID, following: true)
+        } else if let handle = item.actorHandle {
+            syncProfileFollow(handle: handle, following: true)
+        }
+        // Mirror onto anything of theirs already on screen.
+        for i in posts.indices where posts[i].author == item.actorHandle {
+            posts[i].following = true
+            posts[i].showFollow = false
+        }
+        schedulePersist()
     }
 
     /// Lets the activity sheet finish closing before the next surface opens —
@@ -3060,10 +3126,13 @@ final class AppState: ObservableObject {
             self.posts[i].likeCount += Int.random(in: 3...9)
             self.pushActivity(ActivityItem(
                 kind: .like, actor: firstFan,
-                text: "and others liked your post.",
+                actorHandle: firstFan,
+                text: "and others liked your post",
+                snippet: self.posts[i].text,
                 timeAgo: "now",
                 avatarURL: nil,
-                previewURL: self.posts[i].imageURL))
+                previewURL: self.posts[i].imageURL,
+                postID: postID))
             self.schedulePersist()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 7.0...11.0)) { [weak self] in
@@ -3079,10 +3148,14 @@ final class AppState: ObservableObject {
             self.posts[i].commentCount = list.count
             self.pushActivity(ActivityItem(
                 kind: .comment, actor: commenter,
-                text: "commented: “\(text)”",
+                actorHandle: commenter,
+                text: "commented on your post",
+                snippet: text,
                 timeAgo: "now",
                 avatarURL: nil,
-                previewURL: self.posts[i].imageURL))
+                previewURL: self.posts[i].imageURL,
+                postID: postID,
+                commentID: list.first?.id))
             self.schedulePersist()
         }
     }

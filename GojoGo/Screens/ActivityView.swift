@@ -3,11 +3,110 @@ import PhotosUI
 
 // MARK: - Activity (notifications)
 
+/// One row of the activity feed: usually a single notification, sometimes a
+/// run of them collapsed into "…and 4 others".
+///
+/// Grouping happens here rather than on the server because it is a property of
+/// how the list is *read* — five people liking one post is one event to the
+/// person scrolling, and five rows of it push everything else off the screen.
+/// The members stay intact so a tap still routes off a real notification and
+/// "read" still means all of them.
+struct ActivityGroup: Identifiable {
+    let items: [ActivityItem]
+
+    var id: UUID { lead.id }
+    var lead: ActivityItem { items[0] }
+    var count: Int { items.count }
+    var read: Bool { items.allSatisfy(\.read) }
+
+    /// "amina", "amina and jonas", "amina, jonas and 4 others".
+    var actors: String {
+        let names = items.map(\.actor)
+        switch names.count {
+        case 1: return names[0]
+        case 2: return "\(names[0]) and \(names[1])"
+        default: return "\(names[0]), \(names[1]) and \(names.count - 2) others"
+        }
+    }
+
+    /// Only likes on the same post collapse. A comment is something somebody
+    /// said, and a row that hides four of them to save two lines is worse than
+    /// the four rows.
+    static func group(_ items: [ActivityItem]) -> [ActivityGroup] {
+        var out: [ActivityGroup] = []
+        var run: [ActivityItem] = []
+
+        func flush() {
+            guard !run.isEmpty else { return }
+            out.append(ActivityGroup(items: run))
+            run = []
+        }
+        for item in items {
+            if item.kind == .like, let postID = item.postID,
+               let first = run.first, first.postID == postID,
+               // Never collapse across the read line: a group is one row, and
+               // one row cannot be half-new.
+               first.read == item.read {
+                run.append(item)
+            } else {
+                flush()
+                run = [item]
+            }
+        }
+        flush()
+        return out
+    }
+}
+
+/// The date headings, Instagram-style: what "when" means to somebody scrolling
+/// is today / yesterday / this week, not a timestamp.
+enum ActivityBucket: Int, CaseIterable {
+    case today, yesterday, week, month, earlier
+
+    var label: String {
+        switch self {
+        case .today: return "Today"
+        case .yesterday: return "Yesterday"
+        case .week: return "Last 7 days"
+        case .month: return "Last 30 days"
+        case .earlier: return "Earlier"
+        }
+    }
+
+    static func of(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> ActivityBucket {
+        if calendar.isDateInToday(date) { return .today }
+        if calendar.isDateInYesterday(date) { return .yesterday }
+        let days = calendar.dateComponents([.day], from: date, to: now).day ?? 0
+        if days < 7 { return .week }
+        if days < 30 { return .month }
+        return .earlier
+    }
+}
+
+/// One heading and the rows under it.
+struct ActivitySection: Identifiable {
+    let bucket: ActivityBucket
+    let groups: [ActivityGroup]
+
+    var id: Int { bucket.rawValue }
+}
+
 struct ActivityView: View {
     @EnvironmentObject var app: AppState
 
-    private var unread: [ActivityItem] { app.notifications.filter { !$0.read } }
-    private var earlier: [ActivityItem] { app.notifications.filter(\.read) }
+    private var unread: [ActivityGroup] {
+        ActivityGroup.group(app.notifications.filter { !$0.read })
+    }
+
+    /// Read rows, split into date headings. Empty buckets are dropped.
+    private var earlier: [ActivitySection] {
+        let read = app.notifications.filter(\.read)
+        return ActivityBucket.allCases.compactMap { bucket -> ActivitySection? in
+            let inBucket = read.filter { ActivityBucket.of($0.createdAt) == bucket }
+            guard !inBucket.isEmpty else { return nil }
+            return ActivitySection(bucket: bucket, groups: ActivityGroup.group(inBucket))
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -34,9 +133,9 @@ struct ActivityView: View {
                                 sectionLabel("New")
                                 ForEach(unread) { row($0) }
                             }
-                            if !earlier.isEmpty {
-                                sectionLabel(unread.isEmpty ? "Earlier" : "Seen")
-                                ForEach(earlier) { row($0) }
+                            ForEach(earlier) { section in
+                                sectionLabel(section.bucket.label)
+                                ForEach(section.groups) { row($0) }
                             }
                         }
                         .padding(.vertical, 12)
@@ -76,47 +175,103 @@ struct ActivityView: View {
             .padding(.bottom, 6)
     }
 
-    private func row(_ item: ActivityItem) -> some View {
-        Button {
-            app.handleActivityTap(item)
-        } label: {
-            HStack(spacing: 12) {
-                ZStack(alignment: .bottomTrailing) {
-                    UserAvatar(size: 44,
-                               letter: String(item.actor.prefix(1)).uppercased(),
-                               imageURL: item.avatarURL)
-                    Image(systemName: item.kind.icon)
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 17, height: 17)
-                        .background(Circle().fill(item.kind.tint))
-                        .overlay(Circle().strokeBorder(GGColor.bg, lineWidth: 2))
-                        .offset(x: 3, y: 3)
-                }
+    /// The row is a tap target rather than a `Button` because it contains one —
+    /// nested buttons both fire, and "Follow back" would also open the profile.
+    private func row(_ group: ActivityGroup) -> some View {
+        let item = group.lead
+        return HStack(spacing: 12) {
+            avatar(group)
 
-                (Text(item.actor).fontWeight(.semibold)
+            VStack(alignment: .leading, spacing: 3) {
+                (Text(group.actors).fontWeight(.semibold)
                  + Text(" \(item.text) ")
                  + Text(item.timeAgo).foregroundColor(GGColor.textTertiary))
                     .font(.system(size: 14))
                     .foregroundStyle(GGColor.textPrimary)
                     .lineSpacing(2)
                     .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let preview = item.previewURL {
-                    MediaImage(url: preview, cornerRadius: 8)
-                        .frame(width: 44, height: 44)
-                        .clipped()
-                } else if !item.read {
-                    Circle().fill(GGColor.blue).frame(width: 8, height: 8)
+                // What was actually said, or — on a like — the caption of the
+                // post in question. The thumbnail answers "which post" when
+                // there is a picture; this answers it when there isn't.
+                if let snippet = item.snippet, !snippet.isEmpty {
+                    Text(snippet)
+                        .font(.system(size: 13))
+                        .foregroundStyle(GGColor.textSecondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
-            .background(item.read ? Color.clear : GGColor.ink(0.035))
-            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            trailing(group)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(group.read ? Color.clear : GGColor.ink(0.035))
+        .contentShape(Rectangle())
+        .onTapGesture { app.handleActivityTap(item) }
+    }
+
+    /// The actor's picture with the kind badge. A collapsed group stacks the
+    /// second face behind the first, which is what says "more than one person"
+    /// before the text does.
+    private func avatar(_ group: ActivityGroup) -> some View {
+        let item = group.lead
+        return ZStack(alignment: .bottomTrailing) {
+            if group.count > 1, let second = group.items.dropFirst().first {
+                UserAvatar(size: 34,
+                           letter: String(second.actor.prefix(1)).uppercased(),
+                           imageURL: second.avatarURL)
+                    .overlay(Circle().strokeBorder(GGColor.bg, lineWidth: 2))
+                    .offset(x: -12, y: -8)
+            }
+            UserAvatar(size: 44,
+                       letter: String(item.actor.prefix(1)).uppercased(),
+                       imageURL: item.avatarURL)
+                .overlay(Circle().strokeBorder(GGColor.bg, lineWidth: group.count > 1 ? 2 : 0))
+            Image(systemName: item.kind.icon)
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 17, height: 17)
+                .background(Circle().fill(item.kind.tint))
+                .overlay(Circle().strokeBorder(GGColor.bg, lineWidth: 2))
+                .offset(x: 3, y: 3)
+        }
+        .frame(width: 50, height: 44, alignment: .bottomTrailing)
+    }
+
+    /// The post it happened on, a follow-back button, or the unread dot — in
+    /// that order, because the thumbnail is the one that answers a question.
+    @ViewBuilder
+    private func trailing(_ group: ActivityGroup) -> some View {
+        let item = group.lead
+        if let preview = item.previewURL {
+            MediaImage(url: preview, cornerRadius: 8)
+                .frame(width: 44, height: 44)
+                .clipped()
+        } else if item.kind == .follow, !item.actorFollowed {
+            Button {
+                app.followBack(item)
+            } label: {
+                Text("Follow back")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(GGColor.onAccent)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(GGColor.blue))
+            }
+            .buttonStyle(PressableStyle())
+        } else if item.kind == .follow, item.actorFollowed {
+            Text("Following")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(GGColor.textSecondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .glassCapsule(interactive: false)
+        } else if !group.read {
+            Circle().fill(GGColor.blue).frame(width: 8, height: 8)
+        }
     }
 }
 

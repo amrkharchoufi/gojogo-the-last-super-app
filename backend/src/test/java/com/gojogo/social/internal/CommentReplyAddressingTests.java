@@ -49,6 +49,7 @@ class CommentReplyAddressingTests {
     private CommentRepository comments;
     private PostRepository posts;
     private ApplicationEventPublisher events;
+    private MentionService mentions;
     private CommentService service;
 
     @BeforeEach
@@ -60,7 +61,7 @@ class CommentReplyAddressingTests {
         CommentLikeCountUpdater likeCounts = mock(CommentLikeCountUpdater.class);
         FollowRepository follows = mock(FollowRepository.class);
         ProfileApi profiles = mock(ProfileApi.class);
-        MentionService mentions = mock(MentionService.class);
+        mentions = mock(MentionService.class);
         // Nobody has blocked anybody in these tests — the addressing rules this
         // file pins are about who a reply answers, not who may see it.
         BlockService blocks = mock(BlockService.class);
@@ -68,7 +69,8 @@ class CommentReplyAddressingTests {
         when(posts.findById(POST_ID)).thenReturn(Optional.of(new Post(POST_AUTHOR, "a post", 1.0f)));
         when(follows.followeeIds(any())).thenReturn(Set.of());
         when(profiles.findById(any())).thenReturn(Optional.empty());
-        when(mentions.record(any(), any(), any(), anyString(), any(), any(), any()))
+        when(mentions.resolve(any(), anyString())).thenReturn(List.of());
+        when(mentions.record(any(), any(), any(), anyList(), any(), any(), any()))
             .thenReturn(List.of());
         when(comments.saveAndFlush(any())).thenAnswer(call -> withId(call.getArgument(0)));
 
@@ -143,7 +145,8 @@ class CommentReplyAddressingTests {
         // Nobody has blocked anybody in these tests — the addressing rules this
         // file pins are about who a reply answers, not who may see it.
         BlockService blocks = mock(BlockService.class);
-        when(mentions.record(any(), any(), any(), anyString(), any(), any(), any()))
+        when(mentions.resolve(any(), anyString())).thenReturn(List.of(new MentionDto(B, "b")));
+        when(mentions.record(any(), any(), any(), anyList(), any(), any(), any()))
             .thenReturn(List.of());
         service = new CommentService(comments, mock(CommentLikeRepository.class),
             mock(CommentLikeCountUpdater.class), posts, mock(FollowRepository.class),
@@ -154,8 +157,40 @@ class CommentReplyAddressingTests {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Collection<UUID>> suppressed =
             ArgumentCaptor.forClass(java.util.Collection.class);
-        verify(mentions).record(any(), any(), any(), anyString(), any(), any(), suppressed.capture());
+        verify(mentions).record(any(), any(), any(), anyList(), any(), any(), suppressed.capture());
         assertThat(suppressed.getValue()).containsExactly(B);
+    }
+
+    @Test
+    @DisplayName("a top-level comment that tags the post's author is a mention, not a comment")
+    void taggingThePostAuthorInACommentReadsAsAMention() {
+        when(mentions.resolve(any(), anyString()))
+            .thenReturn(List.of(new MentionDto(POST_AUTHOR, "author")));
+
+        service.create(C, POST_ID, "@author look at this", null);
+
+        // "commented on your post" under a post with forty comments says nothing;
+        // being named in one is the fact worth sending, and it is the row that
+        // opens the thread rather than the post.
+        assertThat(allPublished()).noneMatch(PostCommented.class::isInstance);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Collection<UUID>> suppressed =
+            ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(mentions).record(any(), any(), any(), anyList(), any(), any(), suppressed.capture());
+        // Nothing suppressed: the tag fan-out is what tells the author now.
+        assertThat(suppressed.getValue()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a reply that tags the person answered stays a reply")
+    void taggingTheAddresseeInAReplyStaysAReply() {
+        // The composer prefills the handle, so reading it as a tag would retire
+        // "replied to your comment" for every reply the app itself composes.
+        when(mentions.resolve(any(), anyString())).thenReturn(List.of(new MentionDto(A, "a")));
+
+        service.create(C, POST_ID, "@a agreed", ROOT_COMMENT);
+
+        assertThat(published(CommentReplied.class).parentAuthorId()).isEqualTo(A);
     }
 
     // --- helpers ---

@@ -38,24 +38,9 @@ extension AppState {
     }
 
     /// Opens a post the feed may never have loaded — a search hit is usually
-    /// something you have not scrolled past.
+    /// something you have not scrolled past. Same problem, and the same
+    /// fetch-then-open, as a notification about a post from last week.
     private func openPost(id: UUID) {
-        if posts.contains(where: { $0.id == id }) {
-            openPostViewer(id)
-            return
-        }
-        Task {
-            do {
-                // Seeded into the feed so the viewer can resolve it. Safe to
-                // leave: `refreshSocial` replaces `posts` wholesale, so a post
-                // that only got here to be read once doesn't outlive the next
-                // refresh.
-                let post = try await SocialStore.shared.post(id)
-                posts.insert(post, at: 0)
-                openPostViewer(id)
-            } catch {
-                showEconomyNotice("That post isn't there any more.")
-            }
-        }
+        openPostSurface(id, comments: false)
     }
 }
