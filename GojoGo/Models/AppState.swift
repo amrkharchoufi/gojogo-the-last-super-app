@@ -434,11 +434,13 @@ final class AppState: ObservableObject {
     @Published var user = GGUser()
 
     /// Initial drawn on this user's own avatar while their photo loads (and when
-    /// they have none). `nil` before the profile is known, so a signed-out or
-    /// still-connecting session shows an empty disc rather than somebody else's
-    /// letter — the seed ring used to carry a hardcoded "J".
+    /// they have none) — name, else handle, else the address they signed in with.
+    /// `nil` only when the session knows none of the three, and `UserAvatar`
+    /// draws a person glyph for that rather than a bare disc. The seed ring used
+    /// to carry a hardcoded "J", which belonged to nobody signed in.
     var ownAvatarLetter: String? {
-        guard let first = user.name.first ?? user.handle.first else { return nil }
+        let source = [user.name, user.handle, email].first { !$0.isEmpty }
+        guard let first = source?.first, first.isLetter || first.isNumber else { return nil }
         return String(first).uppercased()
     }
     @Published var interests: [Interest] = SampleData.interests
