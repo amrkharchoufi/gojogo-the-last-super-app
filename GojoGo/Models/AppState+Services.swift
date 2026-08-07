@@ -69,6 +69,21 @@ extension AppState {
         }
     }
 
+    // MARK: Whose service is this
+
+    /// The provider row this account owns, if it owns one. Same shape as
+    /// `ownShopId`: the roles call knows it from the first connect, and the
+    /// console's copy is only the fallback.
+    var ownProviderId: UUID? { myProviderId ?? myProvider?.id }
+
+    /// True when this service is one of ours. Nobody books their own time —
+    /// the server refuses it ("That's your own service"), and a calendar of
+    /// times to pick from is a strange thing to offer somebody who wrote it.
+    func isOwnService(_ service: ServiceDTO) -> Bool {
+        if let mine = ownProviderId, mine == service.providerId { return true }
+        return myServices.contains { $0.id == service.id }
+    }
+
     // MARK: The service page
 
     /// Opens a service and asks for its slots and reviews behind it.
@@ -76,12 +91,13 @@ extension AppState {
     /// The slots are fetched every single time, never cached with the service:
     /// an availability list is stale the moment anybody else books, and a stale
     /// one offers a time that will be refused with the customer's finger
-    /// already on it.
+    /// already on it. Not fetched at all on our own service: the page shows no
+    /// picker there, so the request would only be a round trip nobody reads.
     func openService(_ service: ServiceDTO) {
         browsingService = service
         serviceSlots = nil
         serviceReviews = []
-        loadServiceSlots(service.id)
+        if !isOwnService(service) { loadServiceSlots(service.id) }
         Task {
             let reviews = try? await ServicesStore.shared.reviews(service.id)
             if browsingService?.id == service.id {
@@ -121,6 +137,18 @@ extension AppState {
         serviceReviews = []
     }
 
+    /// Out of the provider's own service page and into their console. Both are
+    /// full-screen covers owned by `RootView`, and raising the second flag in
+    /// the same frame as lowering the first loses the presentation — so the
+    /// console waits for the page to finish leaving.
+    func manageOwnService() {
+        closeService()
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            openProviderConsole()
+        }
+    }
+
     // MARK: Booking
 
     /// Requests a booking at a slot. Returns nil on success, or the sentence
@@ -128,6 +156,9 @@ extension AppState {
     /// slot it offered thirty seconds ago is gone.
     func requestBooking(_ service: ServiceDTO, at slot: String, note: String) async -> String? {
         guard backendConnected else { return "You're not connected — try again in a moment." }
+        guard !isOwnService(service) else {
+            return "This is your own service — bookings on it come from other people."
+        }
         do {
             let booking = try await ServicesStore.shared.book(BookingRequestBody(
                 serviceId: service.id,

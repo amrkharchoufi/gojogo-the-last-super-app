@@ -72,7 +72,13 @@ struct SellerListingsView: View {
         .background(GGColor.sheetBG.ignoresSafeArea())
         .animation(.ggSnappy, value: app.editingListing?.id)
         .animation(.ggOverlay, value: app.economyNotice)
-        .task { await app.refreshSellerListings() }
+        .task {
+            await app.refreshSellerListings()
+            // The transfers row lives on this sheet now, so this sheet is what
+            // has to know whether there are any — Economy's poll only runs
+            // while the marketplace itself is on screen.
+            await app.refreshTransfers()
+        }
         .alert("Delete this listing?", isPresented: Binding(
             get: { pendingDelete != nil },
             set: { if !$0 { pendingDelete = nil } }
@@ -112,6 +118,9 @@ struct SellerListingsView: View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 14) {
                 statsStrip
+                if !app.transfers.isEmpty {
+                    transfersRow
+                }
                 if !app.sellerListings.isEmpty {
                     segments
                 }
@@ -138,7 +147,59 @@ struct SellerListingsView: View {
             .padding(.horizontal, 18)
             .padding(.bottom, 24)
         }
-        .refreshable { await app.refreshSellerListings() }
+        .refreshable {
+            await app.refreshSellerListings()
+            await app.refreshTransfers()
+        }
+    }
+
+    /// The way into ownership transfers, moved here off the Economy header.
+    ///
+    /// It belongs with the shelf rather than beside it: a transfer *is* one of
+    /// your listings, further along — the escrow, the paperwork and the buyer
+    /// waiting on it — and up in the chrome it was a third chip competing with
+    /// the wordmark for a row that only fits two. Shown only once there is one,
+    /// as it was before: most people never sell a car.
+    private var transfersRow: some View {
+        let live = app.transfers.filter { !$0.step.isFinished }.count
+        return Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            app.openTransfersFromShelf()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                    .frame(width: 34, height: 34)
+                    .glassCapsule(interactive: false)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Transfers")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(GGColor.textPrimary)
+                    Text(live > 0
+                         ? "\(live) still going · escrow and paperwork"
+                         : "\(app.transfers.count) finished")
+                        .font(.system(size: 12))
+                        .foregroundStyle(GGColor.textSecondary)
+                }
+                Spacer(minLength: 0)
+                if live > 0 {
+                    Text("\(live)")
+                        .font(.ggMono(12, .semibold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(GGColor.white))
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(GGColor.textTertiary)
+            }
+            .padding(12)
+            .glass(cornerRadius: 18, tint: GGColor.ink(0.06))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
     }
 
     /// Server-computed totals, so they cover every listing rather than the page

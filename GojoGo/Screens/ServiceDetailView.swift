@@ -11,6 +11,12 @@ import SwiftUI
 // Days are grouped from the flat list the server sends rather than requested
 // per day: one round trip, and the gaps in it are the truth about which days
 // this person works.
+//
+// None of that is shown to the person who *provides* the service. Their own
+// page has no picker and no note field, because there is no version of this
+// screen where booking yourself is the thing they came to do — the server has
+// always refused it, and offering a fortnight of times before saying so was
+// the app asking a question it already knew the answer to.
 
 struct ServiceDetailView: View {
     @EnvironmentObject var app: AppState
@@ -23,6 +29,8 @@ struct ServiceDetailView: View {
     @State private var error: String?
 
     private var live: ServiceDTO { app.browsingService ?? service }
+
+    private var isMine: Bool { app.isOwnService(live) }
 
     /// The slot list, grouped by local day and kept in the server's order.
     private var slotsByDay: [(day: Date, slots: [String])] {
@@ -44,6 +52,7 @@ struct ServiceDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     facts
+                    if isMine { ownerBanner }
                     // Same guard as the product page: a field the server
                     // stores as JSON comes back as "{}" rather than as empty.
                     if let description = ShopProductDetailView.readable(live.description) {
@@ -52,8 +61,10 @@ struct ServiceDetailView: View {
                     if let requirements = ShopProductDetailView.readable(live.requirements) {
                         block(title: "What they need from you", body: requirements)
                     }
-                    slotPicker
-                    noteField
+                    if !isMine {
+                        slotPicker
+                        noteField
+                    }
                     if let error {
                         Text(error)
                             .font(.system(size: 12))
@@ -127,6 +138,29 @@ struct ServiceDetailView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
         .glass(cornerRadius: 16, tint: GGColor.ink(0.05))
+    }
+
+    /// Said once, near the top, so the missing picker below reads as a decision
+    /// rather than as a service with no availability.
+    private var ownerBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "person.badge.shield.checkmark")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GGColor.textPrimary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This is your service")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(GGColor.textPrimary)
+                Text("This is how customers see it. Bookings come from them.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(GGColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glass(cornerRadius: 16, tint: GGColor.ink(0.07))
     }
 
     private func block(title: String, body: String) -> some View {
@@ -272,27 +306,61 @@ struct ServiceDetailView: View {
     /// Two different acts behind one button, and the label says which. A priced
     /// service holds the money now; a quote-only one holds nothing and asks a
     /// question — which is why it does not say "book".
+    @ViewBuilder
     private var bookBar: some View {
+        if isMine {
+            ownerBar
+        } else {
+            VStack(spacing: 6) {
+                Button {
+                    request()
+                } label: {
+                    Text(bookLabel)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(GGColor.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(Capsule().fill(
+                            selectedSlot == nil ? GGColor.ink(0.18) : GGColor.white))
+                }
+                .buttonStyle(PressableStyle())
+                .disabled(selectedSlot == nil || booking)
+
+                Text(live.priceOnQuote
+                     ? "Nothing is charged until you accept their price."
+                     : "Held from your GoJo balance and released if they decline.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(GGColor.textTertiary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 12)
+            .padding(.bottom, 12)
+            .background(.ultraThinMaterial)
+        }
+    }
+
+    /// The provider's own bar. Where a customer's tap holds money, theirs opens
+    /// the console — which is the only thing they could actually have wanted to
+    /// do from here.
+    private var ownerBar: some View {
         VStack(spacing: 6) {
             Button {
-                request()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                app.manageOwnService()
             } label: {
-                Text(bookLabel)
+                Text("Manage this service")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(GGColor.onAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
-                    .background(Capsule().fill(
-                        selectedSlot == nil ? GGColor.ink(0.18) : GGColor.white))
+                    .background(Capsule().fill(GGColor.white))
             }
             .buttonStyle(PressableStyle())
-            .disabled(selectedSlot == nil || booking)
 
-            Text(live.priceOnQuote
-                 ? "Nothing is charged until you accept their price."
-                 : "Held from your GoJo balance and released if they decline.")
+            Text("Your hours, your prices and the jobs waiting on you live in your console.")
                 .font(.system(size: 11))
                 .foregroundStyle(GGColor.textTertiary)
+                .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 18)
         .padding(.top, 12)

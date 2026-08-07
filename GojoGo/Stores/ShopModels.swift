@@ -397,6 +397,10 @@ enum TransferState: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Nothing left to do on either side — the money has gone, or it came back.
+    /// Everything else is somebody waiting on somebody.
+    var isFinished: Bool { self == .released || self == .cancelled }
+
     /// What the *buyer* is waiting on, in the buyer's own words.
     var buyerHint: String {
         switch self {

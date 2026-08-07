@@ -17,6 +17,9 @@ struct EconomyView: View {
     /// Local rather than `app.showDeliveryAddressSheet`, which GojoDelivery
     /// owns. One flag driving two `.sheet`s presents on neither.
     @State private var pickingAddress = false
+    /// Kicked by every change to the basket count so the bar visibly reacts
+    /// instead of silently reading one higher.
+    @State private var basketPulse = false
     @FocusState private var searchFocused: Bool
 
     /// Browse only ever shows live listings — a seller's paused or sold items
@@ -102,6 +105,7 @@ struct EconomyView: View {
             // and then wandering into Services must not lose it.
             if !app.shopBasket.isEmpty, app.economySegment != .marketplace {
                 basketBar
+                    .scaleEffect(basketPulse ? 1.035 : 1)
                     .padding(.horizontal, 16)
                     .padding(.bottom, tabBarInset - 12)
                     .frame(maxHeight: .infinity, alignment: .bottom)
@@ -111,6 +115,16 @@ struct EconomyView: View {
         }
         .animation(.ggOverlay, value: app.economyNotice)
         .animation(.ggSnappy, value: app.shopBasket.count)
+        // A number changing from 1 to 2 is not something anybody sees. The bar
+        // gives a little to say it heard the tap, then settles.
+        .onChange(of: app.basketCount) { _, count in
+            guard count > 0 else { return }
+            withAnimation(.ggPop) { basketPulse = true }
+            Task {
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                withAnimation(.ggPop) { basketPulse = false }
+            }
+        }
         .onPreferenceChange(ChromeHeightKey.self) { height in
             guard height > 0, abs(height - chromeHeight) > 0.5 else { return }
             chromeHeight = height
@@ -134,10 +148,14 @@ struct EconomyView: View {
             case .shops:       await app.refreshShops()
             case .services:    await app.refreshServices()
             }
-            // Whether the Transfers chip exists at all is an answer only the
-            // server has, so it is asked here rather than added to the connect
-            // chain everybody pays for.
+            // Whether there are transfers at all is an answer only the server
+            // has, so it is asked here rather than added to the connect chain
+            // everybody pays for. It drives the row on the seller's shelf.
             await app.refreshTransfers()
+            // Which shop and which provider row this account is. Usually free —
+            // the roles call already answered it — and the reason a seller's own
+            // product doesn't offer them a buy button.
+            await app.resolveOwnStorefronts()
             // Economy's own load: the addresses arrive with `refreshDelivery`,
             // which only runs on the delivery tab. Without this the row reads
             // "Add a delivery address" to someone who has three saved.
@@ -302,12 +320,11 @@ struct EconomyView: View {
     private var segmentActions: some View {
         switch app.economySegment {
         case .marketplace:
-            // Only once there is one. A transfer is a rare thing to be doing,
-            // and a permanent chip for it would be chrome most people never
-            // have a use for.
-            if !app.transfers.isEmpty {
-                chromeChip(icon: "doc.text", label: "Transfers") { app.openTransfers() }
-            }
+            // Transfers used to sit here, beside "Your listings", and it is the
+            // reason that chip lost its label — three chips and a wordmark do
+            // not fit on a phone. It now lives *inside* the shelf, where the
+            // rest of a seller's own business already is, and this row is back
+            // to two things that fit.
             if app.canManageListings { sellerHubButton }
             Button {
                 app.showSellSheet = true
@@ -432,10 +449,11 @@ struct EconomyView: View {
     /// Way into the seller's own shelf. Carries the live count so a seller can
     /// see at a glance that they still have something up, without opening it.
     ///
-    /// The word "Selling" is what this row gives up to stay one line: the box
-    /// and a number read as "listings, this many" on their own, and a seller
-    /// meets this chip on every visit — unlike Transfers, which is rare enough
-    /// that dropping *its* label would leave a glyph nobody recognises.
+    /// The word came back when Transfers moved off this row. A box and a bare
+    /// number is a puzzle — it could as easily be orders, or saves — and this is
+    /// the chip a seller reaches for on every single visit, so it is the last
+    /// one that should have been left to be guessed at. `ViewThatFits` above
+    /// drops the whole row to its own line rather than squeezing this.
     private var sellerHubButton: some View {
         let live = app.sellerListings.filter { $0.status == .active }.count
         return Button {
@@ -444,10 +462,13 @@ struct EconomyView: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "shippingbox")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Selling")
                     .font(.system(size: 12, weight: .semibold))
                 if live > 0 {
                     Text("\(live)")
                         .font(.ggMono(12, .semibold))
+                        .opacity(0.7)
                 }
             }
             .foregroundStyle(GGColor.textPrimary)

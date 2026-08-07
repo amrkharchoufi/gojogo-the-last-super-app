@@ -27,6 +27,18 @@ extension AppState {
         transferDocuments = []
     }
 
+    /// Opened from "Your listings", which is itself a sheet. Two sheets cannot
+    /// swap in the same frame — the second presentation is dropped and the tap
+    /// reads as dead — so the shelf goes first and the transfers list follows
+    /// it in.
+    func openTransfersFromShelf() {
+        closeSellerHub()
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            showTransfers = true
+        }
+    }
+
     /// Polled while the marketplace is on screen, so it diffs before it
     /// assigns: `transfers` lives on AppState, and reassigning an identical
     /// array republishes the whole app every 30 seconds for nothing.
