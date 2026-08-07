@@ -1,9 +1,12 @@
 package com.gojogo.services.internal;
 
+import com.gojogo.config.ConfigApi;
 import com.gojogo.media.MediaDocumentApi;
 import com.gojogo.payments.OwnerKind;
+import com.gojogo.payments.PayoutApi;
 import com.gojogo.payments.WalletApi;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -20,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -31,6 +35,11 @@ import java.util.UUID;
 @RestController
 class ProviderConsoleController {
 
+    /** Payments owns the number; this only has to show it before the provider
+     *  taps something that would be refused for being under it. */
+    private static final String PAYOUT_MIN_KEY = "payments.payout.min.minor";
+    private static final long PAYOUT_MIN_DEFAULT = 1_000;
+
     private final ServiceCatalogService catalog;
     private final AvailabilityService availability;
     private final BookingService bookings;
@@ -39,6 +48,8 @@ class ProviderConsoleController {
     private final ProviderDocumentRepository documents;
     private final MediaDocumentApi privateMedia;
     private final WalletApi wallet;
+    private final PayoutApi payouts;
+    private final ConfigApi config;
     private final ServicesCurrentProfile current;
 
     ProviderConsoleController(ServiceCatalogService catalog, AvailabilityService availability,
@@ -46,6 +57,7 @@ class ProviderConsoleController {
                               ProviderDirectory directory,
                               ProviderDocumentRepository documents,
                               MediaDocumentApi privateMedia, WalletApi wallet,
+                              PayoutApi payouts, ConfigApi config,
                               ServicesCurrentProfile current) {
         this.catalog = catalog;
         this.availability = availability;
@@ -55,6 +67,8 @@ class ProviderConsoleController {
         this.documents = documents;
         this.privateMedia = privateMedia;
         this.wallet = wallet;
+        this.payouts = payouts;
+        this.config = config;
         this.current = current;
     }
 
@@ -72,18 +86,61 @@ class ProviderConsoleController {
         return catalog.updateProfile(current.require(jwt).id(), request);
     }
 
-    /** Balances + statement on the vertical's own surface — only the module
-     *  that owns a payee can prove the caller owns it (ARCHITECTURE §10b). */
+    /** Balances + statement + the way out, on the vertical's own surface — only
+     *  the module that owns a payee can prove the caller owns it
+     *  (ARCHITECTURE §10b). */
     @GetMapping("/v1/services/providers/mine/wallet")
     ProviderWalletResponse walletView(@AuthenticationPrincipal Jwt jwt,
                                       @RequestParam(defaultValue = "50") int limit) {
         Provider provider = directory.requireMine(current.require(jwt).id());
+        PayoutApi.ConnectStatus connect = payouts.statusOf(OwnerKind.MERCHANT, provider.getId());
         return new ProviderWalletResponse(
             wallet.balancesOf(OwnerKind.MERCHANT, provider.getId()),
-            wallet.statement(OwnerKind.MERCHANT, provider.getId(), Math.clamp(limit, 1, 200)));
+            wallet.statement(OwnerKind.MERCHANT, provider.getId(), Math.clamp(limit, 1, 200)),
+            payouts.isConfigured(), connect.exists(), connect.ready(),
+            connect.requirementsNote(), config.number(PAYOUT_MIN_KEY, PAYOUT_MIN_DEFAULT));
     }
 
-    record ProviderWalletResponse(WalletApi.Balances balances, List<WalletApi.Entry> entries) {
+    /** A Stripe-hosted onboarding link for this practice's payouts. Single-use
+     *  and short-lived, so it is minted on demand and never stored. */
+    @PostMapping("/v1/services/providers/mine/payouts/onboarding-link")
+    Map<String, String> payoutOnboardingLink(@AuthenticationPrincipal Jwt jwt) {
+        Provider provider = directory.requireMine(current.require(jwt).id());
+        return Map.of("url", payouts.onboardingLink(OwnerKind.MERCHANT, provider.getId(),
+            jwt.getClaimAsString("email")));
+    }
+
+    /**
+     * Sends the practice's earnings to its connected account. Not
+     * {@code @Transactional} on purpose — a payout is a debit and a transfer in
+     * two separate transactions, and wrapping them in a third would roll a debit
+     * back under money that may already be in flight.
+     */
+    @PostMapping("/v1/services/providers/mine/payouts")
+    ProviderPayoutResponse payOut(@AuthenticationPrincipal Jwt jwt,
+                                  @Valid @RequestBody ProviderPayoutRequest request) {
+        UUID me = current.require(jwt).id();
+        Provider provider = directory.requireMine(me);
+        PayoutApi.PayoutResult result = payouts.payOut(OwnerKind.MERCHANT, provider.getId(), me,
+            request.amountMinor(), PayoutApi.PayoutGuard.none());
+        return new ProviderPayoutResponse(result.payoutId(), result.amountMinor(),
+            result.currency(), result.status(), result.failureReason());
+    }
+
+    /** @param payoutsAvailable whether the platform has Stripe wired up at all */
+    record ProviderWalletResponse(WalletApi.Balances balances, List<WalletApi.Entry> entries,
+                                  boolean payoutsAvailable, boolean payoutsConfigured,
+                                  boolean payoutsReady, String payoutsRequirement,
+                                  long payoutMinMinor) {
+    }
+
+    record ProviderPayoutRequest(@Min(1) long amountMinor) {
+    }
+
+    /** {@code status} is REQUESTED / SENT / FAILED — a refused payout is
+     *  reported, not hidden, and its debit has already been put back. */
+    record ProviderPayoutResponse(UUID id, long amountMinor, String currency, String status,
+                                  String failureReason) {
     }
 
     // MARK: Qualification papers (private)

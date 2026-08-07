@@ -94,6 +94,21 @@ final class ShopStore {
         try await APIClient.shared.get("/v1/economy/sellers/mine/wallet?limit=\(limit)")
     }
 
+    /// A fresh Stripe onboarding link — single-use, so this is a POST meant to
+    /// be called again rather than a URL to cache. The bank details it asks for
+    /// go to Stripe, never through this app.
+    func sellerPayoutOnboardingLink() async throws -> String {
+        struct LinkResponse: Decodable { let url: String }
+        let response: LinkResponse = try await APIClient.shared
+            .post("/v1/economy/sellers/mine/payouts/onboarding-link")
+        return response.url
+    }
+
+    func sellerPayOut(amountMinor: Int64) async throws -> PayeePayoutDTO {
+        try await APIClient.shared.post("/v1/economy/sellers/mine/payouts",
+                                        body: PayeePayoutBody(amountMinor: amountMinor))
+    }
+
     /// The seller's own catalog — inactive products included, since this is the
     /// only place they still show up.
     func myProducts(limit: Int = 100) async throws -> [ShopProductDTO] {

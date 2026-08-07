@@ -499,7 +499,44 @@ struct WalletEntryDTO: Decodable, Identifiable, Equatable {
     }
 }
 
+/// A shop's or a practice's own money — what it has earned, and the way out to
+/// a bank. The payout fields are optional so a build running against a backend
+/// that predates them still decodes its balance instead of showing nothing.
 struct PayeeWalletDTO: Decodable, Equatable {
     let balances: WalletBalancesDTO
     let entries: [WalletEntryDTO]
+    /// Whether the platform has Stripe wired up at all. False means the balance
+    /// is real and the door simply isn't open yet — a different sentence than
+    /// "you haven't set this up".
+    let payoutsAvailable: Bool?
+    /// This payee has started Stripe onboarding.
+    let payoutsConfigured: Bool?
+    /// Stripe will accept a transfer for it.
+    let payoutsReady: Bool?
+    /// Stripe's own `requirements.currently_due` list, comma-separated and in
+    /// Stripe's vocabulary. Never rendered as-is — see `payoutsNeedSentence`.
+    let payoutsRequirement: String?
+    let payoutMinMinor: Int64?
+
+    var canPayOut: Bool { payoutsAvailable == true }
+    var isOnboarded: Bool { payoutsConfigured == true }
+    var isPayoutReady: Bool { payoutsReady == true }
+    var minimumPayout: Int64 { payoutMinMinor ?? 1_000 }
+
+    /// What is still missing, in the language of the person reading it — the
+    /// same vocabulary the restaurant and courier cards use.
+    var payoutsNeedSentence: String { StripePayoutNeeds.sentence(payoutsRequirement ?? "") }
+}
+
+struct PayeePayoutDTO: Decodable {
+    let id: UUID
+    let amountMinor: Int64
+    let currency: String
+    /// REQUESTED / SENT / FAILED — a refusal is reported, not hidden.
+    let status: String
+    let failureReason: String
+}
+
+struct PayeePayoutBody: Encodable {
+    let amountMinor: Int64
 }

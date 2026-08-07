@@ -89,6 +89,20 @@ final class ServicesStore {
         try await APIClient.shared.get("/v1/services/providers/mine/wallet?limit=\(limit)")
     }
 
+    /// A fresh Stripe onboarding link — single-use, minted on demand rather than
+    /// stored. The bank details it asks for go to Stripe, never through here.
+    func providerPayoutOnboardingLink() async throws -> String {
+        struct LinkResponse: Decodable { let url: String }
+        let response: LinkResponse = try await APIClient.shared
+            .post("/v1/services/providers/mine/payouts/onboarding-link")
+        return response.url
+    }
+
+    func providerPayOut(amountMinor: Int64) async throws -> PayeePayoutDTO {
+        try await APIClient.shared.post("/v1/services/providers/mine/payouts",
+                                        body: PayeePayoutBody(amountMinor: amountMinor))
+    }
+
     func myServices(limit: Int = 100) async throws -> [ServiceDTO] {
         try await APIClient.shared.get("/v1/services/providers/mine/services?limit=\(limit)")
     }

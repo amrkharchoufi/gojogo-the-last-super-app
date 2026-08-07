@@ -35,6 +35,12 @@ extension AppState {
     /// independent and are made to fail independently: a shop whose promotions
     /// call fell over still shows its orders, because the orders are the part
     /// somebody is waiting on.
+    ///
+    /// The shop read is the one that used to abort the rest. It no longer does:
+    /// this runs again on every appear and on every pull, so a single dropped
+    /// request would blank a console that was already showing a shop — and
+    /// worse, take the orders and the money down with it. A failure keeps what
+    /// is on screen and only says so when there is nothing else to show.
     func refreshSellerConsole() async {
         guard backendConnected, isSeller else { return }
         sellerConsoleLoading = myShop == nil
@@ -42,9 +48,14 @@ extension AppState {
         do {
             myShop = try await ShopStore.shared.mySeller()
         } catch {
-            showEconomyNotice(Self.message(
-                from: error, fallback: "Couldn't load your shop."))
-            return
+            if myShop == nil {
+                showEconomyNotice(Self.message(
+                    from: error, fallback: "Couldn't load your shop."))
+                return
+            }
+            #if DEBUG
+            print("Shop refresh failed, keeping what's loaded: \(error.localizedDescription)")
+            #endif
         }
         async let products = try? await ShopStore.shared.myProducts()
         async let orders = try? await ShopStore.shared.sellerOrders()
@@ -237,6 +248,60 @@ extension AppState {
             return nil
         } catch {
             return Self.message(from: error, fallback: "Couldn't post that reply.")
+        }
+    }
+
+    // MARK: Getting the money out (Phase 5 · M5)
+    //
+    // A shop's earnings settle into its own payee balance — not the owner's Gojo
+    // Wallet, which is the same person's money for buying things. The two never
+    // mix: an order pays the shop, and the shop pays a bank. This is that
+    // second half, on the same Stripe Connect path the restaurant dashboard
+    // uses, because only the module that owns the payee may ask.
+
+    /// Opens Stripe's hosted onboarding. The link is single-use, so it is minted
+    /// each time rather than stored — and the bank details it asks for go to
+    /// Stripe, never through this app.
+    func startShopPayoutOnboarding() {
+        guard !payeePayoutBusy else { return }
+        payeePayoutBusy = true
+        Task {
+            defer { payeePayoutBusy = false }
+            do {
+                let link = try await ShopStore.shared.sellerPayoutOnboardingLink()
+                guard let url = URL(string: link) else {
+                    showEconomyNotice("Couldn't open the payout setup page.")
+                    return
+                }
+                _ = await CheckoutSession().present(url)
+                // Whatever they did over there, the answer is on the server.
+                shopWallet = (try? await ShopStore.shared.sellerWallet()) ?? shopWallet
+            } catch {
+                showEconomyNotice(Self.message(
+                    from: error, fallback: "Couldn't start payout setup."))
+            }
+        }
+    }
+
+    /// Sends the shop's available balance to its connected account.
+    func requestShopPayout(_ amountMinor: Int64) {
+        guard !payeePayoutBusy else { return }
+        payeePayoutBusy = true
+        Task {
+            defer { payeePayoutBusy = false }
+            do {
+                let payout = try await ShopStore.shared.sellerPayOut(amountMinor: amountMinor)
+                shopWallet = (try? await ShopStore.shared.sellerWallet()) ?? shopWallet
+                // A refused payout is reported rather than hidden: the money is
+                // already back in the balance, and the seller needs to know why.
+                showEconomyNotice(payout.status == "SENT"
+                    ? "\(EconomyStore.formatPrice(cents: payout.amountMinor, currency: payout.currency)) is on its way to your bank."
+                    : (payout.failureReason.isEmpty
+                       ? "That payout didn't go through."
+                       : payout.failureReason))
+            } catch {
+                showEconomyNotice(Self.message(from: error, fallback: "Couldn't pay that out."))
+            }
         }
     }
 }
