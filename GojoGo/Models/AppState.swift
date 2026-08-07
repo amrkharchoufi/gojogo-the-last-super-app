@@ -321,22 +321,33 @@ final class AppState: ObservableObject {
 
     // MARK: The two Phase 5 consoles
     //
-    // Derived from `/v1/me/roles` like every other role in this app — an
-    // approved application provisions a row, and the row is the fact.
+    // Derived, like every other role in this app — but from the *storefront*,
+    // not from the approval that created it. `/v1/me/roles` is the fast path
+    // and `/v1/economy/sellers/mine` is the fact: the console endpoints resolve
+    // the shop from the caller's token and never look at a partner row, so a
+    // 200 there means this account runs a shop whatever the approval says.
 
     @Published var isSeller: Bool = false
     @Published var isServiceProvider: Bool = false
     @Published var showSellerConsole: Bool = false
     @Published var showProviderConsole: Bool = false
 
-    /// The shop and provider rows this account *is*, read from `/v1/me/roles`
-    /// rather than from a console that has been opened. Both catalogs carry the
+    /// The shop and provider rows this account *is*. Both catalogs carry the
     /// owning id on every card (`sellerId`, `providerId`), so knowing these two
     /// is the whole of "this one is mine" — and it has to be known before the
     /// first tap, not after the server refuses it. Nothing here is a permission:
     /// the server is still the only thing that decides a checkout.
     @Published var myShopId: UUID? = nil
     @Published var myProviderId: UUID? = nil
+
+    /// Whether the vertical itself has answered "do you run one of these" this
+    /// session — 200 or 404, both of which are answers. A request that never
+    /// arrived is not, and leaves these false so the next refresh asks again.
+    ///
+    /// None of this is persisted, deliberately: a seller who was suspended
+    /// while the app was closed must not launch holding yesterday's yes.
+    var shopOwnershipSettled: Bool = false
+    var providerOwnershipSettled: Bool = false
 
     @Published var myShop: ShopSellerDTO? = nil
     @Published var myShopProducts: [ShopProductDTO] = []
@@ -2519,6 +2530,8 @@ final class AppState: ObservableObject {
         showProviderConsole = false
         myShopId = nil
         myProviderId = nil
+        shopOwnershipSettled = false
+        providerOwnershipSettled = false
         myShop = nil
         myShopProducts = []
         shopOrderQueue = []
