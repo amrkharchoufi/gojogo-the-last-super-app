@@ -169,31 +169,66 @@ export class GojoGoFargateStack extends cdk.Stack {
     // there is no way to ship Madeleine half-configured (deploy-backend.sh's
     // 2026-07-30 lesson, which this grant is deliberately not repeating).
     //
-    // TWO resource ARNs per model, and both are load-bearing. Llama 3.3 and
-    // Llama 4 are cross-region-inference models: you invoke the *inference
-    // profile* (`us.meta.…`, account-scoped, this region), and Bedrock then
-    // routes the call to a *foundation model* in whichever US region has
-    // capacity. Grant only the profile and the first invocation works until it
-    // routes elsewhere; grant only us-east-1's foundation model and it breaks
-    // the moment it leaves the region. Hence the `*` region on the
-    // foundation-model ARN — those ARNs carry no account id by design.
+    // THE OPENAI-COMPATIBLE ENDPOINT IS A DIFFERENT SERVICE, WITH A DIFFERENT
+    // ACTION, ON A DIFFERENT RESOURCE. This is the correction that matters, and
+    // an earlier version of this comment asserted the opposite — that
+    // `bedrock:InvokeModel` "covers the bedrock-mantle path too, both authorize
+    // as InvokeModel". It does not. Measured against the live endpoint on
+    // 2026-08-08 with a correctly signed request, `bedrock-mantle` answers:
     //
-    // Scoped to `meta.llama*` rather than four exact ids on purpose: the eval
-    // (§9) swaps models repeatedly, and a policy that needs editing per model
-    // is a policy someone works around. NARROW THIS to the single chosen model
-    // id once the eval settles the brain slot — that is the whole point of
-    // running one. Comparison models from other providers need their own
-    // prefixes added here before they can be evaluated at all.
+    //   not authorized to perform: bedrock-mantle:CreateInference
+    //   on resource: arn:aws:bedrock-mantle:us-east-1:<account>:project/default
+    //
+    // Note what is *not* in that ARN: a model. The mantle surface authorizes
+    // per project, not per model, so there is no model-scoping to be had on
+    // this statement and narrowing it by model id is not a thing that exists.
+    // `project/*` rather than `project/default` because the project is chosen
+    // by the endpoint, not by us, and a second one appearing would look exactly
+    // like an outage.
+    //
+    // Getting this wrong is loud rather than silent — every turn ends in a 401
+    // and the assistant module reports an honest turn_error — which is the one
+    // mercy compared to the 2026-07-30 Sumsub failure. It is still a deploy
+    // where Madeleine does nothing at all.
+    taskRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['bedrock-mantle:CreateInference'],
+      resources: [`arn:aws:bedrock-mantle:${this.region}:${this.account}:project/*`],
+    }));
+
+    // Precautionary, and deliberately kept despite nothing calling Converse
+    // today. IAM reports only the *first* denial it hits, so the error above
+    // proves mantle needs CreateInference and proves nothing either way about
+    // whether it then authorizes the underlying model invocation as well. This
+    // costs a scoped statement; the alternative costs a deploy, a 401, and a
+    // second deploy. Delete it once a live turn has been observed succeeding
+    // without it — not before.
+    //
+    // TWO resource ARNs per model, and both are load-bearing where they apply.
+    // A cross-region-inference model is invoked through an *inference profile*
+    // (`us.…`, account-scoped, this region), and Bedrock routes the call to a
+    // *foundation model* in whichever US region has capacity. Grant only the
+    // profile and the first invocation works until it routes elsewhere; grant
+    // only us-east-1's foundation model and it breaks the moment it leaves the
+    // region. Hence the `*` region on the foundation-model ARN — those ARNs
+    // carry no account id by design.
+    //
+    // Now scoped to the two providers the eval actually chose (§9: qwen3-235b
+    // for the brain, ministral-3-8b for the sidekick), replacing the
+    // `meta.llama*` prefixes that predate that decision — Meta was never
+    // invocable and is not what ships. Prefixes rather than the two exact ids
+    // because mantle's model ids are not identical to the foundation-model ids
+    // (`qwen.qwen3-235b-a22b-2507` does not appear in list-foundation-models at
+    // all), so an exact-id policy would be a guess at a name we cannot read.
     taskRole.addToPolicy(new iam.PolicyStatement({
       actions: [
-        // Covers the Converse API and the bedrock-mantle OpenAI-compatible
-        // Chat Completions path too — both authorize as InvokeModel.
         'bedrock:InvokeModel',
         'bedrock:InvokeModelWithResponseStream',
       ],
       resources: [
-        `arn:aws:bedrock:*::foundation-model/meta.llama*`,
-        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.meta.llama*`,
+        `arn:aws:bedrock:*::foundation-model/qwen.*`,
+        `arn:aws:bedrock:*::foundation-model/mistral.*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.qwen.*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.mistral.*`,
       ],
     }));
 

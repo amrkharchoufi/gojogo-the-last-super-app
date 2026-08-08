@@ -110,6 +110,20 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>sns</artifactId>
         </dependency>
+        <!-- Assistant module: SigV4 for the OpenAI-compatible inference
+             endpoint. Signing only — there is no Bedrock service client here on
+             purpose, because MADELEINE-INFERENCE.md §5 rule 2 keeps the wire
+             format provider-neutral so the same class reaches a self-hosted
+             vLLM. Both artifacts already arrive transitively; they are declared
+             because this module imports them directly. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>auth</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>http-auth-aws</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

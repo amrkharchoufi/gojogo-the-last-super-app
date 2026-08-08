@@ -141,6 +141,58 @@ gojogo:
       publishable-key: ${STRIPE_PUBLISHABLE_KEY:}
       return-base-url: ${STRIPE_RETURN_BASE_URL:https://api.gojogo.app}
       app-scheme: ${STRIPE_APP_SCHEME:gojogo}
+  # Madeleine, the assistant module (MADELEINE.md, MADELEINE-INFERENCE.md §5).
+  # base-url empty → the whole module is off: conversations still open and
+  # replay, and a turn refuses with "the assistant is unavailable" rather than
+  # inventing a reply. That is a mode, not a failure.
+  #
+  # There is NO secret and no new deploy flag here. Bedrock is reached with
+  # SigV4 under the Fargate task role — the task role IS the credential, which
+  # makes this the one integration in this codebase that cannot ship
+  # half-configured.
+  #
+  # BUT THE TASK ROLE'S GRANT IS NOT YET THE RIGHT ONE. Verified against the
+  # live endpoint on 2026-08-08: the bedrock-mantle Chat Completions path does
+  # NOT authorize as bedrock:InvokeModel on a foundation-model ARN, which is
+  # what infra/lib/fargate-stack.ts grants (and what MADELEINE-INFERENCE.md §10
+  # item 2 claims covers it). A correctly signed request is refused with:
+  #
+  #   not authorized to perform: bedrock-mantle:CreateInference
+  #   on resource: arn:aws:bedrock-mantle:us-east-1:<account>:project/default
+  #
+  # So the task role needs bedrock-mantle:CreateInference on
+  # arn:aws:bedrock-mantle:${region}:${account}:project/* before any of this
+  # works in a deploy. Until that lands, every turn ends in an honest
+  # turn_error — loudly, not silently, which is the one mercy here.
+  #
+  # Signing itself is confirmed correct: service name `bedrock`, the region
+  # below, and x-amz-content-sha256 over the body.
+  #
+  # The route is a config change, not an architecture change: point base-url at
+  # a self-hosted vLLM behind the internal ALB and set sigv4=false, and nothing
+  # above ModelClient notices. Model ids are the eval's winners
+  # (MADELEINE-INFERENCE.md §9) — qwen3-235b for the brain because it scored the
+  # same every run, ministral-3-8b for the sidekick because it was best on every
+  # measured axis at a third of a cent per thousand turns.
+  #
+  # Every *policy* number — steps per turn, the deadline, result trimming, rate
+  # limits, action TTL — is deliberately absent: those live in the config
+  # registry (SPECS §14) so tightening a budget is a row, not a deploy.
+  assistant:
+    model:
+      base-url: ${MODEL_BASE_URL:https://bedrock-mantle.us-east-1.api.aws/v1}
+      name: ${MODEL_NAME:qwen.qwen3-235b-a22b-2507}
+      # Blank = the sidekick shares the brain's host, which is true on Bedrock
+      # and false on a self-hosted split (MADELEINE.md §2 gives it its own node).
+      sidekick-base-url: ${SIDEKICK_BASE_URL:}
+      sidekick-name: ${SIDEKICK_MODEL_NAME:mistral.ministral-3-8b-instruct}
+      region: ${MODEL_REGION:us-east-1}
+      signing-name: ${MODEL_SIGNING_NAME:bedrock}
+      sigv4: ${MODEL_SIGV4:true}
+      # Below MADELEINE.md §4's 120s turn deadline on purpose: one wedged call
+      # must not eat the whole turn.
+      timeout-seconds: ${MODEL_TIMEOUT_SECONDS:90}
+      max-output-tokens: ${MODEL_MAX_OUTPUT_TOKENS:1024}
   # Browser origins allowed to call this API (comma-separated). Empty — the
   # default — emits no CORS headers at all, which is correct while the only
   # client is the iOS app. GoJoAdmin's origin goes here when it exists.

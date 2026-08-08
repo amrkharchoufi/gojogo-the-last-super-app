@@ -1,0 +1,514 @@
+{
+  "_comment": [
+    "Madeleine's tool catalog (MADELEINE.md §5) — the shipped copy of",
+    "tools/madeleine-eval/catalog.json, with the eval's canned `stub` results",
+    "stripped. Everything that decides behaviour is identical, and",
+    "AssistantCatalogParityTests fails the build if it stops being: the schemas",
+    "the model sees in production must be the schemas that were measured.",
+    "",
+    "`class` is the security model, not documentation. AssistantToolRegistry reads",
+    "it and the executor obeys it — a WRITE_GATED tool has no execution path at",
+    "all, so model output cannot reach a gated side effect however the model is",
+    "prompted.",
+    "",
+    "A tool is offered to the model only when this milestone can honour it: READ",
+    "tools have executors, WRITE_GATED tools need none (the wall answers them).",
+    "WRITE_SAFE (M4) and CLIENT (M5) are declared here with their class and are",
+    "withheld from the schema list until their milestone lands — offering a tool",
+    "that errors is worse than not offering it, and the system prompt already",
+    "tells the model to say so plainly when the catalog has no tool for something."
+  ],
+  "tools": [
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "search_all",
+          "description": "Federated search across every vertical: listings, restaurants, services, posts, people. The primary entry point when the user's intent is not yet narrowed to one vertical.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Free-text search query."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "ANY",
+                  "LISTING",
+                  "RESTAURANT",
+                  "SERVICE",
+                  "POST",
+                  "PROFILE"
+                ],
+                "description": "Restrict to one kind. Defaults to ANY."
+              }
+            },
+            "required": [
+              "query"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "get_profile",
+          "description": "The signed-in user's profile: handle, display name, default delivery address, home city.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "search_restaurants",
+          "description": "Restaurants that deliver to the user, optionally filtered by cuisine or name.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Cuisine, dish or restaurant name."
+              },
+              "maxDeliveryMinutes": {
+                "type": "integer",
+                "description": "Only restaurants delivering within this many minutes."
+              }
+            },
+            "required": [
+              "query"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "get_menu",
+          "description": "The menu for one restaurant. Item prices are integer minor units.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "restaurantId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "restaurantId"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_SAFE",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "build_cart",
+          "description": "Create or replace the user's delivery cart for one restaurant. Reversible and visible in the app immediately; this does not place an order and does not charge anything.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "restaurantId": {
+                "type": "string"
+              },
+              "items": {
+                "type": "array",
+                "description": "Line items to put in the cart.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "itemId": {
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "itemId",
+                    "quantity"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "restaurantId",
+              "items"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_GATED",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "place_order",
+          "description": "Place the delivery order for the current cart. Charges the user's wallet at placement. This is a gated action: it requires the user's explicit in-app approval and cannot be executed directly.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "cartId": {
+                "type": "string"
+              },
+              "addressId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cartId",
+              "addressId"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "quote_ride",
+          "description": "A suggested fare from the pricing engine for a trip. Read-only: quoting never opens a negotiation and never holds a driver.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "fromText": {
+                "type": "string",
+                "description": "Pickup, as free text."
+              },
+              "toText": {
+                "type": "string",
+                "description": "Destination, as free text."
+              }
+            },
+            "required": [
+              "fromText",
+              "toText"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_GATED",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "request_ride",
+          "description": "Open a ride negotiation at an offered fare. Gated: money decision, requires explicit user approval.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "fromText": {
+                "type": "string"
+              },
+              "toText": {
+                "type": "string"
+              },
+              "offerMinor": {
+                "type": "integer",
+                "description": "Offered fare in integer minor units."
+              }
+            },
+            "required": [
+              "fromText",
+              "toText",
+              "offerMinor"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "get_ride_status",
+          "description": "Status of the user's current or most recent ride.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "get_wallet",
+          "description": "The user's Gojo Wallet balance. There are no wallet write tools; top-ups happen only through Stripe-hosted checkout, which is a human-only surface.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "search_listings",
+          "description": "Search the marketplace for items for sale.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "maxPriceMinor": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "query"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "get_listing",
+          "description": "Full detail for one marketplace listing.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "listingId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "listingId"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_SAFE",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "create_listing_draft",
+          "description": "Create a marketplace listing in DRAFT state. Not visible to anyone else until published.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "priceMinor": {
+                "type": "integer",
+                "description": "Price in integer minor units."
+              },
+              "currency": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "priceMinor",
+              "currency"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_GATED",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "publish_listing",
+          "description": "Publish a draft listing so it is publicly visible. Gated: this leaves the user's private space and requires explicit approval.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "listingId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "listingId"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_SAFE",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "create_post_draft",
+          "description": "Draft a social post. Private until published.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_GATED",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "publish_post",
+          "description": "Publish a draft post publicly. Gated: leaves the user's private space.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "postId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "postId"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_SAFE",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "draft_message",
+          "description": "Prefill a direct-message composer with suggested text. This only stages a draft; it never sends. There is no tool to read or send direct messages — the user sends by tapping send themselves.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "toHandle": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toHandle",
+              "text"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "READ",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "get_my_bookings",
+          "description": "The user's upcoming service bookings.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+          }
+        }
+      }
+    },
+    {
+      "class": "WRITE_GATED",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "book_service",
+          "description": "Book a service appointment. Gated: money decision, requires explicit approval. Service ids come from search_all with kind=SERVICE.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "serviceId": {
+                "type": "string"
+              },
+              "startsAt": {
+                "type": "string",
+                "description": "ISO-8601 start time."
+              }
+            },
+            "required": [
+              "serviceId",
+              "startsAt"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "class": "CLIENT",
+      "schema": {
+        "type": "function",
+        "function": {
+          "name": "navigate_to",
+          "description": "Open a screen in the app for the user. Use this to hand off anything Madeleine cannot operate herself — KYC, wallet top-up, payouts, account settings.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "target": {
+                "type": "string",
+                "enum": [
+                  "walletTopUp",
+                  "kyc",
+                  "orderDetail",
+                  "rideDetail",
+                  "listingDetail",
+                  "restaurantDetail",
+                  "bookings",
+                  "settings"
+                ]
+              },
+              "params": {
+                "type": "object",
+                "description": "Target-specific parameters, e.g. an id."
+              }
+            },
+            "required": [
+              "target"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

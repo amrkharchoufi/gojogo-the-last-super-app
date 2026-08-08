@@ -130,6 +130,29 @@ class ListingService {
         return decorate(ordered, me);
     }
 
+    /**
+     * Listings by id, in the order asked for, with the same visibility rules
+     * the grid applies — a blocked seller's row and a moderator's takedown drop
+     * out rather than coming back decorated.
+     *
+     * <p>Exists for {@link com.gojogo.economy.MarketplaceApi}: the search index
+     * hands back ids, and hydrating them one {@link #get} at a time would bump
+     * a view count per hit and turn one screen into N queries.
+     */
+    @Transactional(readOnly = true)
+    List<ListingResponse> byIds(UUID me, List<UUID> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> hidden = hiddenFrom(me);
+        Map<UUID, Listing> byId = listings.findAllById(ids).stream()
+            .filter(l -> !hidden.contains(l.getSellerId()))
+            .filter(l -> !l.isHidden() || l.getSellerId().equals(me))
+            .collect(Collectors.toMap(Listing::getId, l -> l));
+        List<Listing> ordered = ids.stream().map(byId::get).filter(l -> l != null).toList();
+        return decorate(ordered, me);
+    }
+
     @Transactional
     ListingResponse get(UUID me, UUID listingId) {
         Listing listing = listings.findById(listingId)
