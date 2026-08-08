@@ -1,0 +1,4 @@
+# Eval output. Keep the harness in git; keep the runs out — they are large,
+# they churn on every model, and a results file carries full model prose.
+results/
+__pycache__/

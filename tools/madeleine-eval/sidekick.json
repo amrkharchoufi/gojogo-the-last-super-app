@@ -1,0 +1,186 @@
+{
+  "_comment": [
+    "Sidekick eval — MADELEINE.md §2's second model, not the brain.",
+    "",
+    "Its whole job is three bounded tasks: intent triage, tool-result",
+    "summarization, and conversation titles. It never plans and never calls a",
+    "write tool, so running it through the 20-scenario agent loop would measure",
+    "a capability it is not allowed to use and miss the ones it is.",
+    "",
+    "What actually matters here is FAITHFULNESS, not fluency. §4 pipes the",
+    "sidekick's summary of a fat tool result straight into the brain's context —",
+    "so a summary that invents a price or drops a restaurant name poisons the",
+    "turn downstream, and the brain has no way to know. Hence mustNotContain:",
+    "every one of those strings is a plausible-looking fact that is NOT in the",
+    "source. A model that emits one is hallucinating into the brain's context.",
+    "",
+    "Cost is the other axis. The sidekick exists so the brain's tokens go to",
+    "thinking rather than summarizing (§10) — a sidekick that is slow or verbose",
+    "has no reason to exist at all."
+  ],
+  "cases": [
+    {
+      "id": "t01_triage_delivery",
+      "job": "TRIAGE",
+      "input": "im starving, whats open near me",
+      "want": "DELIVERY"
+    },
+    {
+      "id": "t02_triage_travel",
+      "job": "TRIAGE",
+      "input": "need to get to the airport by 6",
+      "want": "TRAVEL"
+    },
+    {
+      "id": "t03_triage_marketplace",
+      "job": "TRIAGE",
+      "input": "is anyone selling a second hand bike",
+      "want": "MARKETPLACE"
+    },
+    {
+      "id": "t04_triage_wallet",
+      "job": "TRIAGE",
+      "input": "how much money do i have left",
+      "want": "WALLET"
+    },
+    {
+      "id": "t05_triage_french",
+      "job": "TRIAGE",
+      "input": "je voudrais commander une pizza",
+      "want": "DELIVERY"
+    },
+    {
+      "id": "t06_triage_ambiguous",
+      "job": "TRIAGE",
+      "input": "hey",
+      "want": "OTHER",
+      "note": "Nothing to route. A sidekick that guesses DELIVERY here sends the brain down a vertical the user never mentioned."
+    },
+    {
+      "id": "s01_summarize_restaurants",
+      "job": "SUMMARIZE",
+      "source": {
+        "restaurants": [
+          {
+            "id": "r_chez_rachid",
+            "name": "Chez Rachid",
+            "cuisine": "Moroccan",
+            "rating": 4.6,
+            "deliveryMinutes": 25,
+            "deliveryFeeMinor": 1500
+          },
+          {
+            "id": "r_dar_zellij",
+            "name": "Dar Zellij",
+            "cuisine": "Moroccan",
+            "rating": 4.4,
+            "deliveryMinutes": 40,
+            "deliveryFeeMinor": 2000
+          }
+        ]
+      },
+      "mustContain": [
+        "Chez Rachid",
+        "Dar Zellij"
+      ],
+      "mustNotContain": [
+        "4.8",
+        "5.0",
+        "30 min",
+        "free delivery",
+        "Marrakech"
+      ],
+      "maxChars": 400
+    },
+    {
+      "id": "s02_summarize_menu_prices",
+      "job": "SUMMARIZE",
+      "source": {
+        "restaurantId": "r_chez_rachid",
+        "items": [
+          {
+            "id": "i_couscous",
+            "name": "Couscous aux sept légumes",
+            "priceMinor": 8500,
+            "currency": "MAD"
+          },
+          {
+            "id": "i_tagine",
+            "name": "Tagine de poulet",
+            "priceMinor": 7000,
+            "currency": "MAD"
+          }
+        ]
+      },
+      "mustContain": [
+        "Couscous",
+        "Tagine"
+      ],
+      "mustNotContain": [
+        "8500 MAD",
+        "7000 MAD",
+        "$"
+      ],
+      "maxChars": 300,
+      "note": "Minor units are the trap: 8500 minor = 85 MAD. A sidekick that prints '8500 MAD' has inflated every price a hundredfold on its way into the brain's context."
+    },
+    {
+      "id": "s03_summarize_empty",
+      "job": "SUMMARIZE",
+      "source": {
+        "listings": []
+      },
+      "mustNotContain": [
+        "Vélo",
+        "bike",
+        "MAD",
+        "1200"
+      ],
+      "maxChars": 200,
+      "note": "Nothing found. The only correct summary says so. Inventing a plausible listing here is the worst failure in the set."
+    },
+    {
+      "id": "s04_summarize_wallet",
+      "job": "SUMMARIZE",
+      "source": {
+        "balanceMinor": 25000,
+        "currency": "MAD",
+        "earnedCapMinor": 0
+      },
+      "mustNotContain": [
+        "25000",
+        "$",
+        "2,500",
+        "2500 MAD"
+      ],
+      "maxChars": 200,
+      "mustContain": [
+        "250"
+      ],
+      "note": "The minor-units conversion, isolated: 25000 -> 250 MAD. Getting this wrong scales every balance the brain sees by 100."
+    },
+    {
+      "id": "n01_title_delivery",
+      "job": "TITLE",
+      "input": "User: order me a couscous from Chez Rachid to my home address",
+      "maxChars": 60,
+      "mustNotContain": [
+        "Title",
+        "\"",
+        "Conversation"
+      ]
+    },
+    {
+      "id": "n02_title_french",
+      "job": "TITLE",
+      "input": "Utilisateur : trouve-moi un vélo d'occasion à moins de 1500 dirhams",
+      "maxChars": 60,
+      "langHint": "fr",
+      "mustNotContain": [
+        "Title",
+        "\"",
+        "Conversation"
+      ]
+    }
+  ]
+}

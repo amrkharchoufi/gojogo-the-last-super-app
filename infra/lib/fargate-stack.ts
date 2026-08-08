@@ -161,6 +161,42 @@ export class GojoGoFargateStack extends cdk.Stack {
     }));
     taskRole.addToPolicy(new iam.PolicyStatement({ actions: ['sns:Publish'], resources: ['*'] }));
 
+    // Madeleine's inference (MADELEINE-INFERENCE.md §10). Bedrock on-demand is
+    // the production route; the assistant module's ModelClient calls it as the
+    // task, with no credential of its own — which is why nothing is added to
+    // CDK_SECRET_ARGS for this and why there is no new context flag to forget.
+    // Bedrock auth is this role and nothing else, so unlike Sumsub or Stripe
+    // there is no way to ship Madeleine half-configured (deploy-backend.sh's
+    // 2026-07-30 lesson, which this grant is deliberately not repeating).
+    //
+    // TWO resource ARNs per model, and both are load-bearing. Llama 3.3 and
+    // Llama 4 are cross-region-inference models: you invoke the *inference
+    // profile* (`us.meta.…`, account-scoped, this region), and Bedrock then
+    // routes the call to a *foundation model* in whichever US region has
+    // capacity. Grant only the profile and the first invocation works until it
+    // routes elsewhere; grant only us-east-1's foundation model and it breaks
+    // the moment it leaves the region. Hence the `*` region on the
+    // foundation-model ARN — those ARNs carry no account id by design.
+    //
+    // Scoped to `meta.llama*` rather than four exact ids on purpose: the eval
+    // (§9) swaps models repeatedly, and a policy that needs editing per model
+    // is a policy someone works around. NARROW THIS to the single chosen model
+    // id once the eval settles the brain slot — that is the whole point of
+    // running one. Comparison models from other providers need their own
+    // prefixes added here before they can be evaluated at all.
+    taskRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        // Covers the Converse API and the bedrock-mantle OpenAI-compatible
+        // Chat Completions path too — both authorize as InvokeModel.
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+      ],
+      resources: [
+        `arn:aws:bedrock:*::foundation-model/meta.llama*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.meta.llama*`,
+      ],
+    }));
+
     // --- Cluster + task ----------------------------------------------------
     const cluster = new ecs.Cluster(this, 'Cluster', { vpc: props.vpc, clusterName: 'gojogo' });
 
